@@ -33,8 +33,12 @@
     request_timeout :: timeout(),
     idle_timeout :: timeout(),
     timer_ref :: reference() | undefined,
+    settings_timer_ref :: reference() | undefined,  %% HTTP/2 SETTINGS_ACK timeout
     detect_buffer = <<>> :: binary()  %% Buffer for protocol preface detection
 }).
+
+%% HTTP/2 SETTINGS_TIMEOUT (RFC 7540 recommends reasonable timeout)
+-define(SETTINGS_TIMEOUT, 5000).
 
 %% HTTP/2 connection preface
 -define(H2_PREFACE, <<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n">>).
@@ -181,6 +185,15 @@ waiting(info, {ssl_error, Socket, Reason}, #state{socket = Socket} = State) ->
     {stop, {error, Reason}, State};
 waiting(info, {timeout, TimerRef, idle_timeout}, #state{timer_ref = TimerRef} = State) ->
     {stop, {shutdown, idle_timeout}, State};
+waiting(info, {timeout, TimerRef, settings_timeout},
+        #state{settings_timer_ref = TimerRef, protocol = h2,
+               socket = Socket, transport = Transport,
+               protocol_state = ProtocolState} = State) ->
+    %% SETTINGS_TIMEOUT - peer didn't acknowledge our SETTINGS in time
+    %% Send GOAWAY with SETTINGS_TIMEOUT error code (0x4)
+    GoawayFrame = livery_h2:close(4, ProtocolState),  %% SETTINGS_TIMEOUT = 4
+    send_data(Socket, Transport, GoawayFrame),
+    {stop, {shutdown, settings_timeout}, State#state{settings_timer_ref = undefined}};
 waiting(EventType, Event, State) ->
     handle_common(EventType, Event, State).
 
@@ -197,6 +210,14 @@ active(info, {ssl_closed, Socket}, #state{socket = Socket} = State) ->
     {stop, normal, State};
 active(info, {tcp_error, Socket, Reason}, #state{socket = Socket} = State) ->
     {stop, {error, Reason}, State};
+active(info, {timeout, TimerRef, settings_timeout},
+       #state{settings_timer_ref = TimerRef, protocol = h2,
+              socket = Socket, transport = Transport,
+              protocol_state = ProtocolState} = State) ->
+    %% SETTINGS_TIMEOUT - peer didn't acknowledge our SETTINGS in time
+    GoawayFrame = livery_h2:close(4, ProtocolState),  %% SETTINGS_TIMEOUT = 4
+    send_data(Socket, Transport, GoawayFrame),
+    {stop, {shutdown, settings_timeout}, State#state{settings_timer_ref = undefined}};
 active(info, {ssl_error, Socket, Reason}, #state{socket = Socket} = State) ->
     {stop, {error, Reason}, State};
 active(info, {timeout, TimerRef, request_timeout}, #state{timer_ref = TimerRef} = State) ->
@@ -243,11 +264,14 @@ detect_protocol(Data, #state{detect_buffer = Buffer, socket = Socket, transport 
                 true ->
                     %% HTTP/2 connection
                     ProtocolState = livery_h2:init(#{handler => Handler, handler_opts => HandlerOpts}),
+                    %% Start SETTINGS_TIMEOUT timer per RFC 7540
+                    SettingsTimerRef = erlang:start_timer(?SETTINGS_TIMEOUT, self(), settings_timeout),
                     NewState = State#state{
                         protocol = h2,
                         protocol_state = ProtocolState,
                         detect_buffer = <<>>,
-                        timer_ref = undefined
+                        timer_ref = undefined,
+                        settings_timer_ref = SettingsTimerRef
                     },
                     %% Process preface and any remaining data through H2
                     handle_data(NewBuffer, NewState);
@@ -301,6 +325,20 @@ handle_data(Data, #state{protocol = h1, protocol_state = ProtocolState,
             TimerRef = erlang:start_timer(State#state.request_timeout, self(), request_timeout),
             {next_state, active, State#state{protocol_state = NewProtocolState, timer_ref = TimerRef}};
 
+        {continue, NewProtocolState} ->
+            %% Send 100 Continue response
+            ContinueResponse = <<"HTTP/1.1 100 Continue\r\n\r\n">>,
+            case send_data(Socket, Transport, ContinueResponse) of
+                ok ->
+                    %% Mark continue as sent and continue reading body
+                    NextProtocolState = livery_h1:continue_sent(NewProtocolState),
+                    ok = set_active(Socket, Transport),
+                    TimerRef = erlang:start_timer(State#state.request_timeout, self(), request_timeout),
+                    {next_state, active, State#state{protocol_state = NextProtocolState, timer_ref = TimerRef}};
+                {error, _Reason} ->
+                    {stop, normal, State#state{protocol_state = NewProtocolState}}
+            end;
+
         {response, Status, Headers, Body, NewProtocolState} ->
             %% Send response
             case livery_h1:send_response(Socket, Status, Headers, Body, NewProtocolState) of
@@ -348,15 +386,26 @@ handle_data(Data, #state{protocol = h2, protocol_state = ProtocolState,
 
     case livery_h2:handle_data(Data, ProtocolState) of
         {ok, Responses, NewProtocolState} ->
+            %% Check if settings were acked - cancel settings timer
+            NewSettingsTimer = case lists:member(settings_acked, Responses) of
+                true ->
+                    cancel_timer(State#state.settings_timer_ref),
+                    undefined;
+                false ->
+                    State#state.settings_timer_ref
+            end,
+            %% Filter out settings_acked before processing
+            FilteredResponses = [R || R <- Responses, R =/= settings_acked],
             %% Process all responses and requests
-            case process_h2_responses(Responses, Socket, Transport, Handler,
+            case process_h2_responses(FilteredResponses, Socket, Transport, Handler,
                                        HandlerOpts, Peer, NewProtocolState) of
                 {ok, FinalProtocolState} ->
                     ok = set_active(Socket, Transport),
                     TimerRef = erlang:start_timer(IdleTimeout, self(), idle_timeout),
                     {next_state, waiting, State#state{
                         protocol_state = FinalProtocolState,
-                        timer_ref = TimerRef
+                        timer_ref = TimerRef,
+                        settings_timer_ref = NewSettingsTimer
                     }};
                 {error, Reason, FinalProtocolState} ->
                     %% Send GOAWAY and close
@@ -451,6 +500,45 @@ process_h2_responses([{http_error, StreamId, Status} | Rest], Socket, Transport,
             process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
         {error, Reason, NewState} ->
             {error, Reason, NewState}
+    end;
+process_h2_responses([{tunnel_data, StreamId, Data} | Rest], Socket, Transport,
+                      Handler, HandlerOpts, Peer, State) ->
+    %% CONNECT tunnel data - deliver to handler if it implements handle_tunnel_data/4
+    case erlang:function_exported(Handler, handle_tunnel_data, 4) of
+        true ->
+            %% Handler supports tunnel mode
+            case Handler:handle_tunnel_data(StreamId, Data, Socket, State) of
+                {ok, NewState} ->
+                    process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
+                {send, IoData, NewState} ->
+                    case send_data(Socket, Transport, IoData) of
+                        ok ->
+                            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
+                        {error, Reason} ->
+                            {error, Reason, NewState}
+                    end;
+                {error, Reason, NewState} ->
+                    {error, Reason, NewState}
+            end;
+        false ->
+            %% Handler doesn't support tunnels - log and ignore
+            error_logger:warning_msg("CONNECT tunnel data on stream ~p ignored (handler ~p doesn't support tunnels)~n",
+                                     [StreamId, Handler]),
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State)
+    end;
+process_h2_responses([{tunnel_closed, StreamId} | Rest], Socket, Transport,
+                      Handler, HandlerOpts, Peer, State) ->
+    %% CONNECT tunnel closed by peer
+    case erlang:function_exported(Handler, handle_tunnel_closed, 3) of
+        true ->
+            case Handler:handle_tunnel_closed(StreamId, Socket, State) of
+                {ok, NewState} ->
+                    process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
+                {error, Reason, NewState} ->
+                    {error, Reason, NewState}
+            end;
+        false ->
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State)
     end.
 
 %% Handle an HTTP/2 request

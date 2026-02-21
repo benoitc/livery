@@ -12,6 +12,7 @@
     init/1,
     handle_data/2,
     send_response/5,
+    send_connect_response/4,
     send_stream_data/4,
     send_stream_end/2,
     send_trailers/3,
@@ -48,6 +49,7 @@
 -record(stream, {
     id :: non_neg_integer(),
     state = idle :: stream_state(),
+    mode = normal :: normal | tunnel,  %% tunnel for CONNECT streams
     window_size :: integer(),
     request :: undefined | #h2_request{},
     header_block = <<>> :: binary(),  %% For CONTINUATION
@@ -161,8 +163,12 @@ handle_frame({settings, Settings}, #h2_state{phase = open} = State) ->
     Ack = livery_h2_frame:encode_settings_ack(),
     {ok, [{send, Ack}], NewState};
 
+handle_frame({settings_ack}, #h2_state{settings_acked = false} = State) ->
+    %% First SETTINGS_ACK - notify connection handler
+    {ok, [settings_acked], State#h2_state{settings_acked = true}};
 handle_frame({settings_ack}, State) ->
-    {ok, [], State#h2_state{settings_acked = true}};
+    %% Subsequent SETTINGS_ACK
+    {ok, [], State};
 
 handle_frame({ping, OpaqueData}, State) ->
     Ack = livery_h2_frame:encode_ping_ack(OpaqueData),
@@ -231,8 +237,30 @@ handle_frame({continuation, StreamId, HeaderBlock, EndHeaders}, State) ->
 
 handle_frame({data, StreamId, Data, EndStream}, State) ->
     case get_stream(StreamId, State) of
+        {ok, #stream{state = open, mode = tunnel} = Stream} ->
+            %% CONNECT tunnel - forward data to handler
+            DataSize = byte_size(Data),
+            NewConnWindow = State#h2_state.conn_window_in - DataSize,
+            NewStreamWindow = Stream#stream.window_size - DataSize,
+
+            NewStream = Stream#stream{window_size = NewStreamWindow},
+            State1 = State#h2_state{conn_window_in = NewConnWindow},
+            State2 = update_stream(NewStream, State1),
+
+            %% Send window updates if needed
+            WindowUpdates = maybe_send_window_updates(StreamId, DataSize, State2),
+
+            case EndStream of
+                true ->
+                    %% Tunnel closed by peer
+                    FinalStream = NewStream#stream{state = half_closed_remote},
+                    State3 = update_stream(FinalStream, State2),
+                    {ok, [{tunnel_data, StreamId, Data}, {tunnel_closed, StreamId} | WindowUpdates], State3};
+                false ->
+                    {ok, [{tunnel_data, StreamId, Data} | WindowUpdates], State2}
+            end;
         {ok, #stream{state = open, request = Req} = Stream} ->
-            %% Update connection window
+            %% Normal request - accumulate body
             DataSize = byte_size(Data),
             NewConnWindow = State#h2_state.conn_window_in - DataSize,
             NewStreamWindow = Stream#stream.window_size - DataSize,
@@ -288,18 +316,15 @@ handle_frame(_Frame, State) ->
 
 %% Handle HEADERS frame
 handle_headers(StreamId, HeaderBlock, EndStream, EndHeaders, _Priority, State) ->
-    %% Validate stream ID - client streams must be odd and increasing
-    IsValid = case StreamId =< State#h2_state.max_stream_id of
-        true when StreamId rem 2 =:= 1 ->
-            %% Reused stream ID from client
-            false;
-        _ ->
-            true
-    end,
+    %% Validate stream ID per RFC 7540 Section 5.1.1:
+    %% - Client-initiated streams MUST be odd (server is receiving from client)
+    %% - Stream IDs MUST be greater than any previously opened stream
+    %% - Stream ID 0 is reserved for connection-level frames
+    ValidationResult = validate_client_stream_id(StreamId, State#h2_state.max_stream_id),
 
-    case IsValid of
-        false ->
-            {error, protocol_error, State};
+    case ValidationResult of
+        {error, Reason} ->
+            {error, Reason, State};
         true ->
             %% Check max_concurrent_streams limit
             MaxStreams = maps:get(max_concurrent_streams, State#h2_state.local_settings, ?DEFAULT_MAX_CONCURRENT_STREAMS),
@@ -340,6 +365,20 @@ count_active_streams(Streams) ->
             _ -> Acc + 1
         end
     end, 0, Streams).
+
+%% Validate client-initiated stream ID per RFC 7540 Section 5.1.1
+%% Returns true or {error, Reason}
+validate_client_stream_id(0, _MaxStreamId) ->
+    %% Stream ID 0 is reserved for connection-level frames
+    {error, protocol_error};
+validate_client_stream_id(StreamId, _MaxStreamId) when StreamId rem 2 =:= 0 ->
+    %% Client-initiated streams MUST be odd
+    {error, protocol_error};
+validate_client_stream_id(StreamId, MaxStreamId) when StreamId =< MaxStreamId ->
+    %% Stream ID must be greater than any previously used
+    {error, protocol_error};
+validate_client_stream_id(_StreamId, _MaxStreamId) ->
+    true.
 
 finalize_headers(#stream{id = StreamId, header_block = HeaderBlock, state = StreamState} = Stream, State) ->
     case livery_hpack:decode(HeaderBlock, State#h2_state.decoder) of
@@ -668,6 +707,46 @@ send_response(StreamId, Status, Headers, Body, State) ->
     end,
 
     {ok, Frames, NewState}.
+
+%% @doc Send a CONNECT response (headers only, no END_STREAM).
+%% Used to accept a CONNECT tunnel request. After sending a 2xx response,
+%% the stream becomes a bidirectional tunnel. Use send_stream_data/4 to
+%% send data and handle {tunnel_data, StreamId, Data} responses for incoming data.
+-spec send_connect_response(non_neg_integer(), non_neg_integer(), [{binary(), binary()}], state()) ->
+    {ok, iodata(), state()}.
+send_connect_response(StreamId, Status, Headers, State) ->
+    %% Add :status pseudo-header
+    StatusBin = integer_to_binary(Status),
+    AllHeaders = [{<<":status">>, StatusBin} | Headers],
+
+    %% Encode headers with HPACK
+    {HeaderBlock, Encoder1} = livery_hpack:encode(AllHeaders, State#h2_state.encoder),
+    HeaderBlockBin = iolist_to_binary(HeaderBlock),
+
+    %% CONNECT responses: END_STREAM must NOT be set for success (2xx)
+    %% For failures (non-2xx), we set END_STREAM
+    EndStream = Status < 200 orelse Status >= 300,
+    HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, EndStream, true),
+
+    %% Update stream state
+    NewState = case get_stream(StreamId, State) of
+        {ok, Stream} ->
+            NewStreamState = case EndStream of
+                true -> closed;
+                false -> open  %% Stream stays open for tunnel data
+            end,
+            %% Mark stream as tunnel mode for 2xx responses
+            NewMode = case EndStream of
+                true -> normal;
+                false -> tunnel
+            end,
+            update_stream(Stream#stream{state = NewStreamState, mode = NewMode},
+                         State#h2_state{encoder = Encoder1});
+        error ->
+            State#h2_state{encoder = Encoder1}
+    end,
+
+    {ok, [HeadersFrame], NewState}.
 
 %% @doc Send data on a stream (for streaming responses).
 %% Respects flow control windows and buffers excess data.

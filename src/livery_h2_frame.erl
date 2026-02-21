@@ -283,24 +283,32 @@ decode(<<Length:24, Type:8, Flags:8, _:1, StreamId:31, Rest/binary>>) ->
 
 decode_frame(?FRAME_DATA, Flags, StreamId, Payload, Rest) ->
     EndStream = (Flags band ?FLAG_END_STREAM) =/= 0,
-    {Data, _Padding} = strip_padding(Flags, Payload),
-    {ok, {data, StreamId, Data, EndStream}, Rest};
+    case strip_padding(Flags, Payload) of
+        {ok, Data, _Padding} ->
+            {ok, {data, StreamId, Data, EndStream}, Rest};
+        {error, protocol_error} ->
+            {error, protocol_error}
+    end;
 
 decode_frame(?FRAME_HEADERS, Flags, StreamId, Payload, Rest) ->
     EndStream = (Flags band ?FLAG_END_STREAM) =/= 0,
     EndHeaders = (Flags band ?FLAG_END_HEADERS) =/= 0,
     HasPriority = (Flags band ?FLAG_PRIORITY) =/= 0,
-    {Data, _Padding} = strip_padding(Flags, Payload),
-    case HasPriority of
-        true when byte_size(Data) >= 5 ->
-            <<E:1, StreamDep:31, Weight:8, HeaderBlock/binary>> = Data,
-            Exclusive = E =:= 1,
-            Priority = {Exclusive, StreamDep, Weight + 1},
-            {ok, {headers, StreamId, HeaderBlock, EndStream, EndHeaders, Priority}, Rest};
-        true ->
-            {error, frame_size_error};
-        false ->
-            {ok, {headers, StreamId, Data, EndStream, EndHeaders}, Rest}
+    case strip_padding(Flags, Payload) of
+        {ok, Data, _Padding} ->
+            case HasPriority of
+                true when byte_size(Data) >= 5 ->
+                    <<E:1, StreamDep:31, Weight:8, HeaderBlock/binary>> = Data,
+                    Exclusive = E =:= 1,
+                    Priority = {Exclusive, StreamDep, Weight + 1},
+                    {ok, {headers, StreamId, HeaderBlock, EndStream, EndHeaders, Priority}, Rest};
+                true ->
+                    {error, frame_size_error};
+                false ->
+                    {ok, {headers, StreamId, Data, EndStream, EndHeaders}, Rest}
+            end;
+        {error, protocol_error} ->
+            {error, protocol_error}
     end;
 
 decode_frame(?FRAME_PRIORITY, _Flags, StreamId, <<E:1, StreamDep:31, Weight:8>>, Rest) ->
@@ -334,12 +342,16 @@ decode_frame(?FRAME_SETTINGS, _Flags, _StreamId, _Payload, _Rest) ->
 
 decode_frame(?FRAME_PUSH_PROMISE, Flags, StreamId, Payload, Rest) ->
     EndHeaders = (Flags band ?FLAG_END_HEADERS) =/= 0,
-    {Data, _Padding} = strip_padding(Flags, Payload),
-    case Data of
-        <<_:1, PromisedStreamId:31, HeaderBlock/binary>> ->
-            {ok, {push_promise, StreamId, PromisedStreamId, HeaderBlock, EndHeaders}, Rest};
-        _ ->
-            {error, frame_size_error}
+    case strip_padding(Flags, Payload) of
+        {ok, Data, _Padding} ->
+            case Data of
+                <<_:1, PromisedStreamId:31, HeaderBlock/binary>> ->
+                    {ok, {push_promise, StreamId, PromisedStreamId, HeaderBlock, EndHeaders}, Rest};
+                _ ->
+                    {error, frame_size_error}
+            end;
+        {error, protocol_error} ->
+            {error, protocol_error}
     end;
 
 decode_frame(?FRAME_PING, Flags, 0, OpaqueData, Rest) when byte_size(OpaqueData) =:= 8 ->
@@ -377,18 +389,23 @@ decode_frame(_Type, _Flags, StreamId, Payload, Rest) ->
     {ok, {unknown, StreamId, Payload}, Rest}.
 
 %% Strip padding from payload if PADDED flag is set
+%% Returns {ok, Data, PadLength} or {error, protocol_error}
 strip_padding(Flags, Payload) when (Flags band ?FLAG_PADDED) =/= 0, byte_size(Payload) > 0 ->
     <<PadLength:8, Rest/binary>> = Payload,
     DataLength = byte_size(Rest) - PadLength,
     case DataLength >= 0 of
         true ->
             <<Data:DataLength/binary, _Padding:PadLength/binary>> = Rest,
-            {Data, PadLength};
+            {ok, Data, PadLength};
         false ->
-            {<<>>, 0}  %% Invalid padding
+            %% Padding length exceeds payload - protocol error per RFC 7540 Section 6.1
+            {error, protocol_error}
     end;
+strip_padding(Flags, Payload) when (Flags band ?FLAG_PADDED) =/= 0, byte_size(Payload) =:= 0 ->
+    %% PADDED flag set but no payload for pad length byte
+    {error, protocol_error};
 strip_padding(_Flags, Payload) ->
-    {Payload, 0}.
+    {ok, Payload, 0}.
 
 %% @doc Decode SETTINGS payload to map.
 -spec decode_settings_payload(binary()) -> {ok, settings()} | {error, term()}.

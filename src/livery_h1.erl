@@ -181,6 +181,20 @@ close(#h1_state{handler = Handler, handler_state = HandlerState}) ->
 parse_and_handle(#h1_state{buffer = Buffer, limits = Limits} = State) ->
     case livery_h1_parse:parse_request(Buffer, Limits) of
         {ok, Method, Path, Qs, Version, Headers, Rest} ->
+            %% Validate Host header for HTTP/1.1 (RFC 7230 Section 5.4)
+            case validate_host_header(Version, Headers) of
+                ok ->
+                    parse_and_handle_valid(Method, Path, Qs, Version, Headers, Rest, State);
+                {error, Reason} ->
+                    {error, Reason, State}
+            end;
+        {more, _} ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+parse_and_handle_valid(Method, Path, Qs, Version, Headers, Rest, State) ->
             %% Build request
             Req = build_request(Method, Path, Qs, Version, Headers, State),
 
@@ -223,12 +237,27 @@ parse_and_handle(#h1_state{buffer = Buffer, limits = Limits} = State) ->
                 {false, _} ->
                     %% No body, handle request directly
                     handle_request(State2)
-            end;
-        {more, _} ->
-            {ok, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+            end.
+
+%% @doc Validate Host header presence per RFC 7230 Section 5.4.
+%% HTTP/1.1 requests MUST include a Host header.
+%% HTTP/1.0 requests do not require Host header.
+validate_host_header({1, 1}, Headers) ->
+    case lists:keyfind(<<"host">>, 1, Headers) of
+        {_, Host} when byte_size(Host) > 0 ->
+            ok;
+        {_, <<>>} ->
+            %% Empty Host header is invalid
+            {error, missing_host_header};
+        false ->
+            {error, missing_host_header}
+    end;
+validate_host_header({1, 0}, _Headers) ->
+    %% Host header not required for HTTP/1.0
+    ok;
+validate_host_header(_, _Headers) ->
+    %% For other versions, don't enforce
+    ok.
 
 build_request(Method, Path, Qs, Version, Headers, #h1_state{handler = Handler, handler_opts = Opts}) ->
     Req = livery_req:new(),
@@ -281,7 +310,7 @@ continue_sent(State) ->
 handle_with_body(Length, #h1_state{buffer = Buffer, req = Req0} = State) when byte_size(Buffer) >= Length ->
     <<Body:Length/binary, Rest/binary>> = Buffer,
     %% Decode body if Content-Encoding is present
-    Headers = livery_req:get_headers(Req0),
+    Headers = livery_req:headers(Req0),
     ContentEncoding = proplists:get_value(<<"content-encoding">>, Headers, <<>>),
     case decode_body(Body, ContentEncoding) of
         {ok, DecodedBody} ->
@@ -336,7 +365,7 @@ handle_chunked_trailers(#h1_state{buffer = Buffer, body_state = {chunked_trailer
             Body = iolist_to_binary(lists:reverse(Chunks)),
             Req0 = State#h1_state.req,
             %% Decode body if Content-Encoding is present
-            Headers = livery_req:get_headers(Req0),
+            Headers = livery_req:headers(Req0),
             ContentEncoding = proplists:get_value(<<"content-encoding">>, Headers, <<>>),
             case decode_body(Body, ContentEncoding) of
                 {ok, DecodedBody} ->

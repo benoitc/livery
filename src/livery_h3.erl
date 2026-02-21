@@ -15,6 +15,7 @@
     send_response/5,
     send_headers/4,
     send_data/4,
+    send_trailers/3,
     close/2,
     %% gen_statem callbacks
     callback_mode/0,
@@ -38,6 +39,9 @@
 -define(H3_STREAM_QPACK_ENCODER, 16#02).
 -define(H3_STREAM_QPACK_DECODER, 16#03).
 
+%% Default max field section size per RFC 9114 (no default, use 16KB as sensible limit)
+-define(DEFAULT_MAX_FIELD_SECTION_SIZE, 16384).
+
 -record(h3_state, {
     quic_conn :: reference() | undefined,
     handler :: module(),
@@ -56,6 +60,10 @@
     %% State tracking
     settings_sent = false :: boolean(),
     settings_received = false :: boolean(),
+    %% Peer settings - limits we must enforce
+    peer_max_field_section_size = ?DEFAULT_MAX_FIELD_SECTION_SIZE :: non_neg_integer(),
+    %% Our settings - limits peer must enforce (we validate incoming)
+    max_field_section_size = ?DEFAULT_MAX_FIELD_SECTION_SIZE :: non_neg_integer(),
     %% QPACK state
     qpack_encoder :: livery_qpack:state(),
     qpack_decoder :: livery_qpack:state()
@@ -66,6 +74,9 @@
     headers = [] :: [{binary(), binary()}],
     headers_received = false :: boolean(),
     body = <<>> :: binary(),
+    data_received = false :: boolean(),
+    trailers = [] :: [{binary(), binary()}],
+    trailers_received = false :: boolean(),
     fin_received = false :: boolean(),
     handler_state :: term()
 }).
@@ -101,6 +112,12 @@ send_headers(Pid, StreamId, Status, Headers) ->
 -spec send_data(pid(), non_neg_integer(), binary(), boolean()) -> ok | {error, term()}.
 send_data(Pid, StreamId, Data, Fin) ->
     gen_statem:call(Pid, {send_data, StreamId, Data, Fin}).
+
+%% @doc Send HTTP/3 trailers (HEADERS frame with END_STREAM) on a stream.
+%% Trailers must be sent after the body. They complete the stream.
+-spec send_trailers(pid(), non_neg_integer(), [{binary(), binary()}]) -> ok | {error, term()}.
+send_trailers(Pid, StreamId, Trailers) ->
+    gen_statem:call(Pid, {send_trailers, StreamId, Trailers}).
 
 %% @doc Close the HTTP/3 connection.
 -spec close(pid(), term()) -> ok.
@@ -161,6 +178,15 @@ handle_event({call, From}, {send_headers, StreamId, Status, Headers, Fin}, _Stat
 
 handle_event({call, From}, {send_data, StreamId, Data, Fin}, _StateName, State) ->
     case do_send_data(StreamId, Data, Fin, State) of
+        {ok, State1} ->
+            {keep_state, State1, [{reply, From, ok}]};
+        {error, Reason} ->
+            {keep_state, State, [{reply, From, {error, Reason}}]}
+    end;
+
+handle_event({call, From}, {send_trailers, StreamId, Trailers}, _StateName, State) ->
+    %% Trailers are sent as a HEADERS frame with FIN=true
+    case do_send_headers(StreamId, Trailers, true, State) of
         {ok, State1} ->
             {keep_state, State1, [{reply, From, ok}]};
         {error, Reason} ->
@@ -365,9 +391,11 @@ register_peer_stream(_StreamId, _Type, State) ->
 
 process_uni_stream_by_type(StreamId, control, Data, _Fin, #h3_state{uni_streams = UniStreams} = State) ->
     %% Control stream carries HTTP/3 frames (SETTINGS, GOAWAY, etc.)
-    {_Messages, Rest} = parse_control_frames(Data, []),
+    {Messages, Rest} = parse_control_frames(Data, []),
     NewInfo = #uni_stream_info{type = control, buffer = Rest},
-    State#h3_state{
+    %% Process settings from received frames
+    State1 = apply_peer_settings(Messages, State),
+    State1#h3_state{
         uni_streams = maps:put(StreamId, NewInfo, UniStreams),
         settings_received = true
     };
@@ -418,6 +446,19 @@ parse_control_frames(Data, Acc) ->
             {lists:reverse(Acc), Data}
     end.
 
+%% @doc Apply peer settings from received SETTINGS frames.
+apply_peer_settings([], State) ->
+    State;
+apply_peer_settings([{settings, Settings} | Rest], State) ->
+    %% Extract max_field_section_size if present
+    MaxFieldSize = maps:get(max_field_section_size, Settings,
+                            State#h3_state.peer_max_field_section_size),
+    State1 = State#h3_state{peer_max_field_section_size = MaxFieldSize},
+    apply_peer_settings(Rest, State1);
+apply_peer_settings([_ | Rest], State) ->
+    %% Skip non-settings frames (GOAWAY, etc.)
+    apply_peer_settings(Rest, State).
+
 process_bidi_stream_data(StreamId, Data, Fin, #h3_state{streams = Streams} = State) ->
     StreamState = maps:get(StreamId, Streams, #stream_state{}),
     Buffer = <<(StreamState#stream_state.buffer)/binary, Data/binary>>,
@@ -445,21 +486,54 @@ process_h3_frames(StreamId, Buffer, Fin, StreamState, State) ->
             {StreamState#stream_state{buffer = Buffer}, State}
     end.
 
-handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState, #h3_state{qpack_decoder = Decoder} = State) ->
+handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState,
+                #h3_state{qpack_decoder = Decoder, max_field_section_size = MaxSize,
+                          quic_conn = QuicConn} = State) ->
     %% Decode QPACK headers
     case livery_qpack:decode(Payload, Decoder) of
         {{ok, Headers}, Decoder1} ->
-            StreamState1 = StreamState#stream_state{
-                headers_received = true,
-                headers = Headers
-            },
-            State1 = State#h3_state{qpack_decoder = Decoder1},
-            %% If Fin is true and we have headers, request is complete (no body)
-            case Fin of
+            %% Validate field section size per RFC 9114 Section 4.2.2
+            %% Size = sum of (name length + value length + 32 overhead) per field
+            FieldSectionSize = calculate_field_section_size(Headers),
+            case FieldSectionSize > MaxSize of
                 true ->
-                    {StreamState1, dispatch_request(StreamId, StreamState1, State1)};
+                    %% Field section too large - reset stream with H3_REQUEST_CANCELLED
+                    %% Per RFC 9114, use H3_REQUEST_CANCELLED (0x010c) error code
+                    quic:reset_stream(QuicConn, StreamId, 16#010c),
+                    {StreamState, State#h3_state{qpack_decoder = Decoder1}};
                 false ->
-                    {StreamState1, State1}
+                    State1 = State#h3_state{qpack_decoder = Decoder1},
+                    %% Check if this is initial headers or trailers
+                    %% Trailers arrive AFTER data has been received
+                    case StreamState#stream_state.data_received of
+                        true ->
+                            %% This is trailers (HEADERS after DATA)
+                            StreamState1 = StreamState#stream_state{
+                                trailers = Headers,
+                                trailers_received = true
+                            },
+                            %% Trailers must have FIN set per RFC 9114
+                            case Fin of
+                                true ->
+                                    {StreamState1, dispatch_request(StreamId, StreamState1, State1)};
+                                false ->
+                                    %% Invalid: trailers without FIN - store anyway
+                                    {StreamState1, State1}
+                            end;
+                        false ->
+                            %% This is initial headers
+                            StreamState1 = StreamState#stream_state{
+                                headers_received = true,
+                                headers = Headers
+                            },
+                            %% If Fin is true and we have headers, request is complete (no body)
+                            case Fin of
+                                true ->
+                                    {StreamState1, dispatch_request(StreamId, StreamState1, State1)};
+                                false ->
+                                    {StreamState1, State1}
+                            end
+                    end
             end;
         {{error, _Reason}, _Decoder1} ->
             {StreamState, State}
@@ -467,7 +541,10 @@ handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState, #h3_state{qpack_
 
 handle_h3_frame(_StreamId, {data, Payload}, _Fin, StreamState, State) ->
     Body = StreamState#stream_state.body,
-    StreamState1 = StreamState#stream_state{body = <<Body/binary, Payload/binary>>},
+    StreamState1 = StreamState#stream_state{
+        body = <<Body/binary, Payload/binary>>,
+        data_received = true
+    },
     {StreamState1, State};
 
 handle_h3_frame(_StreamId, _Frame, _Fin, StreamState, State) ->
@@ -478,7 +555,7 @@ handle_h3_frame(_StreamId, _Frame, _Fin, StreamState, State) ->
 %% Internal - Request dispatch
 %%====================================================================
 
-dispatch_request(StreamId, #stream_state{headers = Headers, body = Body},
+dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailers = Trailers},
                  #h3_state{handler = Handler, handler_opts = HandlerOpts} = State) ->
     %% Extract pseudo-headers
     Method = get_header(<<":method">>, Headers, <<"GET">>),
@@ -494,6 +571,7 @@ dispatch_request(StreamId, #stream_state{headers = Headers, body = Body},
         authority => Authority,
         headers => filter_pseudo_headers(Headers),
         body => Body,
+        trailers => Trailers,
         stream_id => StreamId,
         protocol => h3
     },
@@ -540,3 +618,10 @@ filter_pseudo_headers(Headers) ->
 
 is_pseudo_header(<<$:, _/binary>>) -> true;
 is_pseudo_header(_) -> false.
+
+%% @doc Calculate field section size per RFC 9114 Section 4.2.2.
+%% Size = sum of (name length + value length + 32 overhead) per field.
+calculate_field_section_size(Headers) ->
+    lists:foldl(fun({Name, Value}, Acc) ->
+        Acc + byte_size(Name) + byte_size(Value) + 32
+    end, 0, Headers).

@@ -459,6 +459,7 @@ error_to_status(header_value_too_long) -> 400;
 error_to_status(invalid_header_name) -> 400;
 error_to_status(invalid_header_value) -> 400;
 error_to_status(too_many_headers) -> 400;
+error_to_status(missing_host_header) -> 400;
 error_to_status(invalid_chunk_size) -> 400;
 error_to_status(chunk_size_too_long) -> 400;
 error_to_status(chunk_too_large) -> 413;

@@ -32,6 +32,7 @@
     http10_close/1,
     concurrent_connections/1,
     bad_request/1,
+    missing_host_header/1,
     %% Chunked transfer encoding tests
     chunked_request_body/1,
     chunked_request_multiple_chunks/1,
@@ -67,6 +68,7 @@ groups() ->
             http10_close,
             concurrent_connections,
             bad_request,
+            missing_host_header,
             %% Chunked transfer encoding tests
             chunked_request_body,
             chunked_request_multiple_chunks,
@@ -281,6 +283,15 @@ bad_request(Config) ->
     {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
     %% Invalid request - missing HTTP version
     ok = gen_tcp:send(Socket, <<"GET /\r\n\r\n">>),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 400">>)).
+
+missing_host_header(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    %% HTTP/1.1 request without Host header - should be rejected per RFC 7230 Section 5.4
+    ok = gen_tcp:send(Socket, <<"GET / HTTP/1.1\r\n\r\n">>),
     {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
     gen_tcp:close(Socket),
     ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 400">>)).

@@ -17,6 +17,16 @@
     send_data/4,
     send_trailers/3,
     close/2,
+    %% WebSocket API (RFC 9220)
+    send_ws_frame/3,
+    send_ws_text/3,
+    send_ws_binary/3,
+    send_ws_ping/2,
+    send_ws_ping/3,
+    send_ws_pong/3,
+    send_ws_close/2,
+    send_ws_close/3,
+    send_ws_close/4,
     %% gen_statem callbacks
     callback_mode/0,
     init/1,
@@ -64,6 +74,8 @@
     peer_max_field_section_size = ?DEFAULT_MAX_FIELD_SECTION_SIZE :: non_neg_integer(),
     %% Our settings - limits peer must enforce (we validate incoming)
     max_field_section_size = ?DEFAULT_MAX_FIELD_SECTION_SIZE :: non_neg_integer(),
+    %% Extended CONNECT (RFC 9220) - peer's advertised support
+    peer_enable_connect_protocol = 0 :: non_neg_integer(),
     %% QPACK state
     qpack_encoder :: livery_qpack:state(),
     qpack_decoder :: livery_qpack:state()
@@ -78,7 +90,10 @@
     trailers = [] :: [{binary(), binary()}],
     trailers_received = false :: boolean(),
     fin_received = false :: boolean(),
-    handler_state :: term()
+    handler_state :: term(),
+    %% WebSocket over HTTP/3 (RFC 9220)
+    mode = normal :: normal | websocket,
+    ws_buffer = <<>> :: binary()
 }).
 
 -record(uni_stream_info, {
@@ -123,6 +138,56 @@ send_trailers(Pid, StreamId, Trailers) ->
 -spec close(pid(), term()) -> ok.
 close(Pid, Reason) ->
     gen_statem:cast(Pid, {close, Reason}).
+
+%%--------------------------------------------------------------------
+%% WebSocket API (RFC 9220)
+%%--------------------------------------------------------------------
+
+%% @doc Send a WebSocket frame on a stream.
+%% Frame can be {text, binary()}, {binary, binary()}, {ping, binary()}, etc.
+-spec send_ws_frame(pid(), non_neg_integer(), livery_ws:frame()) -> ok | {error, term()}.
+send_ws_frame(Pid, StreamId, Frame) ->
+    gen_statem:call(Pid, {send_ws_frame, StreamId, Frame}).
+
+%% @doc Send a WebSocket text frame.
+-spec send_ws_text(pid(), non_neg_integer(), binary()) -> ok | {error, term()}.
+send_ws_text(Pid, StreamId, Text) ->
+    send_ws_frame(Pid, StreamId, {text, Text}).
+
+%% @doc Send a WebSocket binary frame.
+-spec send_ws_binary(pid(), non_neg_integer(), binary()) -> ok | {error, term()}.
+send_ws_binary(Pid, StreamId, Data) ->
+    send_ws_frame(Pid, StreamId, {binary, Data}).
+
+%% @doc Send a WebSocket ping frame with no payload.
+-spec send_ws_ping(pid(), non_neg_integer()) -> ok | {error, term()}.
+send_ws_ping(Pid, StreamId) ->
+    send_ws_frame(Pid, StreamId, {ping, <<>>}).
+
+%% @doc Send a WebSocket ping frame with payload.
+-spec send_ws_ping(pid(), non_neg_integer(), binary()) -> ok | {error, term()}.
+send_ws_ping(Pid, StreamId, Payload) ->
+    send_ws_frame(Pid, StreamId, {ping, Payload}).
+
+%% @doc Send a WebSocket pong frame.
+-spec send_ws_pong(pid(), non_neg_integer(), binary()) -> ok | {error, term()}.
+send_ws_pong(Pid, StreamId, Payload) ->
+    send_ws_frame(Pid, StreamId, {pong, Payload}).
+
+%% @doc Send a WebSocket close frame with status 1000 (normal).
+-spec send_ws_close(pid(), non_neg_integer()) -> ok | {error, term()}.
+send_ws_close(Pid, StreamId) ->
+    send_ws_close(Pid, StreamId, 1000).
+
+%% @doc Send a WebSocket close frame with status code.
+-spec send_ws_close(pid(), non_neg_integer(), non_neg_integer()) -> ok | {error, term()}.
+send_ws_close(Pid, StreamId, Code) ->
+    gen_statem:call(Pid, {send_ws_close, StreamId, Code, <<>>}).
+
+%% @doc Send a WebSocket close frame with status code and reason.
+-spec send_ws_close(pid(), non_neg_integer(), non_neg_integer(), binary()) -> ok | {error, term()}.
+send_ws_close(Pid, StreamId, Code, Reason) ->
+    gen_statem:call(Pid, {send_ws_close, StreamId, Code, Reason}).
 
 %%====================================================================
 %% gen_statem callbacks
@@ -191,6 +256,33 @@ handle_event({call, From}, {send_trailers, StreamId, Trailers}, _StateName, Stat
             {keep_state, State1, [{reply, From, ok}]};
         {error, Reason} ->
             {keep_state, State, [{reply, From, {error, Reason}}]}
+    end;
+
+handle_event({call, From}, {send_ws_frame, StreamId, Frame}, _StateName,
+             #h3_state{quic_conn = QuicConn} = State) ->
+    %% Send WebSocket frame wrapped in HTTP/3 DATA frame
+    WsFrame = encode_ws_frame(Frame),
+    DataFrame = livery_h3_frame:encode_data(WsFrame),
+    case quic:send_data(QuicConn, StreamId, DataFrame, false) of
+        ok ->
+            {keep_state, State, [{reply, From, ok}]};
+        {error, Reason} ->
+            {keep_state, State, [{reply, From, {error, Reason}}]}
+    end;
+
+handle_event({call, From}, {send_ws_close, StreamId, Code, Reason}, _StateName,
+             #h3_state{quic_conn = QuicConn} = State) ->
+    %% Send WebSocket close frame and finish the stream
+    CloseFrame = case Reason of
+        <<>> -> livery_ws:encode_close(Code);
+        _ -> livery_ws:encode_close(Code, Reason)
+    end,
+    DataFrame = livery_h3_frame:encode_data(CloseFrame),
+    case quic:send_data(QuicConn, StreamId, DataFrame, true) of
+        ok ->
+            {keep_state, State, [{reply, From, ok}]};
+        {error, Err} ->
+            {keep_state, State, [{reply, From, {error, Err}}]}
     end;
 
 handle_event(cast, {close, Reason}, _StateName, #h3_state{quic_conn = QuicConn} = State) ->
@@ -453,7 +545,13 @@ apply_peer_settings([{settings, Settings} | Rest], State) ->
     %% Extract max_field_section_size if present
     MaxFieldSize = maps:get(max_field_section_size, Settings,
                             State#h3_state.peer_max_field_section_size),
-    State1 = State#h3_state{peer_max_field_section_size = MaxFieldSize},
+    %% Extract enable_connect_protocol (RFC 9220)
+    EnableConnect = maps:get(enable_connect_protocol, Settings,
+                             State#h3_state.peer_enable_connect_protocol),
+    State1 = State#h3_state{
+        peer_max_field_section_size = MaxFieldSize,
+        peer_enable_connect_protocol = EnableConnect
+    },
     apply_peer_settings(Rest, State1);
 apply_peer_settings([_ | Rest], State) ->
     %% Skip non-settings frames (GOAWAY, etc.)
@@ -539,7 +637,13 @@ handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState,
             {StreamState, State}
     end;
 
+handle_h3_frame(StreamId, {data, Payload}, Fin,
+                #stream_state{mode = websocket} = StreamState, State) ->
+    %% WebSocket mode - DATA frames contain WebSocket frames
+    process_websocket_data(StreamId, Payload, Fin, StreamState, State);
+
 handle_h3_frame(_StreamId, {data, Payload}, _Fin, StreamState, State) ->
+    %% Normal mode - accumulate body
     Body = StreamState#stream_state.body,
     StreamState1 = StreamState#stream_state{
         body = <<Body/binary, Payload/binary>>,
@@ -555,14 +659,28 @@ handle_h3_frame(_StreamId, _Frame, _Fin, StreamState, State) ->
 %% Internal - Request dispatch
 %%====================================================================
 
-dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailers = Trailers},
+dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailers = Trailers} = StreamState,
                  #h3_state{handler = Handler, handler_opts = HandlerOpts} = State) ->
     %% Extract pseudo-headers
     Method = get_header(<<":method">>, Headers, <<"GET">>),
     Path = get_header(<<":path">>, Headers, <<"/">>),
     Scheme = get_header(<<":scheme">>, Headers, <<"https">>),
     Authority = get_header(<<":authority">>, Headers, <<>>),
+    Protocol = get_header(<<":protocol">>, Headers, undefined),
 
+    %% Check for Extended CONNECT (RFC 9220)
+    case {Method, Protocol} of
+        {<<"CONNECT">>, <<"websocket">>} ->
+            %% Extended CONNECT with WebSocket protocol
+            handle_websocket_upgrade(StreamId, Headers, StreamState, Handler, HandlerOpts, State);
+        _ ->
+            %% Normal request
+            dispatch_normal_request(StreamId, Method, Path, Scheme, Authority,
+                                    Headers, Body, Trailers, Handler, HandlerOpts, State)
+    end.
+
+dispatch_normal_request(StreamId, Method, Path, Scheme, Authority,
+                        Headers, Body, Trailers, Handler, HandlerOpts, State) ->
     %% Build request record
     Req = #{
         method => Method,
@@ -625,3 +743,231 @@ calculate_field_section_size(Headers) ->
     lists:foldl(fun({Name, Value}, Acc) ->
         Acc + byte_size(Name) + byte_size(Value) + 32
     end, 0, Headers).
+
+%%====================================================================
+%% Internal - WebSocket over HTTP/3 (RFC 9220)
+%%====================================================================
+
+%% @doc Validate Extended CONNECT request for WebSocket.
+%% RFC 9220 requires: :method=CONNECT, :protocol=websocket, :scheme, :authority, :path
+-spec validate_connect_request([{binary(), binary()}]) -> ok | {error, term()}.
+validate_connect_request(Headers) ->
+    Method = get_header(<<":method">>, Headers, undefined),
+    Protocol = get_header(<<":protocol">>, Headers, undefined),
+    Scheme = get_header(<<":scheme">>, Headers, undefined),
+    Authority = get_header(<<":authority">>, Headers, undefined),
+    Path = get_header(<<":path">>, Headers, undefined),
+
+    case {Method, Protocol, Scheme, Authority, Path} of
+        {<<"CONNECT">>, <<"websocket">>, S, A, P}
+          when S =/= undefined, A =/= undefined, P =/= undefined ->
+            ok;
+        _ ->
+            {error, invalid_connect_request}
+    end.
+
+%% @doc Handle WebSocket upgrade via Extended CONNECT.
+handle_websocket_upgrade(StreamId, Headers, StreamState, Handler, HandlerOpts, State) ->
+    case validate_connect_request(Headers) of
+        ok ->
+            Path = get_header(<<":path">>, Headers, <<"/">>),
+            Scheme = get_header(<<":scheme">>, Headers, <<"https">>),
+            Authority = get_header(<<":authority">>, Headers, <<>>),
+
+            %% Build WebSocket request
+            Req = #{
+                method => <<"CONNECT">>,
+                path => Path,
+                scheme => Scheme,
+                authority => Authority,
+                headers => filter_pseudo_headers(Headers),
+                body => <<>>,
+                trailers => [],
+                stream_id => StreamId,
+                protocol => websocket
+            },
+
+            %% Call handler init to check if WebSocket is accepted
+            try
+                case Handler:init(Req, HandlerOpts) of
+                    {websocket, Req1, HandlerState} ->
+                        %% WebSocket accepted - send 200 and switch to websocket mode
+                        accept_websocket(StreamId, Req1, HandlerState, StreamState, State);
+                    {ok, _Req1, _HandlerState} ->
+                        %% Handler didn't accept WebSocket, send 501
+                        send_error_response(StreamId, 501, State);
+                    {error, _Reason} ->
+                        send_error_response(StreamId, 400, State)
+                end
+            catch
+                _:_ ->
+                    send_error_response(StreamId, 500, State)
+            end;
+        {error, _} ->
+            send_error_response(StreamId, 400, State)
+    end.
+
+%% @doc Accept WebSocket connection - send 200 and switch stream to websocket mode.
+accept_websocket(StreamId, Req, HandlerState, StreamState,
+                 #h3_state{handler = Handler} = State) ->
+    %% Send 200 response (no END_STREAM - stream stays open for WebSocket data)
+    RespHeaders = [{<<":status">>, <<"200">>}],
+    case do_send_headers(StreamId, RespHeaders, false, State) of
+        {ok, State1} ->
+            %% Update stream to websocket mode
+            NewStreamState = StreamState#stream_state{
+                mode = websocket,
+                handler_state = {Handler, Req, HandlerState}
+            },
+            NewStreams = maps:put(StreamId, NewStreamState, State1#h3_state.streams),
+            State1#h3_state{streams = NewStreams};
+        {error, _Reason} ->
+            State
+    end.
+
+%% @doc Send error response.
+send_error_response(StreamId, Status, State) ->
+    RespHeaders = [{<<":status">>, integer_to_binary(Status)}],
+    case do_send_headers(StreamId, RespHeaders, true, State) of
+        {ok, State1} -> State1;
+        {error, _} -> State
+    end.
+
+%% @doc Process WebSocket data received in HTTP/3 DATA frames.
+process_websocket_data(StreamId, Payload, Fin, StreamState, State) ->
+    %% Accumulate data in WebSocket buffer
+    Buffer = <<(StreamState#stream_state.ws_buffer)/binary, Payload/binary>>,
+
+    %% Try to decode WebSocket frames from buffer
+    {Frames, Rest} = decode_ws_frames(Buffer),
+
+    %% Process decoded frames
+    {StreamState1, State1} = process_ws_frames(StreamId, Frames, StreamState, State),
+
+    %% Update buffer with remaining data
+    StreamState2 = StreamState1#stream_state{ws_buffer = Rest},
+
+    %% Handle connection close
+    case Fin of
+        true ->
+            %% WebSocket closed by peer
+            handle_ws_close(StreamId, StreamState2, State1);
+        false ->
+            {StreamState2, State1}
+    end.
+
+%% @doc Decode WebSocket frames from buffer.
+%% Returns {Frames, RemainingBuffer}.
+-spec decode_ws_frames(binary()) -> {[livery_ws:frame()], binary()}.
+decode_ws_frames(Buffer) ->
+    decode_ws_frames(Buffer, []).
+
+decode_ws_frames(Buffer, Acc) ->
+    case livery_ws:decode_frame(Buffer) of
+        {ok, Opcode, Payload, _Fin, Rest} ->
+            decode_ws_frames(Rest, [{Opcode, Payload} | Acc]);
+        {more, _} ->
+            {lists:reverse(Acc), Buffer};
+        {error, _} ->
+            {lists:reverse(Acc), Buffer}
+    end.
+
+%% @doc Process decoded WebSocket frames by calling handler.
+process_ws_frames(_StreamId, [], StreamState, State) ->
+    {StreamState, State};
+process_ws_frames(StreamId, [Frame | Rest], StreamState, State) ->
+    {StreamState1, State1} = process_single_ws_frame(StreamId, Frame, StreamState, State),
+    process_ws_frames(StreamId, Rest, StreamState1, State1).
+
+process_single_ws_frame(StreamId, {ping, Payload}, StreamState, State) ->
+    %% Auto-respond to ping with pong
+    PongFrame = livery_ws:encode_pong(Payload),
+    DataFrame = livery_h3_frame:encode_data(PongFrame),
+    quic:send_data(State#h3_state.quic_conn, StreamId, DataFrame, false),
+    {StreamState, State};
+
+process_single_ws_frame(_StreamId, {pong, _Payload}, StreamState, State) ->
+    %% Pong received - ignore
+    {StreamState, State};
+
+process_single_ws_frame(StreamId, {close, Payload}, StreamState, State) ->
+    %% Close frame - respond with close and mark stream as closing
+    {Code, _Reason} = parse_close_payload(Payload),
+    CloseFrame = livery_ws:encode_close(Code),
+    DataFrame = livery_h3_frame:encode_data(CloseFrame),
+    quic:send_data(State#h3_state.quic_conn, StreamId, DataFrame, true),
+    {StreamState, State};
+
+process_single_ws_frame(StreamId, Frame, StreamState,
+                        #h3_state{handler = Handler} = State) ->
+    %% Call handler's websocket_handle callback
+    case StreamState#stream_state.handler_state of
+        {_HandlerMod, Req, HandlerState} ->
+            case call_websocket_handle(Handler, Frame, Req, HandlerState) of
+                {ok, NewHandlerState} ->
+                    NewStreamState = StreamState#stream_state{
+                        handler_state = {Handler, Req, NewHandlerState}
+                    },
+                    {NewStreamState, State};
+                {reply, ReplyFrame, NewHandlerState} ->
+                    %% Send reply frame
+                    send_ws_frame_internal(StreamId, ReplyFrame, State),
+                    NewStreamState = StreamState#stream_state{
+                        handler_state = {Handler, Req, NewHandlerState}
+                    },
+                    {NewStreamState, State};
+                {stop, _Reason, _NewHandlerState} ->
+                    %% Close WebSocket
+                    CloseFrame = livery_ws:encode_close(1000),
+                    DataFrame = livery_h3_frame:encode_data(CloseFrame),
+                    quic:send_data(State#h3_state.quic_conn, StreamId, DataFrame, true),
+                    {StreamState, State}
+            end;
+        _ ->
+            {StreamState, State}
+    end.
+
+%% @doc Call handler's websocket_handle callback if it exists.
+call_websocket_handle(Handler, Frame, _Req, HandlerState) ->
+    case erlang:function_exported(Handler, websocket_handle, 2) of
+        true ->
+            Handler:websocket_handle(Frame, HandlerState);
+        false ->
+            %% No websocket_handle callback, just keep state
+            {ok, HandlerState}
+    end.
+
+%% @doc Handle WebSocket close.
+handle_ws_close(_StreamId, StreamState, State) ->
+    %% Stream is closing, return updated state
+    {StreamState, State}.
+
+%% @doc Parse close frame payload.
+parse_close_payload(<<Code:16, Reason/binary>>) ->
+    {Code, Reason};
+parse_close_payload(<<>>) ->
+    {1000, <<>>};
+parse_close_payload(_) ->
+    {1000, <<>>}.
+
+%% @doc Send WebSocket frame to client (internal).
+send_ws_frame_internal(StreamId, Frame, #h3_state{quic_conn = QuicConn}) ->
+    WsFrame = encode_ws_frame(Frame),
+    DataFrame = livery_h3_frame:encode_data(WsFrame),
+    quic:send_data(QuicConn, StreamId, DataFrame, false).
+
+%% @doc Encode a WebSocket frame for sending.
+encode_ws_frame({text, Text}) ->
+    livery_ws:encode_text(Text);
+encode_ws_frame({binary, Data}) ->
+    livery_ws:encode_binary(Data);
+encode_ws_frame({ping, Payload}) ->
+    livery_ws:encode_ping(Payload);
+encode_ws_frame({pong, Payload}) ->
+    livery_ws:encode_pong(Payload);
+encode_ws_frame({close, Code}) when is_integer(Code) ->
+    livery_ws:encode_close(Code);
+encode_ws_frame({close, Code, Reason}) ->
+    livery_ws:encode_close(Code, Reason);
+encode_ws_frame(Frame) when is_binary(Frame) ->
+    Frame.

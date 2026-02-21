@@ -43,6 +43,7 @@
 -define(SETTINGS_QPACK_MAX_TABLE_CAPACITY, 16#01).
 -define(SETTINGS_MAX_FIELD_SECTION_SIZE,   16#06).
 -define(SETTINGS_QPACK_BLOCKED_STREAMS,    16#07).
+-define(SETTINGS_ENABLE_CONNECT_PROTOCOL,  16#08).
 
 -type frame() :: {data, binary()}
                | {headers, binary()}
@@ -223,7 +224,8 @@ default_settings() ->
     #{
         qpack_max_table_capacity => 0,
         max_field_section_size => 65536,
-        qpack_blocked_streams => 0
+        qpack_blocked_streams => 0,
+        enable_connect_protocol => 1
     }.
 
 %% @doc Encode settings map to SETTINGS frame payload.
@@ -263,9 +265,11 @@ decode_settings_pairs(Data, Acc) ->
 setting_to_id(qpack_max_table_capacity) -> ?SETTINGS_QPACK_MAX_TABLE_CAPACITY;
 setting_to_id(max_field_section_size) -> ?SETTINGS_MAX_FIELD_SECTION_SIZE;
 setting_to_id(qpack_blocked_streams) -> ?SETTINGS_QPACK_BLOCKED_STREAMS;
+setting_to_id(enable_connect_protocol) -> ?SETTINGS_ENABLE_CONNECT_PROTOCOL;
 setting_to_id(Id) when is_integer(Id) -> Id.
 
 id_to_setting(?SETTINGS_QPACK_MAX_TABLE_CAPACITY) -> qpack_max_table_capacity;
 id_to_setting(?SETTINGS_MAX_FIELD_SECTION_SIZE) -> max_field_section_size;
 id_to_setting(?SETTINGS_QPACK_BLOCKED_STREAMS) -> qpack_blocked_streams;
+id_to_setting(?SETTINGS_ENABLE_CONNECT_PROTOCOL) -> enable_connect_protocol;
 id_to_setting(Id) -> Id.

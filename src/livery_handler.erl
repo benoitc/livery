@@ -33,10 +33,23 @@
 
 %% @doc Handle the request.
 %% Return a response tuple to send a response to the client.
+%%
+%% Response types:
+%% - `{reply, Status, Headers, Body, State}' - Send a complete response
+%% - `{reply, Status, Headers, State}' - Send response with no body
+%% - `{stream, Status, Headers, StreamFun, State}' - Stream chunked response
+%% - `{error, Reason, State}' - Return an error
+%%
+%% StreamFun is a function that will be called with a send function:
+%%   `StreamFun(SendFun)' where `SendFun(Chunk)' sends a chunk.
+%%   Call `SendFun(done)' or `SendFun({done, Trailers})' to finish.
 -callback handle(Req :: #livery_req{}, State :: term()) ->
     {reply, Status :: non_neg_integer(), Headers :: [{binary(), binary()}],
      Body :: iodata(), NewState :: term()} |
     {reply, Status :: non_neg_integer(), Headers :: [{binary(), binary()}],
+     NewState :: term()} |
+    {stream, Status :: non_neg_integer(), Headers :: [{binary(), binary()}],
+     StreamFun :: fun((SendFun :: fun((iodata() | done | {done, [{binary(), binary()}]}) -> ok)) -> ok),
      NewState :: term()} |
     {error, Reason :: term(), NewState :: term()}.
 

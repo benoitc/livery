@@ -10,7 +10,10 @@
 
 -export([
     parse_request/1,
-    parse_request/2
+    parse_request/2,
+    parse_chunk/1,
+    parse_chunk/2,
+    parse_trailers/1
 ]).
 
 -include("livery.hrl").
@@ -22,6 +25,17 @@
     {more, binary()} |
     {error, term()}.
 
+-type chunk_result() ::
+    {ok, Data :: binary(), Rest :: binary()} |      %% Got a chunk
+    {done, Rest :: binary()} |                       %% Got final chunk (size 0)
+    {more, binary()} |                               %% Need more data
+    {error, term()}.
+
+-type trailers_result() ::
+    {ok, Trailers :: [{binary(), binary()}], Rest :: binary()} |
+    {more, binary()} |
+    {error, term()}.
+
 -type limits() :: #{
     max_method_size => pos_integer(),
     max_uri_size => pos_integer(),
@@ -30,7 +44,7 @@
     max_headers => pos_integer()
 }.
 
--export_type([parse_result/0, limits/0]).
+-export_type([parse_result/0, chunk_result/0, trailers_result/0, limits/0]).
 
 -spec parse_request(binary()) -> parse_result().
 parse_request(Data) ->
@@ -160,4 +174,111 @@ trim_trailing_ws(Bin) ->
         $  -> trim_trailing_ws(binary:part(Bin, 0, byte_size(Bin) - 1));
         $\t -> trim_trailing_ws(binary:part(Bin, 0, byte_size(Bin) - 1));
         _ -> Bin
+    end.
+
+%% @doc Parse a chunk from chunked transfer encoding.
+%% Returns {ok, ChunkData, Rest} for a data chunk,
+%% {done, Rest} for the final zero-length chunk,
+%% {more, Data} if more data is needed,
+%% or {error, Reason} on parse error.
+-spec parse_chunk(binary()) -> chunk_result().
+parse_chunk(Data) ->
+    parse_chunk(Data, ?MAX_CHUNK_SIZE).
+
+-spec parse_chunk(binary(), pos_integer()) -> chunk_result().
+parse_chunk(Data, MaxChunkSize) ->
+    parse_chunk_size(Data, <<>>, MaxChunkSize).
+
+%% Parse chunk size (hex) followed by optional extensions and CRLF
+parse_chunk_size(<<>>, _Acc, _MaxSize) ->
+    {more, <<>>};
+parse_chunk_size(<<"\r\n", Rest/binary>>, Acc, MaxSize) when byte_size(Acc) > 0 ->
+    case parse_hex(Acc) of
+        {ok, 0} ->
+            %% Final chunk - trailers follow
+            {done, Rest};
+        {ok, Size} when Size > MaxSize ->
+            {error, chunk_too_large};
+        {ok, Size} ->
+            parse_chunk_data(Rest, Size);
+        {error, Reason} ->
+            {error, Reason}
+    end;
+parse_chunk_size(<<";", Rest/binary>>, Acc, MaxSize) when byte_size(Acc) > 0 ->
+    %% Chunk extension - skip until CRLF
+    skip_chunk_extensions(Rest, Acc, MaxSize);
+parse_chunk_size(<<C, Rest/binary>>, Acc, MaxSize) when
+        (C >= $0 andalso C =< $9) orelse
+        (C >= $a andalso C =< $f) orelse
+        (C >= $A andalso C =< $F) ->
+    %% Limit chunk size line to 16 chars (huge chunks)
+    case byte_size(Acc) >= 16 of
+        true -> {error, chunk_size_too_long};
+        false -> parse_chunk_size(Rest, <<Acc/binary, C>>, MaxSize)
+    end;
+parse_chunk_size(<<_C, _/binary>>, _Acc, _MaxSize) ->
+    {error, invalid_chunk_size}.
+
+%% Skip chunk extensions until CRLF
+skip_chunk_extensions(<<>>, _SizeAcc, _MaxSize) ->
+    {more, <<>>};
+skip_chunk_extensions(<<"\r\n", Rest/binary>>, SizeAcc, MaxSize) ->
+    case parse_hex(SizeAcc) of
+        {ok, 0} -> {done, Rest};
+        {ok, Size} when Size > MaxSize -> {error, chunk_too_large};
+        {ok, Size} -> parse_chunk_data(Rest, Size);
+        {error, Reason} -> {error, Reason}
+    end;
+skip_chunk_extensions(<<_, Rest/binary>>, SizeAcc, MaxSize) ->
+    skip_chunk_extensions(Rest, SizeAcc, MaxSize).
+
+%% Parse chunk data of known size + trailing CRLF
+parse_chunk_data(Data, Size) when byte_size(Data) >= Size + 2 ->
+    <<ChunkData:Size/binary, "\r\n", Rest/binary>> = Data,
+    {ok, ChunkData, Rest};
+parse_chunk_data(Data, Size) when byte_size(Data) >= Size ->
+    %% Have chunk data but not trailing CRLF yet
+    <<_:Size/binary, Rest/binary>> = Data,
+    case Rest of
+        <<"\r", _/binary>> -> {more, Data};  %% Might be incomplete CRLF
+        <<>> -> {more, Data};
+        _ -> {error, invalid_chunk_terminator}
+    end;
+parse_chunk_data(_Data, _Size) ->
+    {more, <<>>}.
+
+%% Parse hex string to integer
+parse_hex(Bin) ->
+    try
+        {ok, binary_to_integer(Bin, 16)}
+    catch
+        _:_ -> {error, invalid_chunk_size}
+    end.
+
+%% @doc Parse trailers after the final chunk.
+%% Trailers are optional headers following the zero-length chunk.
+-spec parse_trailers(binary()) -> trailers_result().
+parse_trailers(Data) ->
+    parse_trailers(Data, []).
+
+parse_trailers(<<"\r\n", Rest/binary>>, Acc) ->
+    {ok, lists:reverse(Acc), Rest};
+parse_trailers(<<>>, _Acc) ->
+    {more, <<>>};
+parse_trailers(Data, Acc) ->
+    case parse_header_name(Data, <<>>, ?MAX_HEADER_NAME_SIZE) of
+        {more, _} ->
+            {more, Data};
+        {error, Reason} ->
+            {error, Reason};
+        {ok, Name, Rest1} ->
+            case parse_header_value(Rest1, <<>>, ?MAX_HEADER_VALUE_SIZE) of
+                {more, _} ->
+                    {more, Data};
+                {error, Reason} ->
+                    {error, Reason};
+                {ok, Value, Rest2} ->
+                    LowerName = string:lowercase(Name),
+                    parse_trailers(Rest2, [{LowerName, Value} | Acc])
+            end
     end.

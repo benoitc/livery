@@ -180,3 +180,110 @@ custom_uri_limit_test() ->
     Limits = #{max_uri_size => 10},
     Req = <<"GET /very/long/path HTTP/1.1\r\n\r\n">>,
     {error, uri_too_long} = livery_h1_parse:parse_request(Req, Limits).
+
+%% Chunk parsing tests
+
+parse_simple_chunk_test() ->
+    Data = <<"5\r\nhello\r\n">>,
+    {ok, Chunk, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"hello">>, Chunk),
+    ?assertEqual(<<>>, Rest).
+
+parse_hex_chunk_size_test() ->
+    Data = <<"a\r\n0123456789\r\n">>,
+    {ok, Chunk, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"0123456789">>, Chunk),
+    ?assertEqual(<<>>, Rest).
+
+parse_uppercase_hex_chunk_test() ->
+    Data = <<"A\r\n0123456789\r\n">>,
+    {ok, Chunk, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"0123456789">>, Chunk),
+    ?assertEqual(<<>>, Rest).
+
+parse_large_hex_chunk_test() ->
+    Data = <<"1F\r\n", (binary:copy(<<"x">>, 31))/binary, "\r\n">>,
+    {ok, Chunk, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(31, byte_size(Chunk)),
+    ?assertEqual(<<>>, Rest).
+
+parse_final_chunk_test() ->
+    Data = <<"0\r\n\r\n">>,
+    {done, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"\r\n">>, Rest).
+
+parse_chunk_with_extension_test() ->
+    Data = <<"5;ext=value\r\nhello\r\n">>,
+    {ok, Chunk, Rest} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"hello">>, Chunk),
+    ?assertEqual(<<>>, Rest).
+
+parse_chunk_partial_size_test() ->
+    {more, _} = livery_h1_parse:parse_chunk(<<"1">>).
+
+parse_chunk_partial_data_test() ->
+    {more, _} = livery_h1_parse:parse_chunk(<<"5\r\nhel">>).
+
+parse_chunk_partial_crlf_test() ->
+    {more, _} = livery_h1_parse:parse_chunk(<<"5\r\nhello\r">>).
+
+parse_chunk_invalid_size_test() ->
+    {error, invalid_chunk_size} = livery_h1_parse:parse_chunk(<<"xyz\r\n">>).
+
+parse_chunk_multiple_test() ->
+    Data = <<"5\r\nhello\r\n5\r\nworld\r\n0\r\n\r\n">>,
+    {ok, Chunk1, Rest1} = livery_h1_parse:parse_chunk(Data),
+    ?assertEqual(<<"hello">>, Chunk1),
+    {ok, Chunk2, Rest2} = livery_h1_parse:parse_chunk(Rest1),
+    ?assertEqual(<<"world">>, Chunk2),
+    {done, Rest3} = livery_h1_parse:parse_chunk(Rest2),
+    ?assertEqual(<<"\r\n">>, Rest3).
+
+%% Trailer parsing tests
+
+parse_empty_trailers_test() ->
+    Data = <<"\r\n">>,
+    {ok, Trailers, Rest} = livery_h1_parse:parse_trailers(Data),
+    ?assertEqual([], Trailers),
+    ?assertEqual(<<>>, Rest).
+
+parse_single_trailer_test() ->
+    Data = <<"X-Checksum: abc123\r\n\r\n">>,
+    {ok, Trailers, Rest} = livery_h1_parse:parse_trailers(Data),
+    ?assertEqual([{<<"x-checksum">>, <<"abc123">>}], Trailers),
+    ?assertEqual(<<>>, Rest).
+
+parse_multiple_trailers_test() ->
+    Data = <<"X-Checksum: abc123\r\nX-Length: 100\r\n\r\n">>,
+    {ok, Trailers, Rest} = livery_h1_parse:parse_trailers(Data),
+    ?assertEqual(2, length(Trailers)),
+    ?assertEqual(<<"abc123">>, proplists:get_value(<<"x-checksum">>, Trailers)),
+    ?assertEqual(<<"100">>, proplists:get_value(<<"x-length">>, Trailers)),
+    ?assertEqual(<<>>, Rest).
+
+parse_trailers_partial_test() ->
+    {more, _} = livery_h1_parse:parse_trailers(<<"X-Check">>).
+
+%% Chunked response encoding tests
+
+encode_chunk_test() ->
+    Encoded = iolist_to_binary(livery_resp:encode_chunk(<<"hello">>)),
+    ?assertEqual(<<"5\r\nhello\r\n">>, Encoded).
+
+encode_empty_chunk_test() ->
+    Encoded = iolist_to_binary(livery_resp:encode_chunk(<<>>)),
+    ?assertEqual(<<"0\r\n\r\n">>, Encoded).
+
+encode_last_chunk_test() ->
+    Encoded = livery_resp:encode_last_chunk(),
+    ?assertEqual(<<"0\r\n\r\n">>, Encoded).
+
+encode_last_chunk_with_trailers_test() ->
+    Encoded = iolist_to_binary(livery_resp:encode_last_chunk([{<<"x-checksum">>, <<"abc">>}])),
+    ?assertEqual(<<"0\r\nx-checksum: abc\r\n\r\n">>, Encoded).
+
+build_chunked_start_test() ->
+    Encoded = iolist_to_binary(livery_resp:build_chunked_start(200, [{<<"content-type">>, <<"text/plain">>}], {1, 1})),
+    ?assertMatch({match, _}, re:run(Encoded, <<"HTTP/1.1 200 OK">>)),
+    ?assertMatch({match, _}, re:run(Encoded, <<"transfer-encoding: chunked">>)),
+    ?assertMatch({match, _}, re:run(Encoded, <<"content-type: text/plain">>)).

@@ -9,6 +9,7 @@
     init/2,
     handle_data/2,
     send_response/5,
+    send_stream/5,
     close/1
 ]).
 
@@ -20,7 +21,12 @@
     handler_state :: term(),
     keepalive = true :: boolean(),
     request_count = 0 :: non_neg_integer(),
-    limits :: livery_h1_parse:limits()
+    limits :: livery_h1_parse:limits(),
+    %% Chunked body parsing state
+    body_state :: undefined | {chunked, [binary()], non_neg_integer()} | {chunked_trailers, [binary()]},
+    body_remaining :: non_neg_integer() | undefined,
+    max_body_size :: non_neg_integer(),
+    max_chunk_size :: non_neg_integer()
 }).
 
 -opaque state() :: #h1_state{}.
@@ -39,18 +45,32 @@ init(Handler, HandlerOpts) ->
     #h1_state{
         handler = Handler,
         handler_opts = HandlerOpts,
-        limits = Limits
+        limits = Limits,
+        max_body_size = application:get_env(livery, max_body_size, ?MAX_BODY_SIZE),
+        max_chunk_size = application:get_env(livery, max_chunk_size, ?MAX_CHUNK_SIZE)
     }.
 
 %% @doc Handle incoming data.
 -spec handle_data(binary(), state()) ->
     {ok, state()} |
     {response, non_neg_integer(), [{binary(), binary()}], iodata(), state()} |
+    {stream, non_neg_integer(), [{binary(), binary()}], fun((fun((iodata() | done | {done, [{binary(), binary()}]}) -> ok)) -> ok), state()} |
     {close, state()} |
     {error, term(), state()}.
-handle_data(Data, #h1_state{buffer = Buffer} = State) ->
+handle_data(Data, #h1_state{buffer = Buffer, body_state = BodyState} = State) ->
     NewBuffer = <<Buffer/binary, Data/binary>>,
-    parse_and_handle(State#h1_state{buffer = NewBuffer}).
+    NewState = State#h1_state{buffer = NewBuffer},
+    case BodyState of
+        {chunked, _, _} ->
+            %% Continue reading chunked body
+            handle_chunked_body(NewState);
+        {chunked_trailers, _} ->
+            %% Continue reading trailers
+            handle_chunked_trailers(NewState);
+        undefined ->
+            %% Normal request parsing
+            parse_and_handle(NewState)
+    end.
 
 %% @doc Send a response (for use by connection process).
 -spec send_response(gen_tcp:socket() | ssl:sslsocket(), non_neg_integer(),
@@ -85,6 +105,57 @@ send_response(Socket, Status, Headers, Body, State) ->
             {close, State}
     end.
 
+%% @doc Send a streaming response using chunked transfer encoding.
+-spec send_stream(gen_tcp:socket() | ssl:sslsocket(), non_neg_integer(),
+                  [{binary(), binary()}],
+                  fun((fun((iodata() | done | {done, [{binary(), binary()}]}) -> ok)) -> ok),
+                  state()) ->
+    {ok, state()} | {close, state()}.
+send_stream(Socket, Status, Headers, StreamFun, State) ->
+    Req = State#h1_state.req,
+    Version = case Req of
+        undefined -> {1, 1};
+        _ -> Req#livery_req.version
+    end,
+
+    %% Add connection header if needed
+    AllHeaders = add_connection_header(Headers, State),
+    StartResponse = livery_resp:build_chunked_start(Status, AllHeaders, Version),
+
+    case send_data(Socket, StartResponse) of
+        ok ->
+            %% Create send function for the stream callback
+            SendFun = fun
+                (done) ->
+                    send_data(Socket, livery_resp:encode_last_chunk());
+                ({done, Trailers}) ->
+                    send_data(Socket, livery_resp:encode_last_chunk(Trailers));
+                (Chunk) ->
+                    send_data(Socket, livery_resp:encode_chunk(Chunk))
+            end,
+
+            %% Call the stream function
+            try
+                StreamFun(SendFun),
+                case State#h1_state.keepalive of
+                    true ->
+                        NewState = State#h1_state{
+                            req = undefined,
+                            handler_state = undefined,
+                            request_count = State#h1_state.request_count + 1
+                        },
+                        {ok, NewState};
+                    false ->
+                        {close, State}
+                end
+            catch
+                _:_ ->
+                    {close, State}
+            end;
+        {error, _Reason} ->
+            {close, State}
+    end.
+
 %% @doc Close protocol state.
 -spec close(state()) -> ok.
 close(#h1_state{handler_state = undefined}) ->
@@ -112,11 +183,16 @@ parse_and_handle(#h1_state{buffer = Buffer, limits = Limits} = State) ->
             %% Check for body
             case get_body_info(Headers) of
                 {true, Length} when is_integer(Length) ->
-                    %% Has body, need to read it
-                    handle_with_body(Length, State1);
+                    %% Has body with Content-Length
+                    case Length > State1#h1_state.max_body_size of
+                        true ->
+                            {error, body_too_large, State1};
+                        false ->
+                            handle_with_body(Length, State1)
+                    end;
                 {true, chunked} ->
-                    %% Chunked encoding - not implemented in Phase 1
-                    {error, chunked_not_implemented, State1};
+                    %% Chunked transfer encoding (TotalSize starts at 0)
+                    handle_chunked_body(State1#h1_state{body_state = {chunked, [], 0}});
                 {false, _} ->
                     %% No body, handle request directly
                     handle_request(State1)
@@ -161,6 +237,63 @@ handle_with_body(_Length, State) ->
     %% Need more data
     {ok, State}.
 
+handle_chunked_body(#h1_state{buffer = Buffer, body_state = {chunked, Chunks, TotalSize},
+                             max_chunk_size = MaxChunkSize, max_body_size = MaxBodySize} = State) ->
+    case livery_h1_parse_erl:parse_chunk(Buffer, MaxChunkSize) of
+        {ok, ChunkData, Rest} ->
+            ChunkSize = byte_size(ChunkData),
+            NewTotalSize = TotalSize + ChunkSize,
+            case NewTotalSize > MaxBodySize of
+                true ->
+                    {error, body_too_large, State};
+                false ->
+                    %% Got a chunk, continue reading
+                    handle_chunked_body(State#h1_state{
+                        buffer = Rest,
+                        body_state = {chunked, [ChunkData | Chunks], NewTotalSize}
+                    })
+            end;
+        {done, Rest} ->
+            %% Final chunk received, now parse trailers
+            handle_chunked_trailers(State#h1_state{
+                buffer = Rest,
+                body_state = {chunked_trailers, Chunks}
+            });
+        {more, _} ->
+            %% Need more data
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+handle_chunked_trailers(#h1_state{buffer = Buffer, body_state = {chunked_trailers, Chunks}} = State) ->
+    case livery_h1_parse:parse_trailers(Buffer) of
+        {ok, Trailers, Rest} ->
+            %% Assemble body from chunks (reverse since we prepended)
+            Body = iolist_to_binary(lists:reverse(Chunks)),
+            BodyLength = byte_size(Body),
+            Req = State#h1_state.req,
+            Req1 = livery_req:set_body(Body, Req),
+            %% Append trailers to headers if any
+            Req2 = case Trailers of
+                [] -> Req1;
+                _ ->
+                    CurrentHeaders = livery_req:headers(Req1),
+                    livery_req:set_headers(CurrentHeaders ++ Trailers, Req1)
+            end,
+            Req3 = livery_req:set_body_info(true, BodyLength, Req2),
+            handle_request(State#h1_state{
+                req = Req3,
+                buffer = Rest,
+                body_state = undefined
+            });
+        {more, _} ->
+            %% Need more data
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
 handle_request(#h1_state{req = Req, handler = Handler, handler_opts = Opts} = State) ->
     %% Call handler init
     case Handler:init(Req, Opts) of
@@ -173,6 +306,9 @@ handle_request(#h1_state{req = Req, handler = Handler, handler_opts = Opts} = St
                 {reply, Status, Headers, NewHandlerState} ->
                     try_terminate(Handler, normal, NewHandlerState),
                     {response, Status, Headers, <<>>, State#h1_state{handler_state = NewHandlerState}};
+                {stream, Status, Headers, StreamFun, NewHandlerState} ->
+                    %% Streaming response - caller will invoke send_stream
+                    {stream, Status, Headers, StreamFun, State#h1_state{handler_state = NewHandlerState}};
                 {error, Reason, NewHandlerState} ->
                     try_terminate(Handler, {error, Reason}, NewHandlerState),
                     {error, Reason, State#h1_state{handler_state = NewHandlerState}}

@@ -183,6 +183,21 @@ handle_data(Data, #state{protocol = h1, protocol_state = ProtocolState,
                     {stop, normal, State#state{protocol_state = NewProtocolState}}
             end;
 
+        {stream, Status, Headers, StreamFun, NewProtocolState} ->
+            %% Send streaming response
+            case livery_h1:send_stream(Socket, Status, Headers, StreamFun, NewProtocolState) of
+                {ok, NextProtocolState} ->
+                    %% Ready for next request (keep-alive)
+                    ok = set_active(Socket, Transport),
+                    TimerRef = erlang:start_timer(State#state.idle_timeout, self(), idle_timeout),
+                    {next_state, waiting, State#state{
+                        protocol_state = NextProtocolState,
+                        timer_ref = TimerRef
+                    }};
+                {close, _} ->
+                    {stop, normal, State#state{protocol_state = NewProtocolState}}
+            end;
+
         {close, NewProtocolState} ->
             {stop, normal, State#state{protocol_state = NewProtocolState}};
 
@@ -228,5 +243,9 @@ error_to_status(header_value_too_long) -> 400;
 error_to_status(invalid_header_name) -> 400;
 error_to_status(invalid_header_value) -> 400;
 error_to_status(too_many_headers) -> 400;
-error_to_status(chunked_not_implemented) -> 501;
+error_to_status(invalid_chunk_size) -> 400;
+error_to_status(chunk_size_too_long) -> 400;
+error_to_status(chunk_too_large) -> 413;
+error_to_status(invalid_chunk_terminator) -> 400;
+error_to_status(body_too_large) -> 413;
 error_to_status(_) -> 500.

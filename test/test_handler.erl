@@ -55,5 +55,35 @@ handle_route(<<"GET">>, <<"/query">>, Req, State) ->
     Qs = livery_req:qs(Req),
     {reply, 200, [{<<"content-type">>, <<"text/plain">>}], Qs, State};
 
+%% Chunked request body - echoes the body back
+handle_route(<<"POST">>, <<"/chunked-echo">>, Req, State) ->
+    Body = case livery_req:body(Req) of
+        undefined -> <<>>;
+        B -> B
+    end,
+    ContentType = livery_req:header(<<"content-type">>, Req, <<"text/plain">>),
+    %% Also return the body length to verify chunked decoding
+    BodyLen = integer_to_binary(byte_size(Body)),
+    Headers = [{<<"content-type">>, ContentType}, {<<"x-body-length">>, BodyLen}],
+    {reply, 200, Headers, Body, State};
+
+%% Streaming response - sends 3 chunks
+handle_route(<<"GET">>, <<"/stream">>, _Req, State) ->
+    StreamFun = fun(Send) ->
+        Send(<<"chunk1">>),
+        Send(<<"chunk2">>),
+        Send(<<"chunk3">>),
+        Send(done)
+    end,
+    {stream, 200, [{<<"content-type">>, <<"text/plain">>}], StreamFun, State};
+
+%% Streaming response with trailers
+handle_route(<<"GET">>, <<"/stream-with-trailers">>, _Req, State) ->
+    StreamFun = fun(Send) ->
+        Send(<<"data">>),
+        Send({done, [{<<"x-checksum">>, <<"abc123">>}]})
+    end,
+    {stream, 200, [{<<"content-type">>, <<"text/plain">>}], StreamFun, State};
+
 handle_route(_, _, _Req, State) ->
     {reply, 404, [{<<"content-type">>, <<"text/plain">>}], <<"Not Found">>, State}.

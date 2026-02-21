@@ -4,7 +4,12 @@
 -export([
     build/4,
     build/3,
-    status_text/1
+    status_text/1,
+    %% Chunked encoding
+    build_chunked_start/3,
+    encode_chunk/1,
+    encode_last_chunk/0,
+    encode_last_chunk/1
 ]).
 
 -spec build(non_neg_integer(), [{binary(), binary()}], iodata(), {non_neg_integer(), non_neg_integer()}) -> iodata().
@@ -80,3 +85,47 @@ status_text(503) -> <<"Service Unavailable">>;
 status_text(504) -> <<"Gateway Timeout">>;
 status_text(505) -> <<"HTTP Version Not Supported">>;
 status_text(_) -> <<"Unknown">>.
+
+%% @doc Build the start of a chunked response (status line + headers).
+%% Automatically adds Transfer-Encoding: chunked header.
+-spec build_chunked_start(non_neg_integer(), [{binary(), binary()}], {non_neg_integer(), non_neg_integer()}) -> iodata().
+build_chunked_start(Status, Headers, Version) ->
+    StatusLine = status_line(Status, Version),
+    %% Add Transfer-Encoding: chunked, remove Content-Length if present
+    Headers1 = lists:filter(fun({Name, _}) ->
+        string:lowercase(Name) =/= <<"content-length">>
+    end, Headers),
+    Headers2 = case has_transfer_encoding(Headers1) of
+        true -> Headers1;
+        false -> [{<<"transfer-encoding">>, <<"chunked">>} | Headers1]
+    end,
+    HeadersBin = encode_headers(Headers2),
+    [StatusLine, HeadersBin, <<"\r\n">>].
+
+-spec has_transfer_encoding([{binary(), binary()}]) -> boolean().
+has_transfer_encoding(Headers) ->
+    lists:any(fun({Name, _}) ->
+        string:lowercase(Name) =:= <<"transfer-encoding">>
+    end, Headers).
+
+%% @doc Encode a chunk for chunked transfer encoding.
+%% Returns the chunk with size prefix and CRLF terminators.
+-spec encode_chunk(iodata()) -> iodata().
+encode_chunk(Data) ->
+    Bin = iolist_to_binary(Data),
+    Size = byte_size(Bin),
+    SizeHex = integer_to_binary(Size, 16),
+    [SizeHex, <<"\r\n">>, Bin, <<"\r\n">>].
+
+%% @doc Encode the last (empty) chunk without trailers.
+-spec encode_last_chunk() -> binary().
+encode_last_chunk() ->
+    <<"0\r\n\r\n">>.
+
+%% @doc Encode the last chunk with optional trailers.
+-spec encode_last_chunk([{binary(), binary()}]) -> iodata().
+encode_last_chunk([]) ->
+    encode_last_chunk();
+encode_last_chunk(Trailers) ->
+    TrailersBin = encode_headers(Trailers),
+    [<<"0\r\n">>, TrailersBin, <<"\r\n">>].

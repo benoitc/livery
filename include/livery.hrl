@@ -26,6 +26,8 @@
 -define(MAX_HEADER_NAME_SIZE, 256).
 -define(MAX_HEADER_VALUE_SIZE, 8192).
 -define(MAX_HEADERS, 100).
+-define(MAX_CHUNK_SIZE, 1048576).  %% 1MB max chunk size
+-define(MAX_BODY_SIZE, 8388608).   %% 8MB max body size
 
 %% HTTP versions
 -define(HTTP_1_0, {1, 0}).

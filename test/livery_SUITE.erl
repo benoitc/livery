@@ -31,7 +31,12 @@
     connection_close/1,
     http10_close/1,
     concurrent_connections/1,
-    bad_request/1
+    bad_request/1,
+    %% Chunked transfer encoding tests
+    chunked_request_body/1,
+    chunked_request_multiple_chunks/1,
+    streaming_response/1,
+    streaming_response_with_trailers/1
 ]).
 
 suite() ->
@@ -57,7 +62,12 @@ groups() ->
             connection_close,
             http10_close,
             concurrent_connections,
-            bad_request
+            bad_request,
+            %% Chunked transfer encoding tests
+            chunked_request_body,
+            chunked_request_multiple_chunks,
+            streaming_response,
+            streaming_response_with_trailers
         ]}
     ].
 
@@ -256,6 +266,78 @@ bad_request(Config) ->
     gen_tcp:close(Socket),
     ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 400">>)).
 
+%% Chunked transfer encoding tests
+
+chunked_request_body(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    %% Send a chunked request: "hello world" in two chunks
+    Request = [
+        <<"POST /chunked-echo HTTP/1.1\r\n">>,
+        <<"Host: localhost\r\n">>,
+        <<"Content-Type: text/plain\r\n">>,
+        <<"Transfer-Encoding: chunked\r\n">>,
+        <<"\r\n">>,
+        <<"5\r\nhello\r\n">>,
+        <<"6\r\n world\r\n">>,
+        <<"0\r\n\r\n">>
+    ],
+    ok = gen_tcp:send(Socket, Request),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 200 OK">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"hello world">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"x-body-length: 11">>)).
+
+chunked_request_multiple_chunks(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    %% Send multiple chunks with hex sizes
+    Request = [
+        <<"POST /chunked-echo HTTP/1.1\r\n">>,
+        <<"Host: localhost\r\n">>,
+        <<"Content-Type: text/plain\r\n">>,
+        <<"Transfer-Encoding: chunked\r\n">>,
+        <<"\r\n">>,
+        <<"a\r\n0123456789\r\n">>,   %% 10 bytes (0xa)
+        <<"5\r\nabcde\r\n">>,         %% 5 bytes
+        <<"0\r\n\r\n">>
+    ],
+    ok = gen_tcp:send(Socket, Request),
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 200 OK">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"0123456789abcde">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"x-body-length: 15">>)).
+
+streaming_response(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    ok = gen_tcp:send(Socket, <<"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n">>),
+    %% Read all data until we see the final chunk marker
+    Response = recv_until_end(Socket, <<>>, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 200 OK">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"transfer-encoding: chunked">>, [caseless])),
+    %% Should contain the chunks
+    ?assertMatch({match, _}, re:run(Response, <<"chunk1">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"chunk2">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"chunk3">>)),
+    %% Should end with final chunk
+    ?assertMatch({match, _}, re:run(Response, <<"0\r\n\r\n">>)).
+
+streaming_response_with_trailers(Config) ->
+    Port = ?config(port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    ok = gen_tcp:send(Socket, <<"GET /stream-with-trailers HTTP/1.1\r\nHost: localhost\r\n\r\n">>),
+    Response = recv_until_end(Socket, <<>>, 5000),
+    gen_tcp:close(Socket),
+    ?assertMatch({match, _}, re:run(Response, <<"HTTP/1.1 200 OK">>)),
+    ?assertMatch({match, _}, re:run(Response, <<"transfer-encoding: chunked">>, [caseless])),
+    ?assertMatch({match, _}, re:run(Response, <<"data">>)),
+    %% Should have trailer
+    ?assertMatch({match, _}, re:run(Response, <<"x-checksum: abc123">>)).
+
 %% Helpers
 
 get_free_port() ->
@@ -263,3 +345,31 @@ get_free_port() ->
     {ok, Port} = inet:port(Socket),
     gen_tcp:close(Socket),
     Port.
+
+%% Receive data until we see the final chunk marker "0\r\n" followed by trailers and "\r\n"
+recv_until_end(Socket, Acc, Timeout) ->
+    case gen_tcp:recv(Socket, 0, Timeout) of
+        {ok, Data} ->
+            NewAcc = <<Acc/binary, Data/binary>>,
+            %% Check if we've received the final chunk
+            case binary:match(NewAcc, <<"0\r\n\r\n">>) of
+                nomatch ->
+                    %% Also check for trailers pattern
+                    case binary:match(NewAcc, <<"\r\n0\r\n">>) of
+                        nomatch ->
+                            recv_until_end(Socket, NewAcc, Timeout);
+                        _ ->
+                            %% Found final chunk, but may need to read trailers
+                            case binary:match(NewAcc, <<"\r\n\r\n">>, [{scope, {byte_size(NewAcc) - 10, 10}}]) of
+                                nomatch ->
+                                    recv_until_end(Socket, NewAcc, Timeout);
+                                _ ->
+                                    NewAcc
+                            end
+                    end;
+                _ ->
+                    NewAcc
+            end;
+        {error, _} ->
+            Acc
+    end.

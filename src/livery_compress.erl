@@ -70,7 +70,7 @@ supported_encodings() ->
     [<<"gzip">>, <<"deflate">>, <<"identity">>].
 
 %% @doc Negotiate best encoding from Accept-Encoding header value.
-%% Returns the best supported encoding or <<"identity">> if none match.
+%% Returns the best supported encoding or `identity' if none match.
 -spec negotiate_encoding(binary()) -> binary().
 negotiate_encoding(AcceptEncoding) ->
     %% Parse Accept-Encoding header

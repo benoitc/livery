@@ -10,6 +10,9 @@ doc/
 .idea/
 *.iml
 
+# Checkout directories for examples
+_checkouts/
+
 # Generated/downloaded compliance test files
 priv/tools/
 priv/test_certs/

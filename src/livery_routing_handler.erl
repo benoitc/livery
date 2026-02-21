@@ -19,7 +19,7 @@
 %% '''
 %%
 %% The matched handler receives the request with bindings available via
-%% `livery_helpers:bindings/1` and `livery_helpers:binding/2,3`.
+%% {@link livery_helpers:bindings/1} and {@link livery_helpers:binding/2}.
 -module(livery_routing_handler).
 
 -behaviour(livery_handler).

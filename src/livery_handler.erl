@@ -46,7 +46,7 @@
 
 %% Callbacks
 
-%% @doc Initialize handler state.
+%% Initialize handler state.
 %% Called when a new request arrives.
 %% Return `{ok, Req, State}' to proceed with handling.
 %% Return `{websocket, Req, State}' to accept WebSocket upgrade (HTTP/3 RFC 9220).
@@ -56,7 +56,7 @@
     {websocket, #livery_req{} | map(), State :: term()} |
     {error, Reason :: term()}.
 
-%% @doc Handle the request.
+%% Handle the request.
 %% Return a response tuple to send a response to the client.
 %%
 %% Response types:
@@ -78,11 +78,11 @@
      NewState :: term()} |
     {error, Reason :: term(), NewState :: term()}.
 
-%% @doc Clean up handler state.
+%% Clean up handler state.
 %% Called when the request processing is finished.
 -callback terminate(Reason :: normal | {error, term()}, State :: term()) -> ok.
 
-%% @doc Handle incoming WebSocket frames (RFC 9220).
+%% Handle incoming WebSocket frames (RFC 9220).
 %% Called when a WebSocket frame is received from the client.
 %% Return `{ok, State}' to continue without sending a response.
 %% Return `{reply, Frame, State}' to send a response frame.
@@ -92,7 +92,7 @@
     {reply, Frame :: livery_ws:frame(), NewState :: term()} |
     {stop, Reason :: term(), NewState :: term()}.
 
-%% @doc Handle Erlang messages sent to the handler process.
+%% Handle Erlang messages sent to the handler process.
 %% Called when the handler receives an info message (e.g., from a timer or another process).
 %% Return values are the same as websocket_handle/2.
 -callback websocket_info(Info :: term(), State :: term()) ->

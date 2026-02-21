@@ -9,3 +9,7 @@ logs/
 doc/
 .idea/
 *.iml
+
+# Generated/downloaded compliance test files
+priv/tools/
+priv/test_certs/

@@ -14,7 +14,8 @@
     send_response/5,
     send_stream_data/4,
     send_stream_end/2,
-    close/2
+    close/2,
+    request_to_livery_req/4
 ]).
 
 -include("livery.hrl").
@@ -464,3 +465,24 @@ send_stream_end(StreamId, State) ->
 -spec close(non_neg_integer(), state()) -> iodata().
 close(ErrorCode, #h2_state{max_stream_id = LastStreamId}) ->
     livery_h2_frame:encode_goaway(LastStreamId, ErrorCode, <<>>).
+
+%% @doc Convert an H2 request to a livery_req record.
+-spec request_to_livery_req(tuple(), module(), term(), {inet:ip_address(), inet:port_number()} | undefined) ->
+    #livery_req{}.
+request_to_livery_req(#h2_request{method = Method, path = Path, qs = Qs,
+                                   headers = Headers, body = Body},
+                      Handler, HandlerOpts, Peer) ->
+    #livery_req{
+        method = Method,
+        path = Path,
+        qs = Qs,
+        version = {2, 0},
+        headers = Headers,
+        body = case Body of undefined -> <<>>; B -> B end,
+        peer = Peer,
+        sock = undefined,
+        handler = Handler,
+        handler_opts = HandlerOpts,
+        has_body = Body =/= undefined andalso byte_size(Body) > 0,
+        body_length = case Body of undefined -> 0; B -> byte_size(B) end
+    }.

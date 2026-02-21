@@ -9,13 +9,14 @@
 -include("livery.hrl").
 
 %% API
--export([start_link/4]).
+-export([start_link/5]).
 
 %% gen_statem callbacks
 -export([
     callback_mode/0,
     init/1,
     activating/3,
+    detecting/3,
     waiting/3,
     active/3,
     terminate/3
@@ -26,20 +27,25 @@
     transport :: gen_tcp | ssl,
     handler :: module(),
     handler_opts :: term(),
-    protocol :: h1 | h2 | h3,
-    protocol_state :: livery_h1:state() | term(),
+    protocol :: h1 | h2 | h3 | undefined,
+    protocol_state :: livery_h1:state() | livery_h2:state() | term() | undefined,
     peer :: {inet:ip_address(), inet:port_number()} | undefined,
     request_timeout :: timeout(),
     idle_timeout :: timeout(),
-    timer_ref :: reference() | undefined
+    timer_ref :: reference() | undefined,
+    detect_buffer = <<>> :: binary()  %% Buffer for protocol preface detection
 }).
+
+%% HTTP/2 connection preface
+-define(H2_PREFACE, <<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n">>).
+-define(H2_PREFACE_SIZE, 24).
 
 %% API
 
--spec start_link(gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term()) ->
-    {ok, pid()} | {error, term()}.
-start_link(Socket, Transport, Handler, HandlerOpts) ->
-    gen_statem:start_link(?MODULE, {Socket, Transport, Handler, HandlerOpts}, []).
+-spec start_link(gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term(),
+                 h1 | h2 | undefined) -> {ok, pid()} | {error, term()}.
+start_link(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
+    gen_statem:start_link(?MODULE, {Socket, Transport, Handler, HandlerOpts, NegotiatedProto}, []).
 
 %% gen_statem callbacks
 
@@ -47,22 +53,22 @@ start_link(Socket, Transport, Handler, HandlerOpts) ->
 callback_mode() ->
     state_functions.
 
--spec init({gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term()}) ->
-    gen_statem:init_result(activating).
-init({Socket, Transport, Handler, HandlerOpts}) ->
+-spec init({gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term(),
+             h1 | h2 | undefined}) -> gen_statem:init_result(activating).
+init({Socket, Transport, Handler, HandlerOpts, NegotiatedProto}) ->
     %% Get timeouts from application config
     RequestTimeout = application:get_env(livery, request_timeout, 60000),
     IdleTimeout = application:get_env(livery, idle_timeout, 300000),
 
-    %% Initialize protocol state (H1 for now)
-    ProtocolState = livery_h1:init(Handler, HandlerOpts),
+    %% Initialize protocol state based on negotiated protocol
+    {Protocol, ProtocolState} = init_protocol(NegotiatedProto, Handler, HandlerOpts),
 
     State = #state{
         socket = Socket,
         transport = Transport,
         handler = Handler,
         handler_opts = HandlerOpts,
-        protocol = h1,
+        protocol = Protocol,
         protocol_state = ProtocolState,
         peer = undefined,
         request_timeout = RequestTimeout,
@@ -73,10 +79,20 @@ init({Socket, Transport, Handler, HandlerOpts}) ->
     %% Set a timeout in case activate message never arrives
     {ok, activating, State, [{state_timeout, 5000, activate_timeout}]}.
 
+%% Initialize protocol based on ALPN negotiation result
+init_protocol(h1, Handler, HandlerOpts) ->
+    {h1, livery_h1:init(Handler, HandlerOpts)};
+init_protocol(h2, Handler, HandlerOpts) ->
+    {h2, livery_h2:init(#{handler => Handler, handler_opts => HandlerOpts})};
+init_protocol(undefined, _Handler, _HandlerOpts) ->
+    %% Protocol not negotiated - will detect via preface
+    {undefined, undefined}.
+
 %% Activating - waiting for socket ownership before activating
 -spec activating(gen_statem:event_type(), term(), #state{}) ->
     gen_statem:event_handler_result(atom()).
 activating(info, activate_socket, #state{socket = Socket, transport = Transport,
+                                          protocol = Protocol,
                                           idle_timeout = IdleTimeout} = State) ->
     %% Now we have ownership - get peer info and activate socket
     Peer = case get_peername(Socket, Transport) of
@@ -85,8 +101,16 @@ activating(info, activate_socket, #state{socket = Socket, transport = Transport,
     end,
     case set_active(Socket, Transport) of
         ok ->
-            TimerRef = erlang:start_timer(IdleTimeout, self(), idle_timeout),
-            {next_state, waiting, State#state{peer = Peer, timer_ref = TimerRef}};
+            case Protocol of
+                undefined ->
+                    %% Protocol not negotiated - need to detect via preface
+                    TimerRef = erlang:start_timer(5000, self(), detect_timeout),
+                    {next_state, detecting, State#state{peer = Peer, timer_ref = TimerRef}};
+                _ ->
+                    %% Protocol already known from ALPN
+                    TimerRef = erlang:start_timer(IdleTimeout, self(), idle_timeout),
+                    {next_state, waiting, State#state{peer = Peer, timer_ref = TimerRef}}
+            end;
         {error, _Reason} ->
             {stop, normal, State}
     end;
@@ -98,6 +122,46 @@ activating(state_timeout, activate_timeout, State) ->
     %% Didn't receive activate message in time, close
     {stop, normal, State};
 activating(EventType, Event, State) ->
+    handle_common(EventType, Event, State).
+
+%% Detecting protocol via connection preface
+-spec detecting(gen_statem:event_type(), term(), #state{}) ->
+    gen_statem:event_handler_result(atom()).
+detecting(info, {tcp, Socket, Data}, #state{socket = Socket} = State) ->
+    detect_protocol(Data, State);
+detecting(info, {ssl, Socket, Data}, #state{socket = Socket} = State) ->
+    detect_protocol(Data, State);
+detecting(info, {tcp_closed, Socket}, #state{socket = Socket} = State) ->
+    {stop, normal, State};
+detecting(info, {ssl_closed, Socket}, #state{socket = Socket} = State) ->
+    {stop, normal, State};
+detecting(info, {tcp_error, Socket, Reason}, #state{socket = Socket} = State) ->
+    {stop, {error, Reason}, State};
+detecting(info, {ssl_error, Socket, Reason}, #state{socket = Socket} = State) ->
+    {stop, {error, Reason}, State};
+detecting(info, {timeout, TimerRef, detect_timeout}, #state{timer_ref = TimerRef,
+                                                             detect_buffer = Buffer,
+                                                             handler = Handler,
+                                                             handler_opts = HandlerOpts,
+                                                             idle_timeout = IdleTimeout} = State) ->
+    %% Detection timeout - assume HTTP/1.1
+    cancel_timer(TimerRef),
+    ProtocolState = livery_h1:init(Handler, HandlerOpts),
+    NewState = State#state{
+        protocol = h1,
+        protocol_state = ProtocolState,
+        timer_ref = undefined,
+        detect_buffer = <<>>
+    },
+    %% Process any buffered data
+    case byte_size(Buffer) of
+        0 ->
+            TimerRef1 = erlang:start_timer(IdleTimeout, self(), idle_timeout),
+            {next_state, waiting, NewState#state{timer_ref = TimerRef1}};
+        _ ->
+            handle_data(Buffer, NewState)
+    end;
+detecting(EventType, Event, State) ->
     handle_common(EventType, Event, State).
 
 %% Waiting for data
@@ -147,6 +211,14 @@ terminate(_Reason, _StateName, #state{protocol = h1, protocol_state = ProtocolSt
     livery_h1:close(ProtocolState),
     Transport:close(Socket),
     ok;
+terminate(_Reason, _StateName, #state{protocol = h2, protocol_state = ProtocolState,
+                                       socket = Socket, transport = Transport})
+  when ProtocolState =/= undefined ->
+    %% Send GOAWAY with NO_ERROR before closing
+    GoawayFrame = livery_h2:close(0, ProtocolState),
+    send_data(Socket, Transport, GoawayFrame),
+    Transport:close(Socket),
+    ok;
 terminate(_Reason, _StateName, #state{socket = Socket, transport = Transport}) ->
     Transport:close(Socket),
     ok.
@@ -155,6 +227,67 @@ terminate(_Reason, _StateName, #state{socket = Socket, transport = Transport}) -
 
 handle_common(_EventType, _Event, State) ->
     {keep_state, State}.
+
+%% Protocol detection via connection preface
+detect_protocol(Data, #state{detect_buffer = Buffer, socket = Socket, transport = Transport,
+                              handler = Handler, handler_opts = HandlerOpts,
+                              timer_ref = TimerRef} = State) ->
+    NewBuffer = <<Buffer/binary, Data/binary>>,
+
+    case byte_size(NewBuffer) >= ?H2_PREFACE_SIZE of
+        true ->
+            %% We have enough data to check for H2 preface
+            <<Preface:?H2_PREFACE_SIZE/binary, _Rest/binary>> = NewBuffer,
+            cancel_timer(TimerRef),
+            case Preface =:= ?H2_PREFACE of
+                true ->
+                    %% HTTP/2 connection
+                    ProtocolState = livery_h2:init(#{handler => Handler, handler_opts => HandlerOpts}),
+                    NewState = State#state{
+                        protocol = h2,
+                        protocol_state = ProtocolState,
+                        detect_buffer = <<>>,
+                        timer_ref = undefined
+                    },
+                    %% Process preface and any remaining data through H2
+                    handle_data(NewBuffer, NewState);
+                false ->
+                    %% Not HTTP/2 - assume HTTP/1.1
+                    ProtocolState = livery_h1:init(Handler, HandlerOpts),
+                    NewState = State#state{
+                        protocol = h1,
+                        protocol_state = ProtocolState,
+                        detect_buffer = <<>>,
+                        timer_ref = undefined
+                    },
+                    %% Process all buffered data as HTTP/1.1
+                    handle_data(NewBuffer, NewState)
+            end;
+        false ->
+            %% Need more data - check if first bytes rule out H2
+            case can_be_h2_preface(NewBuffer) of
+                true ->
+                    %% Could still be H2 preface, wait for more data
+                    ok = set_active(Socket, Transport),
+                    {keep_state, State#state{detect_buffer = NewBuffer}};
+                false ->
+                    %% Definitely not H2 - use H1
+                    cancel_timer(TimerRef),
+                    ProtocolState = livery_h1:init(Handler, HandlerOpts),
+                    NewState = State#state{
+                        protocol = h1,
+                        protocol_state = ProtocolState,
+                        detect_buffer = <<>>,
+                        timer_ref = undefined
+                    },
+                    handle_data(NewBuffer, NewState)
+            end
+    end.
+
+%% Check if buffer could still be start of H2 preface
+can_be_h2_preface(Buffer) ->
+    PrefacePrefix = binary:part(?H2_PREFACE, 0, byte_size(Buffer)),
+    Buffer =:= PrefacePrefix.
 
 handle_data(Data, #state{protocol = h1, protocol_state = ProtocolState,
                           socket = Socket, transport = Transport} = State) ->
@@ -205,8 +338,42 @@ handle_data(Data, #state{protocol = h1, protocol_state = ProtocolState,
             send_error_response(error_to_status(Reason), State),
             {stop, {shutdown, Reason}, State#state{protocol_state = NewProtocolState}}
     end;
+
+handle_data(Data, #state{protocol = h2, protocol_state = ProtocolState,
+                          socket = Socket, transport = Transport,
+                          handler = Handler, handler_opts = HandlerOpts,
+                          peer = Peer, idle_timeout = IdleTimeout} = State) ->
+    %% Cancel old timer
+    cancel_timer(State#state.timer_ref),
+
+    case livery_h2:handle_data(Data, ProtocolState) of
+        {ok, Responses, NewProtocolState} ->
+            %% Process all responses and requests
+            case process_h2_responses(Responses, Socket, Transport, Handler,
+                                       HandlerOpts, Peer, NewProtocolState) of
+                {ok, FinalProtocolState} ->
+                    ok = set_active(Socket, Transport),
+                    TimerRef = erlang:start_timer(IdleTimeout, self(), idle_timeout),
+                    {next_state, waiting, State#state{
+                        protocol_state = FinalProtocolState,
+                        timer_ref = TimerRef
+                    }};
+                {error, Reason, FinalProtocolState} ->
+                    %% Send GOAWAY and close
+                    GoawayFrame = livery_h2:close(h2_error_code(Reason), FinalProtocolState),
+                    send_data(Socket, Transport, GoawayFrame),
+                    {stop, {shutdown, Reason}, State#state{protocol_state = FinalProtocolState}}
+            end;
+
+        {error, Reason, NewProtocolState} ->
+            %% Protocol error - send GOAWAY and close
+            GoawayFrame = livery_h2:close(h2_error_code(Reason), NewProtocolState),
+            send_data(Socket, Transport, GoawayFrame),
+            {stop, {shutdown, Reason}, State#state{protocol_state = NewProtocolState}}
+    end;
+
 handle_data(_Data, State) ->
-    %% Non-H1 protocols not implemented in Phase 1
+    %% Unknown protocol
     {keep_state, State}.
 
 get_peername(Socket, gen_tcp) ->
@@ -249,3 +416,119 @@ error_to_status(chunk_too_large) -> 413;
 error_to_status(invalid_chunk_terminator) -> 400;
 error_to_status(body_too_large) -> 413;
 error_to_status(_) -> 500.
+
+%% Send data to socket
+send_data(Socket, gen_tcp, Data) ->
+    gen_tcp:send(Socket, Data);
+send_data(Socket, ssl, Data) ->
+    ssl:send(Socket, Data).
+
+%% Process HTTP/2 responses and requests
+process_h2_responses([], _Socket, _Transport, _Handler, _HandlerOpts, _Peer, State) ->
+    {ok, State};
+process_h2_responses([{send, IoData} | Rest], Socket, Transport, Handler,
+                      HandlerOpts, Peer, State) ->
+    case send_data(Socket, Transport, IoData) of
+        ok ->
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State);
+        {error, Reason} ->
+            {error, Reason, State}
+    end;
+process_h2_responses([{request, StreamId, H2Request} | Rest], Socket, Transport,
+                      Handler, HandlerOpts, Peer, State) ->
+    case handle_h2_request(StreamId, H2Request, Socket, Transport, Handler,
+                            HandlerOpts, Peer, State) of
+        {ok, NewState} ->
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
+        {error, Reason, NewState} ->
+            {error, Reason, NewState}
+    end.
+
+%% Handle an HTTP/2 request
+handle_h2_request(StreamId, H2Request, Socket, Transport, Handler, HandlerOpts, Peer, State) ->
+    %% Convert H2 request to livery_req
+    Req = livery_h2:request_to_livery_req(H2Request, Handler, HandlerOpts, Peer),
+
+    %% Call handler
+    try
+        case Handler:init(Req, HandlerOpts) of
+            {ok, Req1, HandlerState} ->
+                case Handler:handle(Req1, HandlerState) of
+                    {reply, Status, Headers, Body, _NewHandlerState} ->
+                        %% Send response
+                        {ok, ResponseFrames, NewState} =
+                            livery_h2:send_response(StreamId, Status, Headers, Body, State),
+                        case send_data(Socket, Transport, ResponseFrames) of
+                            ok -> {ok, NewState};
+                            {error, Reason} -> {error, Reason, NewState}
+                        end;
+                    {stream, Status, Headers, StreamFun, _NewHandlerState} ->
+                        %% Send streaming response
+                        handle_h2_stream_response(StreamId, Status, Headers, StreamFun,
+                                                   Socket, Transport, State);
+                    Other ->
+                        %% Unexpected handler response
+                        error_logger:warning_msg("Unexpected handler response: ~p~n", [Other]),
+                        send_h2_error_response(StreamId, 500, Socket, Transport, State)
+                end;
+            {error, _Reason} ->
+                send_h2_error_response(StreamId, 500, Socket, Transport, State)
+        end
+    catch
+        Class:Error:Stacktrace ->
+            error_logger:error_msg("Handler error: ~p:~p~n~p~n",
+                                   [Class, Error, Stacktrace]),
+            send_h2_error_response(StreamId, 500, Socket, Transport, State)
+    end.
+
+%% Handle H2 streaming response
+handle_h2_stream_response(StreamId, Status, Headers, StreamFun, Socket, Transport, State) ->
+    %% Send initial headers (no END_STREAM)
+    {ok, HeaderFrames, State1} = livery_h2:send_response(StreamId, Status, Headers, <<>>, State),
+    case send_data(Socket, Transport, HeaderFrames) of
+        ok ->
+            stream_h2_chunks(StreamId, StreamFun, Socket, Transport, State1);
+        {error, Reason} ->
+            {error, Reason, State1}
+    end.
+
+%% Stream chunks for H2
+stream_h2_chunks(StreamId, StreamFun, Socket, Transport, State) ->
+    case StreamFun() of
+        {data, Chunk, NextFun} ->
+            {ok, DataFrame, State1} = livery_h2:send_stream_data(StreamId, Chunk, false, State),
+            case send_data(Socket, Transport, DataFrame) of
+                ok -> stream_h2_chunks(StreamId, NextFun, Socket, Transport, State1);
+                {error, Reason} -> {error, Reason, State1}
+            end;
+        {end_stream, FinalChunk} ->
+            {ok, DataFrame, State1} = livery_h2:send_stream_data(StreamId, FinalChunk, true, State),
+            case send_data(Socket, Transport, DataFrame) of
+                ok -> {ok, State1};
+                {error, Reason} -> {error, Reason, State1}
+            end;
+        done ->
+            {ok, DataFrame, State1} = livery_h2:send_stream_end(StreamId, State),
+            case send_data(Socket, Transport, DataFrame) of
+                ok -> {ok, State1};
+                {error, Reason} -> {error, Reason, State1}
+            end
+    end.
+
+%% Send an error response for H2
+send_h2_error_response(StreamId, Status, Socket, Transport, State) ->
+    Body = livery_resp:status_text(Status),
+    Headers = [{<<"content-type">>, <<"text/plain">>}],
+    {ok, ResponseFrames, NewState} = livery_h2:send_response(StreamId, Status, Headers, Body, State),
+    case send_data(Socket, Transport, ResponseFrames) of
+        ok -> {ok, NewState};
+        {error, Reason} -> {error, Reason, NewState}
+    end.
+
+%% Map error reasons to HTTP/2 error codes
+h2_error_code({protocol_error, _}) -> 1;  %% PROTOCOL_ERROR
+h2_error_code(protocol_error) -> 1;
+h2_error_code({compression_error, _}) -> 9;  %% COMPRESSION_ERROR
+h2_error_code(flow_control_error) -> 3;  %% FLOW_CONTROL_ERROR
+h2_error_code({goaway, _, ErrorCode}) -> ErrorCode;
+h2_error_code(_) -> 0.  %% NO_ERROR

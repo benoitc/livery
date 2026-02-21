@@ -73,9 +73,9 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 -spec handle_info(term(), #state{}) -> {noreply, #state{}} | {stop, term(), #state{}}.
-handle_info({'$gen_accept', Ref, {ok, Socket}}, #state{ref = Ref} = State) ->
+handle_info({'$gen_accept', Ref, {ok, Socket, NegotiatedProto}}, #state{ref = Ref} = State) ->
     %% New connection accepted
-    handle_new_connection(Socket, State),
+    handle_new_connection(Socket, NegotiatedProto, State),
     {noreply, accept_loop(State)};
 
 handle_info({'$gen_accept', Ref, {error, closed}}, #state{ref = Ref} = State) ->
@@ -122,7 +122,9 @@ open_listen_socket(Port, ssl, SslOpts) ->
         {backlog, 1024},
         {packet, raw}
     ] ++ reuseport_opts(),
-    ssl:listen(Port, TcpOpts ++ SslOpts).
+    %% Add ALPN configuration for HTTP/2 and HTTP/1.1 negotiation
+    AlpnOpts = [{alpn_preferred_protocols, [<<"h2">>, <<"http/1.1">>]}],
+    ssl:listen(Port, TcpOpts ++ AlpnOpts ++ SslOpts).
 
 reuseport_opts() ->
     %% SO_REUSEPORT options (Linux and macOS/FreeBSD)
@@ -146,7 +148,8 @@ accept_loop(#state{listen_socket = ListenSocket, transport = gen_tcp} = State) -
             {ok, Socket} ->
                 %% Transfer socket ownership to the gen_server BEFORE exiting
                 ok = gen_tcp:controlling_process(Socket, Self),
-                Self ! {'$gen_accept', Ref, {ok, Socket}};
+                %% TCP connections use undefined - protocol detected via preface
+                Self ! {'$gen_accept', Ref, {ok, Socket, undefined}};
             {error, Reason} ->
                 Self ! {'$gen_accept', Ref, {error, Reason}}
         end
@@ -162,9 +165,15 @@ accept_loop(#state{listen_socket = ListenSocket, transport = ssl} = State) ->
             {ok, TlsSocket} ->
                 case ssl:handshake(TlsSocket, 5000) of
                     {ok, SslSocket} ->
+                        %% Check ALPN negotiated protocol
+                        NegotiatedProto = case ssl:negotiated_protocol(SslSocket) of
+                            {ok, <<"h2">>} -> h2;
+                            {ok, <<"http/1.1">>} -> h1;
+                            {error, protocol_not_negotiated} -> undefined
+                        end,
                         %% Transfer socket ownership to the gen_server BEFORE exiting
                         ok = ssl:controlling_process(SslSocket, Self),
-                        Self ! {'$gen_accept', Ref, {ok, SslSocket}};
+                        Self ! {'$gen_accept', Ref, {ok, SslSocket, NegotiatedProto}};
                     {error, Reason} ->
                         ssl:close(TlsSocket),
                         Self ! {'$gen_accept', Ref, {error, Reason}}
@@ -175,11 +184,11 @@ accept_loop(#state{listen_socket = ListenSocket, transport = ssl} = State) ->
     end),
     State#state{ref = Ref}.
 
-handle_new_connection(Socket, #state{transport = Transport,
-                                      handler = Handler,
-                                      handler_opts = HandlerOpts}) ->
+handle_new_connection(Socket, NegotiatedProto, #state{transport = Transport,
+                                                       handler = Handler,
+                                                       handler_opts = HandlerOpts}) ->
     %% Hand off socket to new connection process
-    case livery_connection:start_link(Socket, Transport, Handler, HandlerOpts) of
+    case livery_connection:start_link(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) of
         {ok, Pid} ->
             %% Transfer socket ownership
             case transfer_socket(Socket, Transport, Pid) of

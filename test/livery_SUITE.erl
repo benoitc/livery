@@ -36,7 +36,10 @@
     chunked_request_body/1,
     chunked_request_multiple_chunks/1,
     streaming_response/1,
-    streaming_response_with_trailers/1
+    streaming_response_with_trailers/1,
+    %% HTTP/2 tests
+    h2_prior_knowledge/1,
+    h2_get_request/1
 ]).
 
 suite() ->
@@ -44,7 +47,8 @@ suite() ->
 
 all() ->
     [
-        {group, http}
+        {group, http},
+        {group, h2}
     ].
 
 groups() ->
@@ -68,6 +72,10 @@ groups() ->
             chunked_request_multiple_chunks,
             streaming_response,
             streaming_response_with_trailers
+        ]},
+        {h2, [sequence], [
+            h2_prior_knowledge,
+            h2_get_request
         ]}
     ].
 
@@ -87,11 +95,22 @@ init_per_group(http, Config) ->
         num_acceptors => 1
     }),
     [{port, Port} | Config];
+init_per_group(h2, Config) ->
+    Port = get_free_port(),
+    {ok, _Pid} = livery:start_listener(test_h2, #{
+        port => Port,
+        handler => test_handler,
+        num_acceptors => 1
+    }),
+    [{h2_port, Port} | Config];
 init_per_group(_, Config) ->
     Config.
 
 end_per_group(http, _Config) ->
     livery:stop_listener(test_http),
+    ok;
+end_per_group(h2, _Config) ->
+    livery:stop_listener(test_h2),
     ok;
 end_per_group(_, _Config) ->
     ok.
@@ -338,7 +357,85 @@ streaming_response_with_trailers(Config) ->
     %% Should have trailer
     ?assertMatch({match, _}, re:run(Response, <<"x-checksum: abc123">>)).
 
+%% HTTP/2 tests
+
+h2_prior_knowledge(Config) ->
+    Port = ?config(h2_port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    %% Send HTTP/2 connection preface
+    Preface = <<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n">>,
+    %% Send empty SETTINGS frame
+    SettingsFrame = <<0:24, 4:8, 0:8, 0:1, 0:31>>,
+    ok = gen_tcp:send(Socket, [Preface, SettingsFrame]),
+    %% Should receive server SETTINGS
+    {ok, Response} = gen_tcp:recv(Socket, 0, 5000),
+    gen_tcp:close(Socket),
+    %% Verify we received a SETTINGS frame (type 0x04)
+    <<_Length:24, Type:8, _Rest/binary>> = Response,
+    ?assertEqual(4, Type).  %% SETTINGS frame type
+
+h2_get_request(Config) ->
+    Port = ?config(h2_port, Config),
+    {ok, Socket} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}]),
+    %% Send HTTP/2 connection preface
+    Preface = <<"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n">>,
+    %% Send empty SETTINGS frame
+    SettingsFrame = <<0:24, 4:8, 0:8, 0:1, 0:31>>,
+    ok = gen_tcp:send(Socket, [Preface, SettingsFrame]),
+    %% Receive and acknowledge server SETTINGS
+    {ok, _ServerSettings} = gen_tcp:recv(Socket, 0, 5000),
+    %% Send SETTINGS ACK
+    SettingsAck = <<0:24, 4:8, 1:8, 0:1, 0:31>>,
+    ok = gen_tcp:send(Socket, SettingsAck),
+    %% Send HEADERS frame for GET /
+    %% Using HPACK literal header encoding
+    %% :method: GET, :path: /, :scheme: http, :authority: localhost
+    HeaderBlock = <<
+        16#82,  %% :method: GET (indexed)
+        16#84,  %% :path: / (indexed)
+        16#86,  %% :scheme: http (indexed)
+        16#41, 9, "localhost"  %% :authority: localhost (literal)
+    >>,
+    HeaderLen = byte_size(HeaderBlock),
+    %% HEADERS frame: length, type=1, flags=5 (END_HEADERS | END_STREAM), stream_id=1
+    HeadersFrame = <<HeaderLen:24, 1:8, 5:8, 0:1, 1:31, HeaderBlock/binary>>,
+    ok = gen_tcp:send(Socket, HeadersFrame),
+    %% Receive response (may include SETTINGS ACK + HEADERS + DATA)
+    Response = recv_h2_frames(Socket, <<>>, 5000),
+    gen_tcp:close(Socket),
+    %% Verify we received a HEADERS frame (type 0x01) with status 200
+    ?assert(has_h2_headers_frame(Response)).
+
 %% Helpers
+
+recv_h2_frames(Socket, Acc, Timeout) ->
+    case gen_tcp:recv(Socket, 0, Timeout) of
+        {ok, Data} ->
+            NewAcc = <<Acc/binary, Data/binary>>,
+            %% Check if we have enough data (at least 9 bytes for frame header + some payload)
+            case byte_size(NewAcc) >= 20 of
+                true -> NewAcc;
+                false -> recv_h2_frames(Socket, NewAcc, Timeout)
+            end;
+        {error, _} ->
+            Acc
+    end.
+
+has_h2_headers_frame(Data) ->
+    %% Look for a HEADERS frame (type 1) in the data
+    has_h2_headers_frame(Data, 0).
+
+has_h2_headers_frame(<<>>, _) -> false;
+has_h2_headers_frame(Data, Offset) when Offset >= byte_size(Data) - 9 -> false;
+has_h2_headers_frame(Data, Offset) ->
+    <<_:Offset/binary, Length:24, Type:8, _Flags:8, _:1, _StreamId:31, _/binary>> = Data,
+    case Type of
+        1 -> true;  %% HEADERS frame
+        _ ->
+            %% Skip to next frame
+            NextOffset = Offset + 9 + Length,
+            has_h2_headers_frame(Data, NextOffset)
+    end.
 
 get_free_port() ->
     {ok, Socket} = gen_tcp:listen(0, []),

@@ -14,6 +14,7 @@
     send_response/5,
     send_stream_data/4,
     send_stream_end/2,
+    send_trailers/3,
     close/2,
     request_to_livery_req/4
 ]).
@@ -50,7 +51,9 @@
     window_size :: integer(),
     request :: undefined | #h2_request{},
     header_block = <<>> :: binary(),  %% For CONTINUATION
-    end_headers = false :: boolean()
+    end_headers = false :: boolean(),
+    send_buffer = <<>> :: binary(),   %% Buffered data waiting for flow control
+    send_end_stream = false :: boolean()  %% END_STREAM pending for buffered data
 }).
 
 -record(h2_state, {
@@ -66,6 +69,7 @@
     %% Flow control
     conn_window_out :: integer(),  %% Outbound (to peer)
     conn_window_in :: integer(),   %% Inbound (from peer)
+    conn_blocked_streams = [] :: [non_neg_integer()],  %% Streams blocked on connection window
 
     %% Streams
     streams = #{} :: #{non_neg_integer() => #stream{}},
@@ -178,7 +182,9 @@ handle_frame({window_update, 0, Increment}, #h2_state{conn_window_out = Window} 
         NewWindow > 2147483647 ->
             {error, flow_control_error, State};
         true ->
-            {ok, [], State#h2_state{conn_window_out = NewWindow}}
+            %% Drain any blocked streams
+            State1 = State#h2_state{conn_window_out = NewWindow},
+            drain_blocked_streams(State1)
     end;
 
 handle_frame({window_update, StreamId, Increment}, State) ->
@@ -192,7 +198,9 @@ handle_frame({window_update, StreamId, Increment}, State) ->
                     {ok, [{send, RstFrame}], remove_stream(StreamId, State)};
                 true ->
                     NewStream = Stream#stream{window_size = NewWindow},
-                    {ok, [], update_stream(NewStream, State)}
+                    State1 = update_stream(NewStream, State),
+                    %% Try to drain stream's send buffer
+                    drain_stream_buffer(StreamId, State1)
             end;
         error ->
             %% Ignore window update for unknown stream
@@ -270,8 +278,12 @@ handle_frame({push_promise, _, _, _, _}, State) ->
     %% Servers don't receive PUSH_PROMISE
     {error, protocol_error, State};
 
+handle_frame({unknown, _StreamId, _Payload}, State) ->
+    %% Unknown frame types MUST be ignored per RFC 7540 Section 4.1
+    {ok, [], State};
+
 handle_frame(_Frame, State) ->
-    %% Unknown frame types are ignored
+    %% Catch-all for any other frames
     {ok, [], State}.
 
 %% Handle HEADERS frame
@@ -289,69 +301,101 @@ handle_headers(StreamId, HeaderBlock, EndStream, EndHeaders, _Priority, State) -
         false ->
             {error, protocol_error, State};
         true ->
-            %% Create new stream
-            InitialWindow = maps:get(initial_window_size, State#h2_state.remote_settings),
-            Stream = #stream{
-                id = StreamId,
-                state = case EndStream of true -> half_closed_remote; false -> open end,
-                window_size = InitialWindow,
-                header_block = HeaderBlock,
-                end_headers = EndHeaders
-            },
-
-            NewState = State#h2_state{max_stream_id = max(StreamId, State#h2_state.max_stream_id)},
-            State1 = update_stream(Stream, NewState),
-
-            case EndHeaders of
+            %% Check max_concurrent_streams limit
+            MaxStreams = maps:get(max_concurrent_streams, State#h2_state.local_settings, ?DEFAULT_MAX_CONCURRENT_STREAMS),
+            ActiveCount = count_active_streams(State#h2_state.streams),
+            case ActiveCount >= MaxStreams of
                 true ->
-                    finalize_headers(Stream, State1);
+                    %% Refuse stream - too many concurrent streams
+                    RstFrame = livery_h2_frame:encode_rst_stream(StreamId, 7), %% REFUSED_STREAM
+                    {ok, [{send, RstFrame}], State};
                 false ->
-                    {ok, [], State1}
+                    %% Create new stream
+                    InitialWindow = maps:get(initial_window_size, State#h2_state.remote_settings),
+                    Stream = #stream{
+                        id = StreamId,
+                        state = case EndStream of true -> half_closed_remote; false -> open end,
+                        window_size = InitialWindow,
+                        header_block = HeaderBlock,
+                        end_headers = EndHeaders
+                    },
+
+                    NewState = State#h2_state{max_stream_id = max(StreamId, State#h2_state.max_stream_id)},
+                    State1 = update_stream(Stream, NewState),
+
+                    case EndHeaders of
+                        true ->
+                            finalize_headers(Stream, State1);
+                        false ->
+                            {ok, [], State1}
+                    end
             end
     end.
+
+%% Count active (non-closed) streams
+count_active_streams(Streams) ->
+    maps:fold(fun(_StreamId, #stream{state = StreamState}, Acc) ->
+        case StreamState of
+            closed -> Acc;
+            _ -> Acc + 1
+        end
+    end, 0, Streams).
 
 finalize_headers(#stream{id = StreamId, header_block = HeaderBlock, state = StreamState} = Stream, State) ->
     case livery_hpack:decode(HeaderBlock, State#h2_state.decoder) of
         {ok, Headers, Decoder1} ->
-            %% Build request
-            Method = proplists:get_value(<<":method">>, Headers, <<"GET">>),
-            Path = proplists:get_value(<<":path">>, Headers, <<"/">>),
-            Scheme = proplists:get_value(<<":scheme">>, Headers, <<"https">>),
-            Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
+            %% Check max_header_list_size per RFC 7540 Section 6.5.2
+            MaxHeaderListSize = maps:get(max_header_list_size, State#h2_state.local_settings, 8192),
+            HeaderListSize = lists:foldl(fun({N, V}, Acc) ->
+                Acc + byte_size(N) + byte_size(V) + 32
+            end, 0, Headers),
 
-            %% Split path and query string
-            {PathOnly, Qs} = case binary:split(Path, <<"?">>) of
-                [P] -> {P, <<>>};
-                [P, Q] -> {P, Q}
-            end,
+            case HeaderListSize > MaxHeaderListSize of
+                true ->
+                    %% Header list too large - respond with 431 Request Header Fields Too Large
+                    %% Return http_error so connection handler can send proper response
+                    {ok, [{http_error, StreamId, 431}], State#h2_state{decoder = Decoder1}};
+                false ->
+                    %% Build request
+                    Method = proplists:get_value(<<":method">>, Headers, <<"GET">>),
+                    Path = proplists:get_value(<<":path">>, Headers, <<"/">>),
+                    Scheme = proplists:get_value(<<":scheme">>, Headers, <<"https">>),
+                    Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
 
-            %% Filter out pseudo-headers
-            RegularHeaders = [{N, V} || {N, V} <- Headers, binary:first(N) =/= $:],
+                    %% Split path and query string
+                    {PathOnly, Qs} = case binary:split(Path, <<"?">>) of
+                        [P] -> {P, <<>>};
+                        [P, Q] -> {P, Q}
+                    end,
 
-            Request = #h2_request{
-                method = Method,
-                path = PathOnly,
-                qs = Qs,
-                scheme = Scheme,
-                authority = Authority,
-                headers = RegularHeaders,
-                body = undefined
-            },
+                    %% Filter out pseudo-headers
+                    RegularHeaders = [{N, V} || {N, V} <- Headers, binary:first(N) =/= $:],
 
-            NewStream = Stream#stream{
-                request = Request,
-                header_block = <<>>,
-                end_headers = true
-            },
-            State1 = State#h2_state{decoder = Decoder1},
-            State2 = update_stream(NewStream, State1),
+                    Request = #h2_request{
+                        method = Method,
+                        path = PathOnly,
+                        qs = Qs,
+                        scheme = Scheme,
+                        authority = Authority,
+                        headers = RegularHeaders,
+                        body = undefined
+                    },
 
-            %% If request is complete (no body), dispatch immediately
-            case StreamState of
-                half_closed_remote ->
-                    {ok, [{request, StreamId, Request}], State2};
-                open ->
-                    {ok, [], State2}
+                    NewStream = Stream#stream{
+                        request = Request,
+                        header_block = <<>>,
+                        end_headers = true
+                    },
+                    State1 = State#h2_state{decoder = Decoder1},
+                    State2 = update_stream(NewStream, State1),
+
+                    %% If request is complete (no body), dispatch immediately
+                    case StreamState of
+                        half_closed_remote ->
+                            {ok, [{request, StreamId, Request}], State2};
+                        open ->
+                            {ok, [], State2}
+                    end
             end;
         {error, Reason} ->
             {error, {compression_error, Reason}, State}
@@ -409,6 +453,106 @@ maybe_send_window_updates(StreamId, DataSize, _State) ->
     StreamUpdate = livery_h2_frame:encode_window_update(StreamId, DataSize),
     [{send, ConnUpdate}, {send, StreamUpdate}].
 
+%% @doc Drain blocked streams after connection window update.
+drain_blocked_streams(#h2_state{conn_blocked_streams = []} = State) ->
+    {ok, [], State};
+drain_blocked_streams(#h2_state{conn_blocked_streams = BlockedStreams} = State) ->
+    drain_blocked_streams(BlockedStreams, [], State, []).
+
+drain_blocked_streams([], StillBlocked, State, FrameAcc) ->
+    NewState = State#h2_state{conn_blocked_streams = lists:reverse(StillBlocked)},
+    {ok, [{send, F} || F <- lists:reverse(FrameAcc)], NewState};
+drain_blocked_streams([StreamId | Rest], StillBlocked, State, FrameAcc) ->
+    case drain_stream_buffer_internal(StreamId, State) of
+        {ok, Frames, NewState, still_blocked} ->
+            drain_blocked_streams(Rest, [StreamId | StillBlocked], NewState, Frames ++ FrameAcc);
+        {ok, Frames, NewState, drained} ->
+            drain_blocked_streams(Rest, StillBlocked, NewState, Frames ++ FrameAcc)
+    end.
+
+%% @doc Drain a stream's send buffer after window update.
+drain_stream_buffer(StreamId, State) ->
+    case drain_stream_buffer_internal(StreamId, State) of
+        {ok, Frames, NewState, _} ->
+            {ok, [{send, F} || F <- Frames], NewState}
+    end.
+
+%% @doc Internal helper to drain stream buffer.
+%% Returns {ok, Frames, NewState, still_blocked | drained}
+drain_stream_buffer_internal(StreamId, State) ->
+    case get_stream(StreamId, State) of
+        {ok, #stream{send_buffer = <<>>}} ->
+            %% Nothing to drain
+            {ok, [], State, drained};
+        {ok, #stream{send_buffer = Buffer, send_end_stream = EndStream} = Stream} ->
+            %% Try to send buffered data
+            MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+            ConnWindow = State#h2_state.conn_window_out,
+            StreamWindow = Stream#stream.window_size,
+
+            %% Calculate how much we can send
+            AvailableWindow = min(ConnWindow, StreamWindow),
+            BufferSize = byte_size(Buffer),
+
+            case AvailableWindow of
+                0 ->
+                    %% Still blocked
+                    {ok, [], State, still_blocked};
+                _ when AvailableWindow >= BufferSize ->
+                    %% Can send entire buffer
+                    Frames = split_data_frames(StreamId, Buffer, MaxFrameSize, EndStream),
+                    NewStream = Stream#stream{
+                        send_buffer = <<>>,
+                        send_end_stream = false
+                    },
+                    NewState = case EndStream of
+                        true ->
+                            State#h2_state{
+                                conn_window_out = ConnWindow - BufferSize,
+                                streams = maps:remove(StreamId, State#h2_state.streams)
+                            };
+                        false ->
+                            update_stream(NewStream#stream{window_size = StreamWindow - BufferSize},
+                                         State#h2_state{conn_window_out = ConnWindow - BufferSize})
+                    end,
+                    {ok, Frames, NewState, drained};
+                _ ->
+                    %% Partial send
+                    <<ToSend:AvailableWindow/binary, Remaining/binary>> = Buffer,
+                    Frames = split_data_frames(StreamId, ToSend, MaxFrameSize, false),
+                    NewStream = Stream#stream{
+                        send_buffer = Remaining,
+                        window_size = StreamWindow - AvailableWindow
+                    },
+                    NewState = update_stream(NewStream,
+                                            State#h2_state{conn_window_out = ConnWindow - AvailableWindow}),
+                    {ok, Frames, NewState, still_blocked}
+            end;
+        error ->
+            {ok, [], State, drained}
+    end.
+
+%% @doc Split data into frames respecting max_frame_size.
+%% Returns list of encoded DATA frames.
+-spec split_data_frames(non_neg_integer(), binary(), non_neg_integer(), boolean()) -> [iodata()].
+split_data_frames(StreamId, Data, MaxSize, EndStream) ->
+    split_data_frames(StreamId, Data, MaxSize, EndStream, []).
+
+split_data_frames(_StreamId, <<>>, _MaxSize, true, Acc) ->
+    %% No data left and we need END_STREAM - send empty DATA frame
+    lists:reverse(Acc);
+split_data_frames(_StreamId, <<>>, _MaxSize, false, Acc) ->
+    lists:reverse(Acc);
+split_data_frames(StreamId, Data, MaxSize, EndStream, Acc) when byte_size(Data) =< MaxSize ->
+    %% Last chunk - set END_STREAM if requested
+    Frame = livery_h2_frame:encode_data(StreamId, Data, EndStream),
+    lists:reverse([Frame | Acc]);
+split_data_frames(StreamId, Data, MaxSize, EndStream, Acc) ->
+    %% Split into MaxSize chunks
+    <<Chunk:MaxSize/binary, Rest/binary>> = Data,
+    Frame = livery_h2_frame:encode_data(StreamId, Chunk, false),
+    split_data_frames(StreamId, Rest, MaxSize, EndStream, [Frame | Acc]).
+
 %% @doc Send a response on a stream.
 -spec send_response(non_neg_integer(), non_neg_integer(), [{binary(), binary()}], binary(), state()) ->
     {ok, iodata(), state()}.
@@ -421,6 +565,9 @@ send_response(StreamId, Status, Headers, Body, State) ->
     {HeaderBlock, Encoder1} = livery_hpack:encode(AllHeaders, State#h2_state.encoder),
     HeaderBlockBin = iolist_to_binary(HeaderBlock),
 
+    %% Get peer's max_frame_size
+    MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+
     EndStream = byte_size(Body) =:= 0,
     HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, EndStream, true),
 
@@ -428,8 +575,8 @@ send_response(StreamId, Status, Headers, Body, State) ->
         true ->
             [HeadersFrame];
         false ->
-            DataFrame = livery_h2_frame:encode_data(StreamId, Body, true),
-            [HeadersFrame, DataFrame]
+            DataFrames = split_data_frames(StreamId, Body, MaxFrameSize, true),
+            [HeadersFrame | DataFrames]
     end,
 
     %% Update stream state
@@ -443,23 +590,96 @@ send_response(StreamId, Status, Headers, Body, State) ->
     {ok, Frames, NewState}.
 
 %% @doc Send data on a stream (for streaming responses).
+%% Respects flow control windows and buffers excess data.
 -spec send_stream_data(non_neg_integer(), binary(), boolean(), state()) ->
-    {ok, iodata(), state()}.
+    {ok, iodata(), state()} | {buffered, non_neg_integer(), state()}.
 send_stream_data(StreamId, Data, EndStream, State) ->
-    DataFrame = livery_h2_frame:encode_data(StreamId, Data, EndStream),
+    case get_stream(StreamId, State) of
+        {ok, Stream} ->
+            send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State);
+        error ->
+            %% Stream not found - create minimal state for sending
+            InitialWindow = maps:get(initial_window_size, State#h2_state.remote_settings),
+            Stream = #stream{id = StreamId, state = open, window_size = InitialWindow},
+            send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State)
+    end.
 
-    NewState = case EndStream of
-        true -> remove_stream(StreamId, State);
-        false -> State
-    end,
+send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State) ->
+    MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+    ConnWindow = State#h2_state.conn_window_out,
+    StreamWindow = Stream#stream.window_size,
+    DataSize = byte_size(Data),
 
-    {ok, [DataFrame], NewState}.
+    %% Calculate available window (minimum of connection and stream windows)
+    AvailableWindow = max(0, min(ConnWindow, StreamWindow)),
+
+    case AvailableWindow of
+        0 ->
+            %% No window available - buffer everything
+            NewStream = Stream#stream{
+                send_buffer = <<(Stream#stream.send_buffer)/binary, Data/binary>>,
+                send_end_stream = EndStream
+            },
+            BlockedStreams = case lists:member(StreamId, State#h2_state.conn_blocked_streams) of
+                true -> State#h2_state.conn_blocked_streams;
+                false -> [StreamId | State#h2_state.conn_blocked_streams]
+            end,
+            NewState = update_stream(NewStream, State#h2_state{conn_blocked_streams = BlockedStreams}),
+            {buffered, DataSize, NewState};
+        _ when AvailableWindow >= DataSize ->
+            %% Can send all data
+            DataFrames = split_data_frames(StreamId, Data, MaxFrameSize, EndStream),
+            NewStream = Stream#stream{window_size = StreamWindow - DataSize},
+            NewState = case EndStream of
+                true ->
+                    State#h2_state{
+                        conn_window_out = ConnWindow - DataSize,
+                        streams = maps:remove(StreamId, State#h2_state.streams)
+                    };
+                false ->
+                    update_stream(NewStream, State#h2_state{conn_window_out = ConnWindow - DataSize})
+            end,
+            {ok, DataFrames, NewState};
+        _ ->
+            %% Partial send - send what we can, buffer the rest
+            <<ToSend:AvailableWindow/binary, ToBuffer/binary>> = Data,
+            DataFrames = split_data_frames(StreamId, ToSend, MaxFrameSize, false),
+            NewStream = Stream#stream{
+                window_size = StreamWindow - AvailableWindow,
+                send_buffer = <<(Stream#stream.send_buffer)/binary, ToBuffer/binary>>,
+                send_end_stream = EndStream
+            },
+            BlockedStreams = case lists:member(StreamId, State#h2_state.conn_blocked_streams) of
+                true -> State#h2_state.conn_blocked_streams;
+                false -> [StreamId | State#h2_state.conn_blocked_streams]
+            end,
+            NewState = update_stream(NewStream,
+                                    State#h2_state{conn_window_out = ConnWindow - AvailableWindow,
+                                                   conn_blocked_streams = BlockedStreams}),
+            {ok, DataFrames, NewState}
+    end.
 
 %% @doc Send stream end (empty DATA frame with END_STREAM).
 -spec send_stream_end(non_neg_integer(), state()) -> {ok, iodata(), state()}.
 send_stream_end(StreamId, State) ->
     DataFrame = livery_h2_frame:encode_data(StreamId, <<>>, true),
     {ok, [DataFrame], remove_stream(StreamId, State)}.
+
+%% @doc Send trailers (HEADERS frame with END_STREAM flag).
+%% Trailers are used to send headers after the response body.
+-spec send_trailers(non_neg_integer(), [{binary(), binary()}], state()) ->
+    {ok, iodata(), state()}.
+send_trailers(StreamId, Trailers, State) ->
+    %% Encode trailers with HPACK
+    {HeaderBlock, Encoder1} = livery_hpack:encode(Trailers, State#h2_state.encoder),
+    HeaderBlockBin = iolist_to_binary(HeaderBlock),
+
+    %% HEADERS frame with END_STREAM and END_HEADERS flags
+    TrailersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, true, true),
+
+    %% Update stream state and remove stream (END_STREAM was sent)
+    NewState = State#h2_state{encoder = Encoder1},
+    {ok, [TrailersFrame], remove_stream(StreamId, NewState)}.
 
 %% @doc Close the connection with GOAWAY.
 -spec close(non_neg_integer(), state()) -> iodata().

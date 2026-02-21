@@ -442,6 +442,15 @@ process_h2_responses([{request, StreamId, H2Request} | Rest], Socket, Transport,
             process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
         {error, Reason, NewState} ->
             {error, Reason, NewState}
+    end;
+process_h2_responses([{http_error, StreamId, Status} | Rest], Socket, Transport,
+                      Handler, HandlerOpts, Peer, State) ->
+    %% HTTP-level error (e.g., 431 Request Header Fields Too Large)
+    case send_h2_error_response(StreamId, Status, Socket, Transport, State) of
+        {ok, NewState} ->
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
+        {error, Reason, NewState} ->
+            {error, Reason, NewState}
     end.
 
 %% Handle an HTTP/2 request
@@ -496,14 +505,32 @@ handle_h2_stream_response(StreamId, Status, Headers, StreamFun, Socket, Transpor
 stream_h2_chunks(StreamId, StreamFun, Socket, Transport, State) ->
     case StreamFun() of
         {data, Chunk, NextFun} ->
-            {ok, DataFrame, State1} = livery_h2:send_stream_data(StreamId, Chunk, false, State),
-            case send_data(Socket, Transport, DataFrame) of
-                ok -> stream_h2_chunks(StreamId, NextFun, Socket, Transport, State1);
-                {error, Reason} -> {error, Reason, State1}
+            case livery_h2:send_stream_data(StreamId, Chunk, false, State) of
+                {ok, DataFrame, State1} ->
+                    case send_data(Socket, Transport, DataFrame) of
+                        ok -> stream_h2_chunks(StreamId, NextFun, Socket, Transport, State1);
+                        {error, Reason} -> {error, Reason, State1}
+                    end;
+                {buffered, _BytesPending, State1} ->
+                    %% Data buffered due to flow control, continue with next chunk
+                    %% Buffered data will be sent when WINDOW_UPDATE arrives
+                    stream_h2_chunks(StreamId, NextFun, Socket, Transport, State1)
             end;
         {end_stream, FinalChunk} ->
-            {ok, DataFrame, State1} = livery_h2:send_stream_data(StreamId, FinalChunk, true, State),
-            case send_data(Socket, Transport, DataFrame) of
+            case livery_h2:send_stream_data(StreamId, FinalChunk, true, State) of
+                {ok, DataFrame, State1} ->
+                    case send_data(Socket, Transport, DataFrame) of
+                        ok -> {ok, State1};
+                        {error, Reason} -> {error, Reason, State1}
+                    end;
+                {buffered, _BytesPending, State1} ->
+                    %% Data buffered, END_STREAM will be sent when buffer drains
+                    {ok, State1}
+            end;
+        {trailers, TrailerHeaders} ->
+            %% Send trailers (HEADERS frame with END_STREAM)
+            {ok, TrailerFrames, State1} = livery_h2:send_trailers(StreamId, TrailerHeaders, State),
+            case send_data(Socket, Transport, TrailerFrames) of
                 ok -> {ok, State1};
                 {error, Reason} -> {error, Reason, State1}
             end;

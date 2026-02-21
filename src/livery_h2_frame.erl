@@ -99,7 +99,8 @@
     {ping_ack, binary()} |
     {goaway, stream_id(), error_code(), binary()} |
     {window_update, stream_id(), non_neg_integer()} |
-    {continuation, stream_id(), binary(), boolean()}.
+    {continuation, stream_id(), binary(), boolean()} |
+    {unknown, stream_id(), binary()}.
 
 -type priority() :: {Exclusive :: boolean(), StreamDep :: stream_id(), Weight :: 1..256}.
 
@@ -371,9 +372,9 @@ decode_frame(?FRAME_CONTINUATION, Flags, StreamId, Payload, Rest) ->
     EndHeaders = (Flags band ?FLAG_END_HEADERS) =/= 0,
     {ok, {continuation, StreamId, Payload, EndHeaders}, Rest};
 
-decode_frame(_Type, _Flags, _StreamId, _Payload, _Rest) ->
-    %% Unknown frame type - MUST be ignored per spec
-    {error, unknown_frame_type}.
+decode_frame(_Type, _Flags, StreamId, Payload, Rest) ->
+    %% Unknown frame types MUST be ignored per RFC 7540 Section 4.1
+    {ok, {unknown, StreamId, Payload}, Rest}.
 
 %% Strip padding from payload if PADDED flag is set
 strip_padding(Flags, Payload) when (Flags band ?FLAG_PADDED) =/= 0, byte_size(Payload) > 0 ->

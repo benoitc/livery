@@ -116,12 +116,15 @@ callback_mode() -> handle_event_function.
 
 -spec init({reference(), module(), term()}) -> gen_statem:init_result(atom()).
 init({QuicConn, Handler, HandlerOpts}) ->
+    %% Initialize QPACK with dynamic table support
+    %% Default max size is 4096 bytes per RFC 9204
+    QpackOpts = #{max_dynamic_size => 4096},
     State = #h3_state{
         quic_conn = QuicConn,
         handler = Handler,
         handler_opts = HandlerOpts,
-        qpack_encoder = livery_qpack:init(),
-        qpack_decoder = livery_qpack:init()
+        qpack_encoder = livery_qpack:init(QpackOpts),
+        qpack_decoder = livery_qpack:init(QpackOpts)
     },
     %% Set up HTTP/3 control streams
     State1 = setup_h3_streams(State),
@@ -270,15 +273,27 @@ setup_h3_streams(#h3_state{quic_conn = QuicConn} = State) ->
 %% Internal - Send operations
 %%====================================================================
 
-do_send_headers(StreamId, Headers, Fin, #h3_state{quic_conn = QuicConn, qpack_encoder = Encoder} = State) ->
+do_send_headers(StreamId, Headers, Fin, #h3_state{quic_conn = QuicConn, qpack_encoder = Encoder,
+                                                  qpack_encoder_stream = EncStream} = State) ->
     %% Encode headers using QPACK
     {EncodedHeaders, Encoder1} = livery_qpack:encode(Headers, Encoder),
+
+    %% Send any pending encoder instructions on the encoder stream
+    EncoderInstructions = livery_qpack:get_encoder_instructions(Encoder1),
+    Encoder2 = case byte_size(EncoderInstructions) > 0 andalso EncStream =/= undefined of
+        true ->
+            quic:send_data(QuicConn, EncStream, EncoderInstructions, false),
+            livery_qpack:clear_encoder_instructions(Encoder1);
+        false ->
+            Encoder1
+    end,
+
     %% Wrap in HTTP/3 HEADERS frame
     Frame = livery_h3_frame:encode_headers(EncodedHeaders),
     %% Send on the QUIC stream
     case quic:send_data(QuicConn, StreamId, Frame, Fin) of
         ok ->
-            {ok, State#h3_state{qpack_encoder = Encoder1}};
+            {ok, State#h3_state{qpack_encoder = Encoder2}};
         {error, _} = Error ->
             Error
     end.
@@ -357,17 +372,38 @@ process_uni_stream_by_type(StreamId, control, Data, _Fin, #h3_state{uni_streams 
         settings_received = true
     };
 
-process_uni_stream_by_type(StreamId, qpack_encoder, Data, _Fin, #h3_state{uni_streams = UniStreams} = State) ->
+process_uni_stream_by_type(StreamId, qpack_encoder, Data, _Fin,
+                          #h3_state{uni_streams = UniStreams, qpack_decoder = Decoder} = State) ->
     %% QPACK encoder stream - instructions for dynamic table
-    %% For now, just buffer (we use static table only)
-    NewInfo = #uni_stream_info{type = qpack_encoder, buffer = Data},
-    State#h3_state{uni_streams = maps:put(StreamId, NewInfo, UniStreams)};
+    %% Process instructions to update decoder's dynamic table
+    case livery_qpack:process_encoder_instructions(Data, Decoder) of
+        {ok, NewDecoder} ->
+            NewInfo = #uni_stream_info{type = qpack_encoder, buffer = <<>>},
+            State#h3_state{
+                uni_streams = maps:put(StreamId, NewInfo, UniStreams),
+                qpack_decoder = NewDecoder
+            };
+        {error, _Reason} ->
+            %% Invalid encoder instruction - buffer and continue
+            NewInfo = #uni_stream_info{type = qpack_encoder, buffer = Data},
+            State#h3_state{uni_streams = maps:put(StreamId, NewInfo, UniStreams)}
+    end;
 
-process_uni_stream_by_type(StreamId, qpack_decoder, Data, _Fin, #h3_state{uni_streams = UniStreams} = State) ->
-    %% QPACK decoder stream - acknowledgments
-    %% For now, just buffer
-    NewInfo = #uni_stream_info{type = qpack_decoder, buffer = Data},
-    State#h3_state{uni_streams = maps:put(StreamId, NewInfo, UniStreams)};
+process_uni_stream_by_type(StreamId, qpack_decoder, Data, _Fin,
+                          #h3_state{uni_streams = UniStreams, qpack_encoder = Encoder} = State) ->
+    %% QPACK decoder stream - acknowledgments from peer
+    %% Process instructions to update encoder's known received count
+    case livery_qpack:process_decoder_instructions(Data, Encoder) of
+        {ok, NewEncoder} ->
+            NewInfo = #uni_stream_info{type = qpack_decoder, buffer = <<>>},
+            State#h3_state{
+                uni_streams = maps:put(StreamId, NewInfo, UniStreams),
+                qpack_encoder = NewEncoder
+            };
+        {error, _Reason} ->
+            NewInfo = #uni_stream_info{type = qpack_decoder, buffer = Data},
+            State#h3_state{uni_streams = maps:put(StreamId, NewInfo, UniStreams)}
+    end;
 
 process_uni_stream_by_type(StreamId, _Type, _Data, _Fin, #h3_state{uni_streams = UniStreams} = State) ->
     %% Unknown or push stream - ignore

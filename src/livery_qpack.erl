@@ -12,7 +12,21 @@
     decode/1,
     decode/2,
     init/0,
-    init/1
+    init/1,
+    %% Dynamic table management
+    set_dynamic_capacity/2,
+    get_dynamic_capacity/1,
+    get_insert_count/1,
+    %% Encoder stream processing (instructions FROM encoder)
+    process_encoder_instructions/2,
+    %% Decoder stream processing (instructions FROM decoder)
+    process_decoder_instructions/2,
+    %% Generate instructions for encoder stream
+    get_encoder_instructions/1,
+    clear_encoder_instructions/1,
+    %% Generate acknowledgment for decoder stream
+    encode_section_ack/1,
+    encode_insert_count_increment/1
 ]).
 
 %% Entry overhead per RFC 9204 Section 3.2.1
@@ -20,14 +34,23 @@
 
 %% State record for stateful encoding/decoding
 -record(qpack_state, {
-    %% Dynamic table (optional, disabled by default)
+    %% Dynamic table configuration
     use_dynamic = false :: boolean(),
+    %% Dynamic table - maps for O(1) lookup
     dyn_field_index = #{} :: #{header() => pos_integer()},
     dyn_name_index = #{} :: #{binary() => pos_integer()},
-    dyn_entries = [] :: [{pos_integer(), header()}],
+    %% Dynamic table entries: [{AbsoluteIndex, {Name, Value}, Size}]
+    dyn_entries = [] :: [{pos_integer(), header(), non_neg_integer()}],
     dyn_size = 0 :: non_neg_integer(),
     dyn_max_size = 0 :: non_neg_integer(),
-    insert_count = 0 :: non_neg_integer()
+    %% Insert count (absolute index for next entry)
+    insert_count = 0 :: non_neg_integer(),
+    %% Known received count - decoder has acked up to this
+    known_received_count = 0 :: non_neg_integer(),
+    %% Pending encoder instructions to send
+    encoder_instructions = [] :: [binary()],
+    %% Required insert count for last encoded block
+    last_ric = 0 :: non_neg_integer()
 }).
 
 -opaque state() :: #qpack_state{}.
@@ -316,11 +339,32 @@ encode(Headers) ->
 %% @doc Encode headers using QPACK with state.
 -spec encode([header()], state()) -> {binary(), state()}.
 encode(Headers, State) ->
-    %% Required Insert Count = 0 (no dynamic table refs from encoder)
-    %% S bit = 0 (no sign), Delta Base = 0
-    Prefix = <<0, 0>>,
-    {EncodedHeaders, NewState} = encode_headers(Headers, State, <<>>),
-    {<<Prefix/binary, EncodedHeaders/binary>>, NewState}.
+    %% First pass: encode headers and track max dynamic table index referenced
+    {EncodedHeaders, NewState, MaxRefIndex} = encode_headers_tracking(Headers, State, <<>>, -1),
+
+    %% Calculate Required Insert Count (RIC)
+    %% RIC = MaxRefIndex + 1 if any dynamic entry was referenced, else 0
+    RIC = case MaxRefIndex >= 0 of
+        true -> MaxRefIndex + 1;
+        false -> 0
+    end,
+
+    %% Encode prefix: Required Insert Count + Base (Section 4.5.1)
+    %% For simplicity, we use Base = RIC (Delta Base = 0, S = 0)
+    RICEncoded = encode_ric(RIC, State#qpack_state.dyn_max_size),
+    BaseEncoded = 0,  %% S=0, DeltaBase=0 means Base = RIC
+    Prefix = <<RICEncoded, BaseEncoded>>,
+
+    {<<Prefix/binary, EncodedHeaders/binary>>, NewState#qpack_state{last_ric = RIC}}.
+
+%% Encode Required Insert Count per Section 4.5.1.1
+%% ERIC = (RIC mod (2 * MaxEntries)) + 1
+encode_ric(0, _MaxSize) ->
+    0;
+encode_ric(RIC, MaxSize) ->
+    MaxEntries = max(1, MaxSize div 32),  %% Entry overhead is 32
+    ERIC = (RIC rem (2 * MaxEntries)) + 1,
+    ERIC.
 
 %% @doc Decode QPACK-encoded headers (stateless).
 -spec decode(binary()) -> {ok, [header()]} | {error, term()}.
@@ -332,8 +376,8 @@ decode(Data) ->
 -spec decode(binary(), state()) -> {{ok, [header()]} | {error, term()}, state()}.
 decode(Data, State) ->
     try
-        {_, Rest} = decode_prefix(Data),
-        {Headers, NewState} = decode_headers(Rest, State, []),
+        {{RIC, _Base}, Rest} = decode_prefix(Data),
+        {Headers, NewState} = decode_headers(Rest, RIC, State, []),
         {{ok, Headers}, NewState}
     catch
         _:Reason ->
@@ -341,16 +385,262 @@ decode(Data, State) ->
     end.
 
 %%====================================================================
+%% Dynamic Table Management API
+%%====================================================================
+
+%% @doc Set dynamic table capacity.
+%% This generates a Set Dynamic Table Capacity instruction for the encoder stream.
+-spec set_dynamic_capacity(non_neg_integer(), state()) -> state().
+set_dynamic_capacity(Capacity, State) ->
+    %% Generate instruction: 001xxxxx
+    Instruction = encode_prefixed_int(Capacity, 5, 2#001),
+    %% Update state and evict if needed
+    State1 = State#qpack_state{
+        dyn_max_size = Capacity,
+        use_dynamic = Capacity > 0,
+        encoder_instructions = [Instruction | State#qpack_state.encoder_instructions]
+    },
+    evict_to_fit(0, State1).
+
+%% @doc Get dynamic table capacity.
+-spec get_dynamic_capacity(state()) -> non_neg_integer().
+get_dynamic_capacity(#qpack_state{dyn_max_size = MaxSize}) ->
+    MaxSize.
+
+%% @doc Get current insert count.
+-spec get_insert_count(state()) -> non_neg_integer().
+get_insert_count(#qpack_state{insert_count = IC}) ->
+    IC.
+
+%% @doc Get pending encoder instructions.
+%% These should be sent on the encoder stream.
+-spec get_encoder_instructions(state()) -> binary().
+get_encoder_instructions(#qpack_state{encoder_instructions = Instructions}) ->
+    iolist_to_binary(lists:reverse(Instructions)).
+
+%% @doc Clear pending encoder instructions after sending.
+-spec clear_encoder_instructions(state()) -> state().
+clear_encoder_instructions(State) ->
+    State#qpack_state{encoder_instructions = []}.
+
+%% @doc Encode a Section Acknowledgment for the decoder stream.
+%% StreamId should be the stream where headers were decoded.
+-spec encode_section_ack(non_neg_integer()) -> binary().
+encode_section_ack(StreamId) ->
+    %% Section Acknowledgment: 1xxxxxxx
+    encode_prefixed_int(StreamId, 7, 2#1).
+
+%% @doc Encode an Insert Count Increment for the decoder stream.
+-spec encode_insert_count_increment(non_neg_integer()) -> binary().
+encode_insert_count_increment(Increment) ->
+    %% Insert Count Increment: 00xxxxxx
+    encode_prefixed_int(Increment, 6, 2#00).
+
+%%====================================================================
+%% Encoder Stream Processing
+%%====================================================================
+
+%% @doc Process encoder instructions from the peer's encoder stream.
+%% Updates the dynamic table based on received instructions.
+-spec process_encoder_instructions(binary(), state()) -> {ok, state()} | {error, term()}.
+process_encoder_instructions(<<>>, State) ->
+    {ok, State};
+process_encoder_instructions(Data, State) ->
+    case decode_encoder_instruction(Data) of
+        {ok, Instruction, Rest} ->
+            case apply_encoder_instruction(Instruction, State) of
+                {ok, State1} ->
+                    process_encoder_instructions(Rest, State1);
+                {error, _} = Error ->
+                    Error
+            end;
+        incomplete ->
+            %% Need more data - this shouldn't happen in normal use
+            %% as we process complete instructions
+            {ok, State};
+        {error, _} = Error ->
+            Error
+    end.
+
+decode_encoder_instruction(<<2#1:1, S:1, _:6, _/binary>> = Data) ->
+    %% Insert With Name Reference: 1Sxxxxxx
+    decode_insert_with_name_ref(Data, S);
+decode_encoder_instruction(<<2#01:2, H:1, _:5, _/binary>> = Data) ->
+    %% Insert With Literal Name: 01Hxxxxx
+    decode_insert_literal_name(Data, H);
+decode_encoder_instruction(<<2#000:3, _:5, _/binary>> = Data) ->
+    %% Duplicate: 000xxxxx
+    decode_duplicate(Data);
+decode_encoder_instruction(<<2#001:3, _:5, _/binary>> = Data) ->
+    %% Set Dynamic Table Capacity: 001xxxxx
+    decode_set_capacity(Data);
+decode_encoder_instruction(<<>>) ->
+    incomplete;
+decode_encoder_instruction(_) ->
+    {error, invalid_encoder_instruction}.
+
+decode_insert_with_name_ref(Data, Static) ->
+    %% Format: 1Sxxxxxx where S=1 for static, S=0 for dynamic
+    %% First byte has 6-bit index with prefix
+    <<FirstByte, Rest0/binary>> = Data,
+    IndexBits = FirstByte band 16#3F,
+    {Index, Rest1} = case IndexBits < 63 of
+        true -> {IndexBits, Rest0};
+        false -> decode_multi_byte_int(Rest0, IndexBits, 0)
+    end,
+    %% Decode value
+    case decode_string(Rest1) of
+        {Value, Rest2} ->
+            {ok, {insert_name_ref, Static, Index, Value}, Rest2};
+        _ ->
+            incomplete
+    end.
+
+decode_insert_literal_name(Data, H) ->
+    <<_:3, NameLenBits:5, Rest0/binary>> = Data,
+    {NameLen, Rest1} = case NameLenBits < 31 of
+        true -> {NameLenBits, Rest0};
+        false -> decode_multi_byte_int(Rest0, NameLenBits, 0)
+    end,
+    case byte_size(Rest1) >= NameLen of
+        true ->
+            {Name, Rest2} = decode_string_with_huffman(H, NameLen, Rest1),
+            case decode_string(Rest2) of
+                {Value, Rest3} ->
+                    {ok, {insert_literal, Name, Value}, Rest3};
+                _ ->
+                    incomplete
+            end;
+        false ->
+            incomplete
+    end.
+
+decode_duplicate(Data) ->
+    <<_:3, IndexBits:5, Rest0/binary>> = Data,
+    {Index, Rest1} = case IndexBits < 31 of
+        true -> {IndexBits, Rest0};
+        false -> decode_multi_byte_int(Rest0, IndexBits, 0)
+    end,
+    {ok, {duplicate, Index}, Rest1}.
+
+decode_set_capacity(Data) ->
+    <<_:3, CapBits:5, Rest0/binary>> = Data,
+    {Capacity, Rest1} = case CapBits < 31 of
+        true -> {CapBits, Rest0};
+        false -> decode_multi_byte_int(Rest0, CapBits, 0)
+    end,
+    {ok, {set_capacity, Capacity}, Rest1}.
+
+apply_encoder_instruction({insert_name_ref, 1, Index, Value}, State) ->
+    %% Static table reference
+    case get_static_entry(Index) of
+        {Name, _} ->
+            insert_entry(Name, Value, State);
+        _ ->
+            {error, invalid_static_index}
+    end;
+apply_encoder_instruction({insert_name_ref, 0, Index, Value}, State) ->
+    %% Dynamic table reference
+    case get_dynamic_entry_by_relative(Index, State) of
+        {Name, _} ->
+            insert_entry(Name, Value, State);
+        undefined ->
+            {error, invalid_dynamic_index}
+    end;
+apply_encoder_instruction({insert_literal, Name, Value}, State) ->
+    insert_entry(Name, Value, State);
+apply_encoder_instruction({duplicate, Index}, State) ->
+    case get_dynamic_entry_by_relative(Index, State) of
+        {Name, Value} ->
+            insert_entry(Name, Value, State);
+        undefined ->
+            {error, invalid_dynamic_index}
+    end;
+apply_encoder_instruction({set_capacity, Capacity}, State) ->
+    {ok, evict_to_fit(0, State#qpack_state{dyn_max_size = Capacity, use_dynamic = Capacity > 0})}.
+
+%%====================================================================
+%% Decoder Stream Processing
+%%====================================================================
+
+%% @doc Process decoder instructions from the peer's decoder stream.
+%% Updates known_received_count based on acknowledgments.
+-spec process_decoder_instructions(binary(), state()) -> {ok, state()} | {error, term()}.
+process_decoder_instructions(<<>>, State) ->
+    {ok, State};
+process_decoder_instructions(Data, State) ->
+    case decode_decoder_instruction(Data) of
+        {ok, Instruction, Rest} ->
+            State1 = apply_decoder_instruction(Instruction, State),
+            process_decoder_instructions(Rest, State1);
+        incomplete ->
+            {ok, State};
+        {error, _} = Error ->
+            Error
+    end.
+
+decode_decoder_instruction(<<2#1:1, _:7, _/binary>> = Data) ->
+    %% Section Acknowledgment: 1xxxxxxx
+    {StreamId, Rest} = decode_prefixed_int(Data, 7),
+    {ok, {section_ack, StreamId}, Rest};
+decode_decoder_instruction(<<2#01:2, _:6, _/binary>> = Data) ->
+    %% Stream Cancellation: 01xxxxxx
+    {StreamId, Rest} = decode_prefixed_int(Data, 6),
+    {ok, {stream_cancel, StreamId}, Rest};
+decode_decoder_instruction(<<2#00:2, _:6, _/binary>> = Data) ->
+    %% Insert Count Increment: 00xxxxxx
+    {Increment, Rest} = decode_prefixed_int(Data, 6),
+    {ok, {insert_count_increment, Increment}, Rest};
+decode_decoder_instruction(<<>>) ->
+    incomplete;
+decode_decoder_instruction(_) ->
+    {error, invalid_decoder_instruction}.
+
+apply_decoder_instruction({section_ack, _StreamId}, State) ->
+    %% For now, just track that something was acked
+    %% Full implementation would track per-stream RIC
+    State;
+apply_decoder_instruction({stream_cancel, _StreamId}, State) ->
+    %% Stream was cancelled, cleanup any blocked state
+    State;
+apply_decoder_instruction({insert_count_increment, Increment}, State) ->
+    NewKRC = State#qpack_state.known_received_count + Increment,
+    State#qpack_state{known_received_count = NewKRC}.
+
+%%====================================================================
 %% Internal - Encoding
 %%====================================================================
 
-encode_headers([], State, Acc) ->
-    {Acc, State};
-encode_headers([Header | Rest], State, Acc) ->
-    {Encoded, NewState} = encode_header(Header, State),
-    encode_headers(Rest, NewState, <<Acc/binary, Encoded/binary>>).
+%% Encode headers while tracking maximum dynamic table index referenced
+encode_headers_tracking([], State, Acc, MaxRef) ->
+    {Acc, State, MaxRef};
+encode_headers_tracking([Header | Rest], State, Acc, MaxRef) ->
+    {Encoded, NewState, RefIndex} = encode_header_tracking(Header, State),
+    NewMaxRef = case RefIndex of
+        none -> MaxRef;
+        Idx -> max(MaxRef, Idx)
+    end,
+    encode_headers_tracking(Rest, NewState, <<Acc/binary, Encoded/binary>>, NewMaxRef).
 
-encode_header({Name, Value}, State) ->
+%% Encode header with tracking of referenced dynamic index
+encode_header_tracking({Name, Value}, #qpack_state{use_dynamic = true} = State) ->
+    case find_dynamic_match(Name, Value, State) of
+        {exact, AbsIndex} ->
+            RelIndex = State#qpack_state.insert_count - AbsIndex - 1,
+            {encode_indexed_dynamic(RelIndex), State, AbsIndex};
+        {name, AbsIndex} ->
+            RelIndex = State#qpack_state.insert_count - AbsIndex - 1,
+            {encode_literal_with_dynamic_name_ref(RelIndex, Value), State, AbsIndex};
+        none ->
+            {Encoded, NewState} = encode_header_static({Name, Value}, State),
+            {Encoded, NewState, none}
+    end;
+encode_header_tracking({Name, Value}, State) ->
+    {Encoded, NewState} = encode_header_static({Name, Value}, State),
+    {Encoded, NewState, none}.
+
+%% Encode using static table or literal
+encode_header_static({Name, Value}, State) ->
     case find_static_match(Name, Value) of
         {exact, Index} ->
             %% Indexed Field Line (static) - 11xxxxxx
@@ -367,9 +657,19 @@ encode_header({Name, Value}, State) ->
 encode_indexed_static(Index) ->
     encode_prefixed_int(Index, 6, 2#11).
 
+%% Indexed Field Line - 10xxxxxx for dynamic
+encode_indexed_dynamic(RelIndex) ->
+    encode_prefixed_int(RelIndex, 6, 2#10).
+
 %% Literal with name reference - 0101xxxx (N=0, T=1 for static)
 encode_literal_with_name_ref(Index, Value) ->
     NameRef = encode_prefixed_int(Index, 4, 2#0101),
+    ValueEnc = encode_string(Value),
+    <<NameRef/binary, ValueEnc/binary>>.
+
+%% Literal with dynamic name reference - 0100xxxx (N=0, T=0 for dynamic)
+encode_literal_with_dynamic_name_ref(RelIndex, Value) ->
+    NameRef = encode_prefixed_int(RelIndex, 4, 2#0100),
     ValueEnc = encode_string(Value),
     <<NameRef/binary, ValueEnc/binary>>.
 
@@ -409,23 +709,38 @@ encode_multi_byte_int(Value) ->
 %% Internal - Decoding
 %%====================================================================
 
-decode_prefix(<<RIC, Base, Rest/binary>>) ->
+decode_prefix(<<ERIC, Base, Rest/binary>>) ->
+    %% ERIC (Encoded Required Insert Count) per Section 4.5.1.1
+    %% Decoding: if ERIC = 0, RIC = 0
+    %% Otherwise: RIC = ERIC - 1 (for simple synchronized case)
+    RIC = case ERIC of
+        0 -> 0;
+        _ -> ERIC - 1
+    end,
     {{RIC, Base}, Rest};
 decode_prefix(_) ->
     throw(invalid_prefix).
 
-decode_headers(<<>>, State, Acc) ->
+%% Decode headers with Required Insert Count (RIC) and Base from prefix
+decode_headers(<<>>, _RIC, State, Acc) ->
     {lists:reverse(Acc), State};
-decode_headers(<<2#11:2, _:6, _/binary>> = Data, State, Acc) ->
+decode_headers(<<2#11:2, _:6, _/binary>> = Data, RIC, State, Acc) ->
     %% Indexed Field Line (static) - 11xxxxxx
     {Index, Rest} = decode_prefixed_int(Data, 6),
     Header = get_static_entry(Index),
-    decode_headers(Rest, State, [Header | Acc]);
-decode_headers(<<2#10:2, _:6, _/binary>> = Data, State, Acc) ->
+    decode_headers(Rest, RIC, State, [Header | Acc]);
+decode_headers(<<2#10:2, _:6, _/binary>> = Data, RIC, State, Acc) ->
     %% Indexed Field Line (dynamic) - 10xxxxxx
-    {_Index, Rest} = decode_prefixed_int(Data, 6),
-    decode_headers(Rest, State, Acc);
-decode_headers(<<2#01:2, _N:1, T:1, _:4, _/binary>> = Data, State, Acc) ->
+    {RelIndex, Rest} = decode_prefixed_int(Data, 6),
+    %% Convert relative index to absolute using Base (which equals RIC for non-post-base)
+    AbsIndex = RIC - RelIndex - 1,
+    case get_dynamic_entry_by_absolute(AbsIndex, State) of
+        {Name, Value} ->
+            decode_headers(Rest, RIC, State, [{Name, Value} | Acc]);
+        undefined ->
+            throw({invalid_dynamic_index, AbsIndex})
+    end;
+decode_headers(<<2#01:2, _N:1, T:1, _:4, _/binary>> = Data, RIC, State, Acc) ->
     %% Literal Field Line with Name Reference - 01NTxxxx
     FirstByte = hd(binary_to_list(Data)),
     IndexBits = FirstByte band 16#0F,
@@ -437,12 +752,20 @@ decode_headers(<<2#01:2, _N:1, T:1, _:4, _/binary>> = Data, State, Acc) ->
     {Value, Rest2} = decode_string(Rest1),
     case T of
         1 ->
+            %% Static table reference
             {Name, _} = get_static_entry(Index),
-            decode_headers(Rest2, State, [{Name, Value} | Acc]);
+            decode_headers(Rest2, RIC, State, [{Name, Value} | Acc]);
         0 ->
-            decode_headers(Rest2, State, Acc)
+            %% Dynamic table reference
+            AbsIndex = RIC - Index - 1,
+            case get_dynamic_entry_by_absolute(AbsIndex, State) of
+                {Name, _} ->
+                    decode_headers(Rest2, RIC, State, [{Name, Value} | Acc]);
+                undefined ->
+                    throw({invalid_dynamic_index, AbsIndex})
+            end
     end;
-decode_headers(<<2#0010:4, H:1, NameLenPrefix:3, Rest0/binary>>, State, Acc) ->
+decode_headers(<<2#0010:4, H:1, NameLenPrefix:3, Rest0/binary>>, RIC, State, Acc) ->
     %% Literal with literal name - 0010Hxxx
     {NameLen, Rest1} = case NameLenPrefix < 7 of
         true -> {NameLenPrefix, Rest0};
@@ -450,8 +773,8 @@ decode_headers(<<2#0010:4, H:1, NameLenPrefix:3, Rest0/binary>>, State, Acc) ->
     end,
     {Name, Rest2} = decode_string_with_huffman(H, NameLen, Rest1),
     {Value, Rest3} = decode_string(Rest2),
-    decode_headers(Rest3, State, [{Name, Value} | Acc]);
-decode_headers(<<2#0011:4, H:1, NameLenPrefix:3, Rest0/binary>>, State, Acc) ->
+    decode_headers(Rest3, RIC, State, [{Name, Value} | Acc]);
+decode_headers(<<2#0011:4, H:1, NameLenPrefix:3, Rest0/binary>>, RIC, State, Acc) ->
     %% Literal with literal name, N=1 - 0011Hxxx
     {NameLen, Rest1} = case NameLenPrefix < 7 of
         true -> {NameLenPrefix, Rest0};
@@ -459,29 +782,42 @@ decode_headers(<<2#0011:4, H:1, NameLenPrefix:3, Rest0/binary>>, State, Acc) ->
     end,
     {Name, Rest2} = decode_string_with_huffman(H, NameLen, Rest1),
     {Value, Rest3} = decode_string(Rest2),
-    decode_headers(Rest3, State, [{Name, Value} | Acc]);
-decode_headers(<<2#0001:4, _:4, _/binary>> = Data, State, Acc) ->
+    decode_headers(Rest3, RIC, State, [{Name, Value} | Acc]);
+decode_headers(<<2#0001:4, _:4, _/binary>> = Data, RIC, State, Acc) ->
     %% Indexed Header Field with Post-Base Index - 0001xxxx
     FirstByte = hd(binary_to_list(Data)),
     IndexBits = FirstByte band 16#0F,
     <<_, Rest0/binary>> = Data,
-    {_Index, Rest1} = case IndexBits < 15 of
+    {PostBaseIndex, Rest1} = case IndexBits < 15 of
         true -> {IndexBits, Rest0};
         false -> decode_multi_byte_int(Rest0, IndexBits, 0)
     end,
-    decode_headers(Rest1, State, Acc);
-decode_headers(<<2#0000:4, _:4, _/binary>> = Data, State, Acc) ->
+    %% Post-base index: AbsIndex = Base + PostBaseIndex = RIC + PostBaseIndex
+    AbsIndex = RIC + PostBaseIndex,
+    case get_dynamic_entry_by_absolute(AbsIndex, State) of
+        {Name, Value} ->
+            decode_headers(Rest1, RIC, State, [{Name, Value} | Acc]);
+        undefined ->
+            throw({invalid_dynamic_index, AbsIndex})
+    end;
+decode_headers(<<2#0000:4, _N:1, _:3, _/binary>> = Data, RIC, State, Acc) ->
     %% Literal with post-base name reference - 0000Nxxx
     FirstByte = hd(binary_to_list(Data)),
     IndexBits = FirstByte band 16#07,
     <<_, Rest0/binary>> = Data,
-    {_Index, Rest1} = case IndexBits < 7 of
+    {PostBaseIndex, Rest1} = case IndexBits < 7 of
         true -> {IndexBits, Rest0};
         false -> decode_multi_byte_int(Rest0, IndexBits, 0)
     end,
-    {_Value, Rest2} = decode_string(Rest1),
-    decode_headers(Rest2, State, Acc);
-decode_headers(<<Byte, _/binary>>, _State, _Acc) ->
+    {Value, Rest2} = decode_string(Rest1),
+    AbsIndex = RIC + PostBaseIndex,
+    case get_dynamic_entry_by_absolute(AbsIndex, State) of
+        {Name, _} ->
+            decode_headers(Rest2, RIC, State, [{Name, Value} | Acc]);
+        undefined ->
+            throw({invalid_dynamic_index, AbsIndex})
+    end;
+decode_headers(<<Byte, _/binary>>, _RIC, _State, _Acc) ->
     throw({unknown_instruction, Byte}).
 
 decode_prefixed_int(Data, PrefixBits) ->
@@ -607,3 +943,109 @@ get_static_entry(Index) when Index >= 0, Index =< 98 ->
     element(Index + 1, ?STATIC_TABLE);
 get_static_entry(Index) ->
     throw({invalid_static_index, Index}).
+
+%%====================================================================
+%% Internal - Dynamic Table Management
+%%====================================================================
+
+%% @doc Insert an entry into the dynamic table.
+%% Evicts old entries if necessary to make room.
+-spec insert_entry(binary(), binary(), state()) -> {ok, state()}.
+insert_entry(Name, Value, State) ->
+    EntrySize = entry_size(Name, Value),
+    case EntrySize > State#qpack_state.dyn_max_size of
+        true ->
+            %% Entry too large - evict everything but don't insert
+            {ok, State#qpack_state{
+                dyn_entries = [],
+                dyn_field_index = #{},
+                dyn_name_index = #{},
+                dyn_size = 0
+            }};
+        false ->
+            %% Evict entries to make room
+            State1 = evict_to_fit(EntrySize, State),
+            %% Insert new entry
+            AbsIndex = State1#qpack_state.insert_count,
+            Header = {Name, Value},
+            NewEntries = [{AbsIndex, Header, EntrySize} | State1#qpack_state.dyn_entries],
+            NewFieldIndex = maps:put(Header, AbsIndex, State1#qpack_state.dyn_field_index),
+            NewNameIndex = maps:put(Name, AbsIndex, State1#qpack_state.dyn_name_index),
+            {ok, State1#qpack_state{
+                dyn_entries = NewEntries,
+                dyn_field_index = NewFieldIndex,
+                dyn_name_index = NewNameIndex,
+                dyn_size = State1#qpack_state.dyn_size + EntrySize,
+                insert_count = AbsIndex + 1
+            }}
+    end.
+
+%% @doc Calculate size of a dynamic table entry.
+%% Per RFC 9204 Section 3.2.1: size = name_length + value_length + 32
+-spec entry_size(binary(), binary()) -> non_neg_integer().
+entry_size(Name, Value) ->
+    byte_size(Name) + byte_size(Value) + ?ENTRY_OVERHEAD.
+
+%% @doc Evict entries until there's room for an entry of the given size.
+-spec evict_to_fit(non_neg_integer(), state()) -> state().
+evict_to_fit(RequiredSize, #qpack_state{dyn_size = Size, dyn_max_size = MaxSize} = State)
+  when Size + RequiredSize =< MaxSize ->
+    State;
+evict_to_fit(_RequiredSize, #qpack_state{dyn_entries = []} = State) ->
+    %% No entries to evict
+    State;
+evict_to_fit(RequiredSize, #qpack_state{dyn_entries = Entries} = State) ->
+    %% Evict oldest entry (last in list)
+    {Oldest, RestEntries} = lists:split(length(Entries) - 1, Entries),
+    [{AbsIndex, Header, EntrySize}] = RestEntries,
+    {Name, _Value} = Header,
+    NewFieldIndex = maps:remove(Header, State#qpack_state.dyn_field_index),
+    %% Only remove from name index if this was the entry for that name
+    NewNameIndex = case maps:get(Name, State#qpack_state.dyn_name_index, undefined) of
+        AbsIndex -> maps:remove(Name, State#qpack_state.dyn_name_index);
+        _ -> State#qpack_state.dyn_name_index
+    end,
+    State1 = State#qpack_state{
+        dyn_entries = Oldest,
+        dyn_field_index = NewFieldIndex,
+        dyn_name_index = NewNameIndex,
+        dyn_size = State#qpack_state.dyn_size - EntrySize
+    },
+    evict_to_fit(RequiredSize, State1).
+
+%% @doc Get dynamic table entry by relative index.
+%% Relative index 0 is the most recently inserted entry.
+-spec get_dynamic_entry_by_relative(non_neg_integer(), state()) -> header() | undefined.
+get_dynamic_entry_by_relative(RelIndex, #qpack_state{insert_count = IC} = State) ->
+    %% Relative index 0 = most recent = IC - 1
+    AbsIndex = IC - RelIndex - 1,
+    get_dynamic_entry_by_absolute(AbsIndex, State).
+
+%% @doc Get dynamic table entry by absolute index.
+-spec get_dynamic_entry_by_absolute(non_neg_integer(), state()) -> header() | undefined.
+get_dynamic_entry_by_absolute(AbsIndex, #qpack_state{dyn_entries = Entries}) ->
+    case lists:keyfind(AbsIndex, 1, Entries) of
+        {AbsIndex, Header, _Size} -> Header;
+        false -> undefined
+    end.
+
+%% @doc Find a match in the dynamic table.
+%% Returns {exact, AbsIndex}, {name, AbsIndex}, or none.
+-spec find_dynamic_match(binary(), binary(), state()) -> {exact, non_neg_integer()} |
+                                                          {name, non_neg_integer()} |
+                                                          none.
+find_dynamic_match(_Name, _Value, #qpack_state{use_dynamic = false}) ->
+    none;
+find_dynamic_match(Name, Value, #qpack_state{dyn_field_index = FieldIndex, dyn_name_index = NameIndex}) ->
+    Header = {Name, Value},
+    case maps:find(Header, FieldIndex) of
+        {ok, AbsIndex} ->
+            {exact, AbsIndex};
+        error ->
+            case maps:find(Name, NameIndex) of
+                {ok, AbsIndex} ->
+                    {name, AbsIndex};
+                error ->
+                    none
+            end
+    end.

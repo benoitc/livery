@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  rest_api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - ERLANG_COOKIE=rest_api_secret

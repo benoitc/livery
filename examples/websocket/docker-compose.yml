@@ -1,0 +1,8 @@
+version: '3.8'
+services:
+  ws_example:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - ERLANG_COOKIE=ws_example_secret

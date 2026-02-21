@@ -353,53 +353,133 @@ finalize_headers(#stream{id = StreamId, header_block = HeaderBlock, state = Stre
             case HeaderListSize > MaxHeaderListSize of
                 true ->
                     %% Header list too large - respond with 431 Request Header Fields Too Large
-                    %% Return http_error so connection handler can send proper response
                     {ok, [{http_error, StreamId, 431}], State#h2_state{decoder = Decoder1}};
                 false ->
-                    %% Build request
-                    Method = proplists:get_value(<<":method">>, Headers, <<"GET">>),
-                    Path = proplists:get_value(<<":path">>, Headers, <<"/">>),
-                    Scheme = proplists:get_value(<<":scheme">>, Headers, <<"https">>),
-                    Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
+                    %% Validate pseudo-headers per RFC 7540 Section 8.1.2.3
+                    case validate_pseudo_headers(Headers) of
+                        {error, Reason} ->
+                            %% Protocol error - send RST_STREAM
+                            RstFrame = livery_h2_frame:encode_rst_stream(StreamId, 1), %% PROTOCOL_ERROR
+                            error_logger:warning_msg("HTTP/2 pseudo-header error on stream ~p: ~p~n",
+                                                     [StreamId, Reason]),
+                            {ok, [{send, RstFrame}], State#h2_state{decoder = Decoder1}};
+                        {ok, Method, Scheme, Authority, Path} ->
+                            %% Split path and query string
+                            {PathOnly, Qs} = case Path of
+                                undefined -> {<<>>, <<>>};
+                                _ ->
+                                    case binary:split(Path, <<"?">>) of
+                                        [P] -> {P, <<>>};
+                                        [P, Q] -> {P, Q}
+                                    end
+                            end,
 
-                    %% Split path and query string
-                    {PathOnly, Qs} = case binary:split(Path, <<"?">>) of
-                        [P] -> {P, <<>>};
-                        [P, Q] -> {P, Q}
-                    end,
+                            %% Filter out pseudo-headers
+                            RegularHeaders = [{N, V} || {N, V} <- Headers, binary:first(N) =/= $:],
 
-                    %% Filter out pseudo-headers
-                    RegularHeaders = [{N, V} || {N, V} <- Headers, binary:first(N) =/= $:],
+                            Request = #h2_request{
+                                method = Method,
+                                path = PathOnly,
+                                qs = Qs,
+                                scheme = case Scheme of undefined -> <<>>; S -> S end,
+                                authority = case Authority of undefined -> <<>>; A -> A end,
+                                headers = RegularHeaders,
+                                body = undefined
+                            },
 
-                    Request = #h2_request{
-                        method = Method,
-                        path = PathOnly,
-                        qs = Qs,
-                        scheme = Scheme,
-                        authority = Authority,
-                        headers = RegularHeaders,
-                        body = undefined
-                    },
+                            NewStream = Stream#stream{
+                                request = Request,
+                                header_block = <<>>,
+                                end_headers = true
+                            },
+                            State1 = State#h2_state{decoder = Decoder1},
+                            State2 = update_stream(NewStream, State1),
 
-                    NewStream = Stream#stream{
-                        request = Request,
-                        header_block = <<>>,
-                        end_headers = true
-                    },
-                    State1 = State#h2_state{decoder = Decoder1},
-                    State2 = update_stream(NewStream, State1),
-
-                    %% If request is complete (no body), dispatch immediately
-                    case StreamState of
-                        half_closed_remote ->
-                            {ok, [{request, StreamId, Request}], State2};
-                        open ->
-                            {ok, [], State2}
+                            %% If request is complete (no body), dispatch immediately
+                            case StreamState of
+                                half_closed_remote ->
+                                    {ok, [{request, StreamId, Request}], State2};
+                                open ->
+                                    {ok, [], State2}
+                            end
                     end
             end;
         {error, Reason} ->
             {error, {compression_error, Reason}, State}
     end.
+
+%% Validate pseudo-headers per RFC 7540 Section 8.1.2.3
+%% Returns {ok, Method, Scheme, Authority, Path} or {error, Reason}
+validate_pseudo_headers(Headers) ->
+    validate_pseudo_headers(Headers, #{}, false).
+
+validate_pseudo_headers([], Seen, _RegularSeen) ->
+    %% Check required pseudo-headers
+    Method = maps:get(<<":method">>, Seen, undefined),
+    Scheme = maps:get(<<":scheme">>, Seen, undefined),
+    Authority = maps:get(<<":authority">>, Seen, undefined),
+    Path = maps:get(<<":path">>, Seen, undefined),
+
+    case Method of
+        undefined ->
+            {error, missing_method};
+        <<"CONNECT">> ->
+            %% CONNECT requests: only :method and :authority allowed
+            %% :scheme and :path MUST NOT be present
+            case {Scheme, Path} of
+                {undefined, undefined} ->
+                    case Authority of
+                        undefined -> {error, connect_missing_authority};
+                        _ -> {ok, Method, undefined, Authority, undefined}
+                    end;
+                {_, undefined} ->
+                    {error, connect_has_scheme};
+                {undefined, _} ->
+                    {error, connect_has_path};
+                _ ->
+                    {error, connect_has_scheme_and_path}
+            end;
+        _ ->
+            %% Regular requests: :method, :scheme, :path required
+            case {Scheme, Path} of
+                {undefined, _} ->
+                    {error, missing_scheme};
+                {_, undefined} ->
+                    {error, missing_path};
+                _ ->
+                    {ok, Method, Scheme, Authority, Path}
+            end
+    end;
+
+validate_pseudo_headers([{<<$:, _/binary>> = Name, Value} | _Rest], _Seen, true) ->
+    %% Pseudo-header after regular header - protocol error
+    {error, {pseudo_header_after_regular, Name, Value}};
+
+validate_pseudo_headers([{<<$:, _/binary>> = Name, Value} | Rest], Seen, false) ->
+    %% Validate pseudo-header
+    case is_valid_request_pseudo_header(Name) of
+        false ->
+            {error, {invalid_pseudo_header, Name}};
+        true ->
+            %% Check for duplicates
+            case maps:is_key(Name, Seen) of
+                true ->
+                    {error, {duplicate_pseudo_header, Name}};
+                false ->
+                    validate_pseudo_headers(Rest, Seen#{Name => Value}, false)
+            end
+    end;
+
+validate_pseudo_headers([{_Name, _Value} | Rest], Seen, _RegularSeen) ->
+    %% Regular header - mark that we've seen regular headers
+    validate_pseudo_headers(Rest, Seen, true).
+
+%% Valid request pseudo-headers per RFC 7540 Section 8.1.2.3
+is_valid_request_pseudo_header(<<":method">>) -> true;
+is_valid_request_pseudo_header(<<":scheme">>) -> true;
+is_valid_request_pseudo_header(<<":authority">>) -> true;
+is_valid_request_pseudo_header(<<":path">>) -> true;
+is_valid_request_pseudo_header(_) -> false.
 
 %% Apply peer's settings
 apply_settings(Settings, State) ->

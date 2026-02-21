@@ -197,9 +197,15 @@ handle_event(info, {quic, QuicConn, {closed, _Reason}},
              _StateName, #h3_state{quic_conn = QuicConn} = State) ->
     {stop, normal, State};
 
-handle_event(info, {quic, QuicConn, {error, _Code, _Reason}},
+handle_event(info, {quic, QuicConn, {transport_error, _Code, _Reason}},
              _StateName, #h3_state{quic_conn = QuicConn} = State) ->
     {stop, normal, State};
+
+handle_event(info, {quic, QuicConn, {stream_opened, StreamId}},
+             _StateName, #h3_state{quic_conn = QuicConn, streams = Streams} = State) ->
+    %% New stream opened by peer - initialize stream state
+    NewStreams = maps:put(StreamId, #stream_state{}, Streams),
+    {keep_state, State#h3_state{streams = NewStreams}};
 
 handle_event(info, _Msg, _StateName, State) ->
     {keep_state, State}.

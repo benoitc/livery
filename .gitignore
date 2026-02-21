@@ -1,0 +1,11 @@
+_build/
+.rebar3/
+rebar.lock
+*.beam
+*.plt
+erl_crash.dump
+.eunit/
+logs/
+doc/
+.idea/
+*.iml

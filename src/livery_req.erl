@@ -14,7 +14,17 @@
     body/1,
     has_body/1,
     body_length/1,
-    peer/1
+    peer/1,
+    %% Convenience accessors
+    scheme/1,
+    host/1,
+    port/1,
+    content_type/1,
+    content_length/1,
+    accept/1,
+    user_agent/1,
+    is_websocket_upgrade/1,
+    is_ssl/1
 ]).
 
 -export([
@@ -143,3 +153,73 @@ set_handler(Handler, Opts, Req) ->
 -spec set_body_info(boolean(), non_neg_integer() | chunked | undefined, req()) -> req().
 set_body_info(HasBody, Length, Req) ->
     Req#livery_req{has_body = HasBody, body_length = Length}.
+
+%% Convenience accessors
+
+-spec scheme(req()) -> http | https.
+scheme(#livery_req{sock = Sock}) ->
+    case Sock of
+        {sslsocket, _, _} -> https;
+        _ -> http
+    end.
+
+-spec host(req()) -> binary() | undefined.
+host(Req) ->
+    header(<<"host">>, Req).
+
+-spec port(req()) -> inet:port_number() | undefined.
+port(#livery_req{sock = Sock}) ->
+    case Sock of
+        undefined -> undefined;
+        {sslsocket, _, _} ->
+            case ssl:sockname(Sock) of
+                {ok, {_, Port}} -> Port;
+                _ -> undefined
+            end;
+        _ ->
+            case inet:sockname(Sock) of
+                {ok, {_, Port}} -> Port;
+                _ -> undefined
+            end
+    end.
+
+-spec content_type(req()) -> binary() | undefined.
+content_type(Req) ->
+    case header(<<"content-type">>, Req) of
+        undefined -> undefined;
+        CT -> hd(binary:split(CT, <<";">>))  % Strip charset, boundary, etc.
+    end.
+
+-spec content_length(req()) -> non_neg_integer() | undefined.
+content_length(Req) ->
+    case header(<<"content-length">>, Req) of
+        undefined -> undefined;
+        Value ->
+            try binary_to_integer(Value)
+            catch _:_ -> undefined
+            end
+    end.
+
+-spec accept(req()) -> binary() | undefined.
+accept(Req) ->
+    header(<<"accept">>, Req).
+
+-spec user_agent(req()) -> binary() | undefined.
+user_agent(Req) ->
+    header(<<"user-agent">>, Req).
+
+-spec is_websocket_upgrade(req()) -> boolean().
+is_websocket_upgrade(Req) ->
+    case header(<<"upgrade">>, Req) of
+        undefined -> false;
+        Upgrade ->
+            LowerUpgrade = string:lowercase(Upgrade),
+            LowerUpgrade =:= <<"websocket">>
+    end.
+
+-spec is_ssl(req()) -> boolean().
+is_ssl(#livery_req{sock = Sock}) ->
+    case Sock of
+        {sslsocket, _, _} -> true;
+        _ -> false
+    end.

@@ -1,0 +1,15 @@
+{application, stream,
+ [{description, "Streaming example for Livery"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {stream_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    livery
+   ]},
+  {env,[]},
+  {modules, []},
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.

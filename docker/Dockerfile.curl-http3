@@ -1,0 +1,18 @@
+# Use official curl image and check for HTTP/3 support
+FROM curlimages/curl:latest AS curl-source
+
+FROM alpine:3.19
+
+RUN apk add --no-cache bash ca-certificates curl
+
+# Verify curl version
+RUN curl --version
+
+WORKDIR /tests
+
+# Copy test scripts
+COPY tests/ /tests/
+
+RUN chmod +x /tests/*.sh
+
+ENTRYPOINT ["/bin/bash"]

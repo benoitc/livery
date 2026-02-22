@@ -1,0 +1,13 @@
+{application, docker_test, [
+    {description, "Docker test server for Livery multi-protocol testing"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {docker_test_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        livery
+    ]},
+    {env, []},
+    {modules, []}
+]}.

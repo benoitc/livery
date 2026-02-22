@@ -1,0 +1,43 @@
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    container_name: livery-server
+    ports:
+      - "9080:9080"
+      - "9443:9443/tcp"
+      - "9443:9443/udp"
+    volumes:
+      - ./certs:/app/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - livery-net
+
+  curl-http3:
+    build:
+      context: .
+      dockerfile: Dockerfile.curl-http3
+    container_name: livery-curl
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+      - ./tests:/tests:ro
+    environment:
+      - SERVER_HOST=server
+      - HTTP_PORT=9080
+      - HTTPS_PORT=9443
+    networks:
+      - livery-net
+    entrypoint: ["/tests/run-tests.sh"]
+
+networks:
+  livery-net:
+    driver: bridge

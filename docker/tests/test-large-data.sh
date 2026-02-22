@@ -28,7 +28,7 @@ test_large_http2() {
 
 test_large_http3() {
     local size
-    size=$(curl -s --http3-only -k "https://${SERVER_HOST}:${HTTPS_PORT}/large" | wc -c)
+    size=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/large" | wc -c)
     if [ "$size" -eq "$EXPECTED_SIZE" ]; then
         return 0
     else

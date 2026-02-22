@@ -19,7 +19,7 @@ services:
     networks:
       - livery-net
 
-  curl-http3:
+  curl-tests:
     build:
       context: .
       dockerfile: Dockerfile.curl-http3

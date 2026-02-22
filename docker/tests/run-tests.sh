@@ -24,8 +24,9 @@ HTTPS_PORT="${HTTPS_PORT:-9443}"
 
 # Check if HTTP/3 is supported
 HTTP3_SUPPORTED=false
-if curl --version | grep -qi "http3"; then
+if curl --version | grep -q "HTTP3"; then
     HTTP3_SUPPORTED=true
+    echo "HTTP/3 support detected"
 fi
 
 # Counters

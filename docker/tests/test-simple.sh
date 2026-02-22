@@ -27,7 +27,8 @@ test_hello_http2() {
 
 test_hello_http3() {
     local result
-    result=$(curl -s --http3-only -k "https://${SERVER_HOST}:${HTTPS_PORT}/")
+    # Use --http3 (with fallback) since server might need time to establish QUIC
+    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/")
     if [ "$result" = "Hello, World!" ]; then
         return 0
     else
@@ -62,7 +63,7 @@ test_greet_http2() {
 
 test_greet_http3() {
     local result
-    result=$(curl -s --http3-only -k "https://${SERVER_HOST}:${HTTPS_PORT}/greet/Docker")
+    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/greet/Docker")
     if [ "$result" = "Hello, Docker!" ]; then
         return 0
     else

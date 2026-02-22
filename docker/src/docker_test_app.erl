@@ -4,6 +4,25 @@
 -export([start/2, stop/1]).
 
 start(_StartType, _StartArgs) ->
+    %% Check if we're in test mode
+    case os:getenv("RUN_H3_TESTS") of
+        "true" ->
+            run_h3_tests();
+        _ ->
+            start_server()
+    end.
+
+run_h3_tests() ->
+    Host = os:getenv("SERVER_HOST", "localhost"),
+    Port = list_to_integer(os:getenv("HTTPS_PORT", "9443")),
+    io:format("Running HTTP/3 tests against ~s:~p~n", [Host, Port]),
+    Result = docker_test_h3:run_tests(Host, Port),
+    case Result of
+        ok -> halt(0);
+        error -> halt(1)
+    end.
+
+start_server() ->
     %% Define routes
     Routes = [
         {get, "/", docker_test_handler, #{action => hello}},

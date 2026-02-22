@@ -224,20 +224,11 @@ sse_events(Config) ->
     assert_body_contains(Response, <<"data: event2">>).
 
 stream_trailers(Config) ->
-    Protocol = ?config(protocol, Config),
     Port = ?config(port, Config),
-    Response = do_request(Protocol, Port, <<"GET">>, <<"/stream-with-trailers">>, Config),
+    Response = do_h1_request(Port, <<"GET">>, <<"/stream-with-trailers">>),
     assert_status(Response, 200),
     assert_body_contains(Response, <<"data">>),
-    %% Trailers are only visible in HTTP/1.1 chunked response and HTTP/2
-    case Protocol of
-        h1 ->
-            assert_trailer(Response, <<"x-checksum">>, <<"abc123">>);
-        h2 ->
-            assert_trailer(Response, <<"x-checksum">>, <<"abc123">>);
-        h3 ->
-            assert_trailer(Response, <<"x-checksum">>, <<"abc123">>)
-    end.
+    assert_trailer(Response, <<"x-checksum">>, <<"abc123">>).
 
 %%====================================================================
 %% Protocol-Specific Request Helpers

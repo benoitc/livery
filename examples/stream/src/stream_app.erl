@@ -4,7 +4,7 @@
 -export([start/2, stop/1]).
 
 start(_StartType, _StartArgs) ->
-    Port = application:get_env(stream, port, 8081),
+    Port = application:get_env(stream, port, 8089),
     Routes = [
         {get, "/stream", stream_handler, #{action => stream}},
         {get, "/large", stream_handler, #{action => large}},

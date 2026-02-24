@@ -130,24 +130,30 @@ handle_buffer(#h2_state{phase = preface, buffer = Buffer} = State, Acc) ->
                         [{send, SettingsFrame} | Acc]
                     );
                 false ->
+                    error_logger:error_msg("H2 invalid preface, got: ~p expected: ~p~n",
+                                          [Preface, ?CONNECTION_PREFACE]),
                     {error, {protocol_error, invalid_preface}, State}
             end;
         false ->
             {ok, lists:reverse(Acc), State}
     end;
 
-handle_buffer(#h2_state{buffer = Buffer} = State, Acc) ->
+handle_buffer(#h2_state{buffer = Buffer, phase = Phase} = State, Acc) ->
     case livery_h2_frame:decode(Buffer) of
         {ok, Frame, Rest} ->
             case handle_frame(Frame, State#h2_state{buffer = Rest}) of
                 {ok, Responses, NewState} ->
                     handle_buffer(NewState, Responses ++ Acc);
                 {error, Reason, NewState} ->
+                    error_logger:error_msg("H2 frame error: ~p, frame: ~p, phase: ~p~n",
+                                          [Reason, Frame, Phase]),
                     {error, Reason, NewState}
             end;
         {more, _} ->
             {ok, lists:reverse(Acc), State};
         {error, Reason} ->
+            error_logger:error_msg("H2 decode error: ~p, buffer size: ~p~n",
+                                  [Reason, byte_size(Buffer)]),
             {error, Reason, State}
     end.
 

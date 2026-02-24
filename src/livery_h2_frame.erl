@@ -116,11 +116,13 @@
 frame_header_size() -> 9.
 
 %% @doc Default HTTP/2 settings.
+%% Note: enable_push is 0 because servers don't receive PUSH_PROMISE.
+%% Only clients advertise enable_push to indicate if they accept push.
 -spec default_settings() -> settings().
 default_settings() ->
     #{
         header_table_size => 4096,
-        enable_push => 1,
+        enable_push => 0,
         max_concurrent_streams => 100,
         initial_window_size => 65535,
         max_frame_size => 16384,

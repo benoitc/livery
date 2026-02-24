@@ -97,26 +97,41 @@ init_protocol(undefined, _Handler, _HandlerOpts) ->
     gen_statem:event_handler_result(atom()).
 activating(info, activate_socket, #state{socket = Socket, transport = Transport,
                                           protocol = Protocol,
-                                          idle_timeout = IdleTimeout} = State) ->
+                                          handler = Handler,
+                                          handler_opts = HandlerOpts} = State) ->
     %% Now we have ownership - get peer info and activate socket
-    Peer = case get_peername(Socket, Transport) of
-        {ok, P} -> P;
-        _ -> undefined
+    Peer = case Transport of
+        gen_tcp -> inet:peername(Socket);
+        ssl -> ssl:peername(Socket)
     end,
-    case set_active(Socket, Transport) of
-        ok ->
-            case Protocol of
-                undefined ->
-                    %% Protocol not negotiated - need to detect via preface
-                    TimerRef = erlang:start_timer(5000, self(), detect_timeout),
-                    {next_state, detecting, State#state{peer = Peer, timer_ref = TimerRef}};
-                _ ->
-                    %% Protocol already known from ALPN
-                    TimerRef = erlang:start_timer(IdleTimeout, self(), idle_timeout),
-                    {next_state, waiting, State#state{peer = Peer, timer_ref = TimerRef}}
-            end;
-        {error, _Reason} ->
-            {stop, normal, State}
+    PeerAddr = case Peer of {ok, P} -> P; _ -> undefined end,
+    case Transport of
+        gen_tcp -> inet:setopts(Socket, [{active, once}]);
+        ssl -> ssl:setopts(Socket, [{active, once}])
+    end,
+    case Protocol of
+        undefined when Transport =:= gen_tcp ->
+            %% Plain TCP - assume HTTP/1.1 directly (no H2 over plain TCP in practice)
+            ProtocolState = livery_h1:init(Handler, HandlerOpts),
+            {next_state, waiting, State#state{
+                peer = PeerAddr,
+                protocol = h1,
+                protocol_state = ProtocolState
+            }};
+        undefined ->
+            %% SSL without ALPN - need to detect via preface
+            TimerRef = erlang:start_timer(5000, self(), detect_timeout),
+            {next_state, detecting, State#state{peer = PeerAddr, timer_ref = TimerRef}};
+        h2 ->
+            %% HTTP/2 from ALPN - already initialized, start settings timer
+            SettingsTimerRef = erlang:start_timer(?SETTINGS_TIMEOUT, self(), settings_timeout),
+            {next_state, waiting, State#state{
+                peer = PeerAddr,
+                settings_timer_ref = SettingsTimerRef
+            }};
+        h1 ->
+            %% HTTP/1.1 from ALPN - already initialized
+            {next_state, waiting, State#state{peer = PeerAddr}}
     end;
 activating(info, {tcp_closed, _}, State) ->
     {stop, normal, State};
@@ -424,11 +439,6 @@ handle_data(Data, #state{protocol = h2, protocol_state = ProtocolState,
 handle_data(_Data, State) ->
     %% Unknown protocol
     {keep_state, State}.
-
-get_peername(Socket, gen_tcp) ->
-    inet:peername(Socket);
-get_peername(Socket, ssl) ->
-    ssl:peername(Socket).
 
 set_active(Socket, gen_tcp) ->
     inet:setopts(Socket, [{active, once}]);

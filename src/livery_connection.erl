@@ -44,6 +44,7 @@ start_link(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
     {ok, Pid}.
 
 %% @private Initialize connection process.
+-spec init(pid(), term(), term(), module(), term(), term()) -> ok | no_return().
 init(_Parent, Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
     RequestTimeout = application:get_env(livery, request_timeout, 60000),
     IdleTimeout = application:get_env(livery, idle_timeout, 300000),

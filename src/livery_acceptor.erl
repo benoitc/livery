@@ -64,9 +64,10 @@ init(Opts) ->
             {stop, {listen_failed, Reason}}
     end.
 
--spec handle_call(term(), gen_server:from(), #state{}) -> {reply, term(), #state{}}.
+-spec handle_call(term(), gen_server:from(), #state{}) -> {noreply, #state{}}.
 handle_call(_Request, _From, State) ->
-    {reply, {error, not_implemented}, State}.
+    %% Acceptors don't handle synchronous calls
+    {noreply, State}.
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 handle_cast(_Msg, State) ->

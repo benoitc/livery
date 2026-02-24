@@ -16,3 +16,7 @@ _checkouts/
 # Generated/downloaded compliance test files
 priv/tools/
 priv/test_certs/
+
+# NIF build artifacts
+c_src/*.o
+priv/*.so

@@ -20,3 +20,4 @@ priv/test_certs/
 # NIF build artifacts
 c_src/*.o
 priv/*.so
+benchmark/

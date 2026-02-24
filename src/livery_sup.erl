@@ -42,6 +42,8 @@ stop_listener(Name) ->
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
+    %% Create hooks ETS table
+    ets:new(livery_hooks, [named_table, public, bag, {read_concurrency, true}]),
     SupFlags = #{
         strategy => one_for_one,
         intensity => 10,

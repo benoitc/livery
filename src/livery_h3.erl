@@ -58,6 +58,8 @@
     quic_conn :: reference() | undefined,
     handler :: module(),
     handler_opts :: term(),
+    %% Peer address (from QUIC connection)
+    peer :: {inet:ip_address(), inet:port_number()} | undefined,
     %% Streams
     streams = #{} :: #{non_neg_integer() => stream_state()},
     uni_streams = #{} :: #{non_neg_integer() => uni_stream_info()},
@@ -301,8 +303,13 @@ handle_event(cast, {close, Reason}, _StateName, #h3_state{quic_conn = QuicConn} 
 handle_event(info, {quic, QuicConn, {connected, _Info}},
              connecting, #h3_state{quic_conn = QuicConn} = State) ->
     error_logger:info_msg("[H3] Received 'connected' event, setting up H3 streams~n"),
+    %% Get peer address from QUIC connection
+    Peer = case quic:peername(QuicConn) of
+        {ok, PeerAddr} -> PeerAddr;
+        {error, _} -> undefined
+    end,
     %% QUIC connection fully established - now set up HTTP/3 control streams
-    State1 = setup_h3_streams(State),
+    State1 = setup_h3_streams(State#h3_state{peer = Peer}),
     {next_state, connected, State1};
 
 handle_event(info, {quic, QuicConn, {connected, _Info}},
@@ -693,7 +700,7 @@ handle_h3_frame(_StreamId, _Frame, _Fin, StreamState, State) ->
 %%====================================================================
 
 dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailers = Trailers} = StreamState,
-                 #h3_state{handler = Handler, handler_opts = HandlerOpts} = State) ->
+                 #h3_state{handler = Handler, handler_opts = HandlerOpts, quic_conn = QuicConn} = State) ->
     %% Extract pseudo-headers
     Method = get_header(<<":method">>, Headers, <<"GET">>),
     Path = get_header(<<":path">>, Headers, <<"/">>),
@@ -701,19 +708,28 @@ dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailer
     Authority = get_header(<<":authority">>, Headers, <<>>),
     Protocol = get_header(<<":protocol">>, Headers, undefined),
 
-    %% Check for Extended CONNECT (RFC 9220)
-    case {Method, Protocol} of
-        {<<"CONNECT">>, <<"websocket">>} ->
-            %% Extended CONNECT with WebSocket protocol
-            handle_websocket_upgrade(StreamId, Headers, StreamState, Handler, HandlerOpts, State);
-        _ ->
-            %% Normal request
-            dispatch_normal_request(StreamId, Method, Path, Scheme, Authority,
-                                    Headers, Body, Trailers, Handler, HandlerOpts, State)
+    %% Validate :authority pseudo-header (RFC 9114 Section 4.3.1)
+    %% :authority MUST NOT be empty for http/https URIs
+    case validate_authority(Method, Authority) of
+        ok ->
+            %% Check for Extended CONNECT (RFC 9220)
+            case {Method, Protocol} of
+                {<<"CONNECT">>, <<"websocket">>} ->
+                    %% Extended CONNECT with WebSocket protocol
+                    handle_websocket_upgrade(StreamId, Headers, StreamState, Handler, HandlerOpts, State);
+                _ ->
+                    %% Normal request
+                    dispatch_normal_request(StreamId, Method, Path, Scheme, Authority,
+                                            Headers, Body, Trailers, Handler, HandlerOpts, State)
+            end;
+        {error, missing_authority} ->
+            %% Send 400 Bad Request - missing :authority
+            send_error_response(StreamId, 400, <<"Missing :authority header">>, QuicConn, State)
     end.
 
 dispatch_normal_request(StreamId, Method, Path, _Scheme, _Authority,
-                        Headers, Body, _Trailers, Handler, HandlerOpts, State) ->
+                        Headers, Body, _Trailers, Handler, HandlerOpts,
+                        #h3_state{peer = Peer} = State) ->
     %% Parse path and query string
     {PathOnly, Qs} = split_path_qs(Path),
     %% Build request record
@@ -724,7 +740,7 @@ dispatch_normal_request(StreamId, Method, Path, _Scheme, _Authority,
         version = {3, 0},
         headers = filter_pseudo_headers(Headers),
         body = Body,
-        peer = undefined,  %% TODO: get from QUIC connection
+        peer = Peer,
         sock = undefined,
         handler = Handler,
         handler_opts = HandlerOpts,
@@ -777,6 +793,34 @@ filter_pseudo_headers(Headers) ->
 
 is_pseudo_header(<<$:, _/binary>>) -> true;
 is_pseudo_header(_) -> false.
+
+%% @doc Validate :authority pseudo-header per RFC 9114 Section 4.3.1.
+%% :authority MUST NOT be empty for http/https requests (non-CONNECT).
+%% For CONNECT requests without :protocol, :authority is the target.
+validate_authority(<<"CONNECT">>, _Authority) ->
+    %% CONNECT can have different authority semantics
+    ok;
+validate_authority(_Method, <<>>) ->
+    {error, missing_authority};
+validate_authority(_Method, _Authority) ->
+    ok.
+
+%% @doc Send an error response on a stream.
+send_error_response(StreamId, Status, Body, QuicConn, State) ->
+    Headers = [
+        {<<":status">>, integer_to_binary(Status)},
+        {<<"content-type">>, <<"text/plain">>},
+        {<<"content-length">>, integer_to_binary(byte_size(Body))}
+    ],
+    case do_send_headers(StreamId, Headers, false, State) of
+        {ok, State1} ->
+            do_send_data(StreamId, Body, true, State1),
+            State;
+        {error, _Reason} ->
+            %% Close stream on failure
+            quic:reset_stream(QuicConn, StreamId, 16#010c),
+            State
+    end.
 
 %% @doc Split path into path and query string.
 split_path_qs(Path) ->

@@ -267,26 +267,37 @@ Content encoding utilities.
 Encoding = livery_compress:negotiate_encoding(AcceptEncodingHeader).
 ```
 
-## livery_telemetry
+## livery_hooks
 
-Telemetry event emission.
+Hook-based event system for observability.
 
 ```erlang
-%% Connection events
-StartTime = livery_telemetry:connection_start(Listener, Metadata).
-livery_telemetry:connection_stop(StartTime, Reason, Metadata).
+%% Add hooks
+Ref = livery_hooks:add(request_stop, fun(Data) ->
+    #{method := Method, status := Status} = Data,
+    io:format("~s -> ~p~n", [Method, Status])
+end).
 
-%% Request events
-StartTime = livery_telemetry:request_start(Method, Metadata).
-livery_telemetry:request_stop(StartTime, Status, Metadata).
-livery_telemetry:request_exception(StartTime, Kind, Reason, Metadata).
+%% Add hook with tag for identification
+Ref = livery_hooks:add(request_stop, MyFun, my_tag).
 
-%% WebSocket events
-livery_telemetry:websocket_upgrade(Metadata).
-livery_telemetry:websocket_frame(Direction, Opcode, Size).
+%% Remove hook
+ok = livery_hooks:delete(request_stop, Ref).
 
-%% Span helper
-Result = livery_telemetry:span(EventPrefix, Metadata, Fun).
+%% List hooks for an event
+[{Ref, Tag}] = livery_hooks:list(request_stop).
+
+%% Run hooks manually
+ok = livery_hooks:run(my_event, #{key => value}).
+
+%% Convenience functions
+livery_hooks:connection_start(#{listener => Name, peer => Peer}).
+livery_hooks:connection_stop(#{listener => Name, reason => Reason, duration => D}).
+livery_hooks:request_start(#{method => Method, path => Path, protocol => h1}).
+livery_hooks:request_stop(#{method => M, path => P, status => S, duration => D}).
+livery_hooks:request_exception(#{kind => error, reason => R, stacktrace => ST}).
+livery_hooks:websocket_upgrade(#{path => Path}).
+livery_hooks:websocket_frame(#{direction => in, opcode => text, size => 100}).
 ```
 
 ## livery_info

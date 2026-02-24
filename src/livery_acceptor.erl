@@ -141,10 +141,10 @@ reuseport_opts() ->
     end.
 
 accept_loop(#state{listen_socket = ListenSocket, transport = gen_tcp} = State) ->
-    %% Use async accept
+    %% Use async accept (spawn without link to avoid crash propagation)
     Ref = make_ref(),
     Self = self(),
-    spawn_link(fun() ->
+    spawn(fun() ->
         case gen_tcp:accept(ListenSocket) of
             {ok, Socket} ->
                 %% Transfer socket ownership to the gen_server BEFORE exiting
@@ -158,10 +158,10 @@ accept_loop(#state{listen_socket = ListenSocket, transport = gen_tcp} = State) -
     State#state{ref = Ref};
 
 accept_loop(#state{listen_socket = ListenSocket, transport = ssl} = State) ->
-    %% Use async accept for SSL
+    %% Use async accept for SSL (spawn without link to avoid crash propagation)
     Ref = make_ref(),
     Self = self(),
-    spawn_link(fun() ->
+    spawn(fun() ->
         case ssl:transport_accept(ListenSocket) of
             {ok, TlsSocket} ->
                 case ssl:handshake(TlsSocket, 5000) of

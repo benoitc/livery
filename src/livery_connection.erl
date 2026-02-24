@@ -9,7 +9,7 @@
 -include("livery.hrl").
 
 %% API
--export([start_link/5]).
+-export([start/5, start_link/5]).
 
 %% gen_statem callbacks
 -export([
@@ -45,6 +45,11 @@
 -define(H2_PREFACE_SIZE, 24).
 
 %% API
+
+-spec start(gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term(),
+            h1 | h2 | undefined) -> {ok, pid()} | {error, term()}.
+start(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
+    gen_statem:start(?MODULE, {Socket, Transport, Handler, HandlerOpts, NegotiatedProto}, []).
 
 -spec start_link(gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl, module(), term(),
                  h1 | h2 | undefined) -> {ok, pid()} | {error, term()}.
@@ -95,11 +100,61 @@ init_protocol(undefined, _Handler, _HandlerOpts) ->
 %% Activating - waiting for socket ownership before activating
 -spec activating(gen_statem:event_type(), term(), #state{}) ->
     gen_statem:event_handler_result(atom()).
+activating(info, activate_socket, #state{socket = Socket, transport = {ssl_pending, SslOpts},
+                                          handler = Handler,
+                                          handler_opts = HandlerOpts} = State) ->
+    %% Perform TLS handshake in connection process (not acceptor)
+    case ssl:handshake(Socket, SslOpts, 5000) of
+        {ok, SslSocket} ->
+            %% Check ALPN negotiated protocol
+            {Protocol, ProtocolState} = case ssl:negotiated_protocol(SslSocket) of
+                {ok, <<"h2">>} ->
+                    {h2, livery_h2:init(#{handler => Handler, handler_opts => HandlerOpts})};
+                {ok, <<"http/1.1">>} ->
+                    {h1, livery_h1:init(Handler, HandlerOpts)};
+                {error, protocol_not_negotiated} ->
+                    {undefined, undefined}
+            end,
+            Peer = case ssl:peername(SslSocket) of {ok, P} -> P; _ -> undefined end,
+            ssl:setopts(SslSocket, [{active, once}]),
+            case Protocol of
+                undefined ->
+                    %% No ALPN - detect via preface
+                    TimerRef = erlang:start_timer(5000, self(), detect_timeout),
+                    {next_state, detecting, State#state{
+                        socket = SslSocket,
+                        transport = ssl,
+                        peer = Peer,
+                        timer_ref = TimerRef
+                    }};
+                h2 ->
+                    SettingsTimerRef = erlang:start_timer(?SETTINGS_TIMEOUT, self(), settings_timeout),
+                    {next_state, waiting, State#state{
+                        socket = SslSocket,
+                        transport = ssl,
+                        peer = Peer,
+                        protocol = h2,
+                        protocol_state = ProtocolState,
+                        settings_timer_ref = SettingsTimerRef
+                    }};
+                h1 ->
+                    {next_state, waiting, State#state{
+                        socket = SslSocket,
+                        transport = ssl,
+                        peer = Peer,
+                        protocol = h1,
+                        protocol_state = ProtocolState
+                    }}
+            end;
+        {error, _Reason} ->
+            ssl:close(Socket),
+            {stop, normal, State}
+    end;
 activating(info, activate_socket, #state{socket = Socket, transport = Transport,
                                           protocol = Protocol,
                                           handler = Handler,
                                           handler_opts = HandlerOpts} = State) ->
-    %% Now we have ownership - get peer info and activate socket
+    %% TCP or already-established SSL
     Peer = case Transport of
         gen_tcp -> inet:peername(Socket);
         ssl -> ssl:peername(Socket)

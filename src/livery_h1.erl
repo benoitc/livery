@@ -103,11 +103,15 @@ send_response(Socket, Status, Headers, Body, State) ->
         ok ->
             case State#h1_state.keepalive of
                 true ->
-                    %% Ready for next request
+                    %% Ready for next request - reset all request-specific state
                     NewState = State#h1_state{
                         req = undefined,
                         handler_state = undefined,
-                        request_count = State#h1_state.request_count + 1
+                        request_count = State#h1_state.request_count + 1,
+                        body_state = undefined,
+                        body_remaining = undefined,
+                        expect_continue = false,
+                        continue_sent = false
                     },
                     {ok, NewState};
                 false ->
@@ -151,10 +155,15 @@ send_stream(Socket, Status, Headers, StreamFun, State) ->
                 StreamFun(SendFun),
                 case State#h1_state.keepalive of
                     true ->
+                        %% Reset all request-specific state for next request
                         NewState = State#h1_state{
                             req = undefined,
                             handler_state = undefined,
-                            request_count = State#h1_state.request_count + 1
+                            request_count = State#h1_state.request_count + 1,
+                            body_state = undefined,
+                            body_remaining = undefined,
+                            expect_continue = false,
+                            continue_sent = false
                         },
                         {ok, NewState};
                     false ->
@@ -236,7 +245,10 @@ parse_and_handle_valid(Method, Path, Qs, Version, Headers, Rest, State) ->
                     end;
                 {false, _} ->
                     %% No body, handle request directly
-                    handle_request(State2)
+                    handle_request(State2);
+                {error, Reason} ->
+                    %% Invalid Content-Length
+                    {error, Reason, State2}
             end.
 
 %% @doc Validate Host header presence per RFC 7230 Section 5.4.
@@ -273,9 +285,10 @@ get_body_info(Headers) ->
         {_, LengthBin} ->
             try binary_to_integer(LengthBin) of
                 0 -> {false, 0};
-                Length -> {true, Length}
+                Length when Length > 0 -> {true, Length};
+                _ -> {error, invalid_content_length}  %% Negative length
             catch
-                _:_ -> {false, undefined}
+                _:_ -> {error, invalid_content_length}
             end;
         false ->
             case lists:keyfind(<<"transfer-encoding">>, 1, Headers) of

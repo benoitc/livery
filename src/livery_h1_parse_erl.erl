@@ -234,8 +234,16 @@ skip_chunk_extensions(<<_, Rest/binary>>, SizeAcc, MaxSize) ->
 
 %% Parse chunk data of known size + trailing CRLF
 parse_chunk_data(Data, Size) when byte_size(Data) >= Size + 2 ->
-    <<ChunkData:Size/binary, "\r\n", Rest/binary>> = Data,
-    {ok, ChunkData, Rest};
+    <<ChunkData:Size/binary, Rest/binary>> = Data,
+    case Rest of
+        <<"\r\n", Remaining/binary>> ->
+            {ok, ChunkData, Remaining};
+        <<"\r", _/binary>> ->
+            %% Might have \r but not \n yet (incomplete)
+            {more, Data};
+        _ ->
+            {error, invalid_chunk_terminator}
+    end;
 parse_chunk_data(Data, Size) when byte_size(Data) >= Size ->
     %% Have chunk data but not trailing CRLF yet
     <<_:Size/binary, Rest/binary>> = Data,

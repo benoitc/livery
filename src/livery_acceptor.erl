@@ -2,6 +2,7 @@
 %%
 %% Simple process that blocks directly on accept - no gen_server overhead.
 %% Each acceptor opens its own listen socket with SO_REUSEPORT enabled.
+%% TLS handshake is delegated to connection process for better throughput.
 -module(livery_acceptor).
 
 %% API
@@ -9,6 +10,8 @@
 
 %% Internal
 -export([acceptor_loop/5]).
+
+-define(ACCEPT_ERROR_BACKOFF, 10).  %% ms backoff on transient errors
 
 -spec start_link(map()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(Opts) ->
@@ -31,52 +34,62 @@ start_link(Opts) ->
 %% @private Main acceptor loop - blocks on accept.
 -spec acceptor_loop(gen_tcp:socket() | ssl:sslsocket(), gen_tcp | ssl,
                     module(), term(), list()) -> no_return().
-acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, _SslOpts) ->
+acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts) ->
     case gen_tcp:accept(ListenSocket) of
         {ok, Socket} ->
-            %% Spawn connection handler directly
             spawn_connection(Socket, gen_tcp, Handler, HandlerOpts, undefined),
-            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, _SslOpts);
+            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts);
         {error, closed} ->
             ok;
+        {error, emfile} ->
+            %% Too many open files - backoff
+            timer:sleep(?ACCEPT_ERROR_BACKOFF),
+            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts);
+        {error, enfile} ->
+            %% System file table full - backoff
+            timer:sleep(?ACCEPT_ERROR_BACKOFF),
+            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts);
         {error, _Reason} ->
-            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, _SslOpts)
+            acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts)
     end;
 acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts) ->
+    %% For SSL, just do transport_accept - handshake is done in connection process
     case ssl:transport_accept(ListenSocket) of
         {ok, TlsSocket} ->
-            case ssl:handshake(TlsSocket, 5000) of
-                {ok, SslSocket} ->
-                    %% Check ALPN negotiated protocol
-                    NegotiatedProto = case ssl:negotiated_protocol(SslSocket) of
-                        {ok, <<"h2">>} -> h2;
-                        {ok, <<"http/1.1">>} -> h1;
-                        {error, protocol_not_negotiated} -> undefined
-                    end,
-                    spawn_connection(SslSocket, ssl, Handler, HandlerOpts, NegotiatedProto);
-                {error, _Reason} ->
-                    ssl:close(TlsSocket)
-            end,
+            %% Pass raw TLS socket to connection process for handshake
+            spawn_connection(TlsSocket, {ssl_pending, SslOpts}, Handler, HandlerOpts, undefined),
             acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts);
         {error, closed} ->
             ok;
+        {error, emfile} ->
+            timer:sleep(?ACCEPT_ERROR_BACKOFF),
+            acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts);
+        {error, enfile} ->
+            timer:sleep(?ACCEPT_ERROR_BACKOFF),
+            acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts);
         {error, _Reason} ->
             acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts)
     end.
 
 %% @private Spawn connection handler and transfer socket ownership.
 spawn_connection(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
-    case livery_connection:start_link(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) of
+    case livery_connection:start(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) of
         {ok, Pid} ->
-            case Transport of
-                gen_tcp -> gen_tcp:controlling_process(Socket, Pid);
-                ssl -> ssl:controlling_process(Socket, Pid)
+            TransportMod = case Transport of
+                gen_tcp -> gen_tcp;
+                {ssl_pending, _} -> ssl;
+                ssl -> ssl
             end,
-            Pid ! activate_socket,
-            ok;
+            case TransportMod:controlling_process(Socket, Pid) of
+                ok ->
+                    Pid ! activate_socket;
+                {error, _} ->
+                    ok
+            end;
         {error, _Reason} ->
             case Transport of
                 gen_tcp -> gen_tcp:close(Socket);
+                {ssl_pending, _} -> ssl:close(Socket);
                 ssl -> ssl:close(Socket)
             end
     end.

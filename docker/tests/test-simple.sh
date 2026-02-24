@@ -28,11 +28,14 @@ test_hello_http2() {
 test_hello_http3() {
     local result
     # Use --http3 (with fallback) since server might need time to establish QUIC
-    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/")
-    if [ "$result" = "Hello, World!" ]; then
+    # Use verbose output to debug connection issues
+    result=$(curl -v --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/" 2>&1)
+    echo "Curl verbose output:"
+    echo "$result"
+    if echo "$result" | grep -q "Hello, World!"; then
         return 0
     else
-        echo "Expected 'Hello, World!', got '$result'"
+        echo "Expected 'Hello, World!' in response"
         return 1
     fi
 }

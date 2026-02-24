@@ -61,12 +61,14 @@ start_server() ->
     %% Start HTTP/3 listener on port 9443 (UDP)
     {ok, CertDer} = file:read_file(get_cert_path("cert.der")),
     {ok, KeyDer} = file:read_file(get_cert_path("key.der")),
+    %% QUIC expects the key as a decoded record, not raw DER bytes
+    PrivateKey = public_key:der_decode('RSAPrivateKey', KeyDer),
     {ok, _} = livery:start_h3_listener(http3, #{
         port => 9443,
         handler => livery_routing_handler,
         handler_opts => HandlerOpts,
         cert => CertDer,
-        key => KeyDer
+        key => PrivateKey
     }),
     io:format("Started HTTP/3 listener on port 9443 (UDP)~n"),
 

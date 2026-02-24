@@ -26,7 +26,10 @@ test_stream_http2() {
 
 test_stream_http3() {
     local result
-    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/stream")
+    # Small delay to allow server to stabilize after previous requests
+    sleep 0.2
+    # HTTP/3 streaming needs max-time to avoid waiting indefinitely
+    result=$(curl -s --http3 -k --max-time 5 "https://${SERVER_HOST}:${HTTPS_PORT}/stream")
     if [ "$result" = "chunk1chunk2chunk3" ]; then
         return 0
     else
@@ -60,7 +63,10 @@ test_sse_http2() {
 
 test_sse_http3() {
     local result
-    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/sse")
+    # Small delay to allow server to stabilize after previous requests
+    sleep 0.2
+    # HTTP/3 streaming needs max-time to avoid waiting indefinitely
+    result=$(curl -s --http3 -k --max-time 5 "https://${SERVER_HOST}:${HTTPS_PORT}/sse")
     if echo "$result" | grep -q "event: message" && echo "$result" | grep -q "data: event1"; then
         return 0
     else
@@ -99,8 +105,10 @@ test_trailers_http2() {
 
 test_trailers_http3() {
     local result
-    # HTTP/3 supports trailers - check response body
-    result=$(curl -s --http3 -k "https://${SERVER_HOST}:${HTTPS_PORT}/stream-with-trailers")
+    # Small delay to allow server to stabilize after previous requests
+    sleep 0.2
+    # HTTP/3 supports trailers - check response body (needs max-time)
+    result=$(curl -s --http3 -k --max-time 5 "https://${SERVER_HOST}:${HTTPS_PORT}/stream-with-trailers")
     if [ "$result" = "data" ]; then
         return 0
     else

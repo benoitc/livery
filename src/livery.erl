@@ -134,12 +134,20 @@ start_h3_listener(Name, Opts) ->
         key => Key,
         alpn => [<<"h3">>],
         pool_size => PoolSize,
-        connection_handler => fun(_ConnPid, ConnRef) ->
+        connection_handler => fun(ConnPid, ConnRef) ->
             %% Start HTTP/3 handler for this connection
+            error_logger:info_msg("[livery] H3 connection_handler called for ~p, ref=~p~n",
+                                  [ConnPid, ConnRef]),
             quic:set_owner(ConnRef, self()),
-            {ok, H3Pid} = livery_h3:start_link(ConnRef, Handler, HandlerOpts),
-            quic:set_owner(ConnRef, H3Pid),
-            {ok, H3Pid}
+            case livery_h3:start_link(ConnRef, Handler, HandlerOpts) of
+                {ok, H3Pid} ->
+                    error_logger:info_msg("[livery] H3 handler started: ~p~n", [H3Pid]),
+                    quic:set_owner(ConnRef, H3Pid),
+                    {ok, H3Pid};
+                Error ->
+                    error_logger:error_msg("[livery] H3 handler start failed: ~p~n", [Error]),
+                    Error
+            end
         end
     },
 

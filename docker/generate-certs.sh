@@ -24,7 +24,8 @@ openssl req -new -x509 \
 
 # Convert to DER format for QUIC/HTTP3
 openssl x509 -in "${CERT_DIR}/cert.pem" -outform DER -out "${CERT_DIR}/cert.der"
-openssl rsa -in "${CERT_DIR}/key.pem" -outform DER -out "${CERT_DIR}/key.der"
+# Use -traditional to output raw RSAPrivateKey format (not PKCS#8)
+openssl rsa -in "${CERT_DIR}/key.pem" -traditional -outform DER -out "${CERT_DIR}/key.der"
 
 # Set permissions
 chmod 644 "${CERT_DIR}/cert.pem" "${CERT_DIR}/cert.der"

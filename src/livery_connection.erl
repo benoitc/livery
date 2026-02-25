@@ -111,13 +111,20 @@ activate(State, {ssl_pending, SslOpts}, _NegotiatedProto) ->
 
 activate(State, gen_tcp, _NegotiatedProto) ->
     Socket = State#state.socket,
+    Handler = State#state.handler,
+    HandlerOpts = State#state.handler_opts,
 
     Peer = case inet:peername(Socket) of {ok, P} -> P; _ -> undefined end,
     inet:setopts(Socket, [{active, once}]),
 
-    %% Plain TCP - detect protocol (support HTTP/2 prior knowledge)
-    NewState = State#state{peer = Peer},
-    detect_loop(NewState, <<>>);
+    %% Plain TCP - assume HTTP/1.1 directly
+    ProtocolState = livery_h1:init(Handler, HandlerOpts),
+    NewState = State#state{
+        peer = Peer,
+        protocol = h1,
+        protocol_state = ProtocolState
+    },
+    connection_loop(NewState);
 
 activate(State, ssl, NegotiatedProto) ->
     Socket = State#state.socket,
@@ -298,11 +305,9 @@ process_h2_responses([settings_acked | Rest], Socket, Transport, Handler,
     process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State);
 process_h2_responses([{send, IoData} | Rest], Socket, Transport, Handler,
                       HandlerOpts, Peer, State) ->
-    %% Batch consecutive {send, _} responses to reduce syscalls
-    {BatchedData, RemainingResponses} = collect_sends([IoData], Rest),
-    case send_data(Socket, Transport, BatchedData) of
+    case send_data(Socket, Transport, IoData) of
         ok ->
-            process_h2_responses(RemainingResponses, Socket, Transport, Handler, HandlerOpts, Peer, State);
+            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State);
         {error, Reason} ->
             {error, Reason, State}
     end;
@@ -326,13 +331,6 @@ process_h2_responses([{http_error, StreamId, Status} | Rest], Socket, Transport,
 process_h2_responses([_ | Rest], Socket, Transport, Handler, HandlerOpts, Peer, State) ->
     %% Skip unknown response types
     process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State).
-
-%% Collect consecutive {send, _} responses into a single iolist
-collect_sends(Acc, [{send, IoData} | Rest]) ->
-    collect_sends([IoData | Acc], Rest);
-collect_sends(Acc, Rest) ->
-    %% Reverse to preserve order and return remaining responses
-    {lists:reverse(Acc), Rest}.
 
 %% Handle an HTTP/2 request
 handle_h2_request(StreamId, H2Request, Socket, Transport, Handler, HandlerOpts, Peer, State) ->

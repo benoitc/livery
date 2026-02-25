@@ -171,14 +171,13 @@ encode_data(StreamId, Data, EndStream) ->
     [<<Length:24, ?FRAME_DATA:8, Flags:8, 0:1, StreamId:31>>, Data].
 
 %% @doc Encode a HEADERS frame.
-%% HeaderBlock can be iodata (binary or iolist) to avoid unnecessary copies.
--spec encode_headers(stream_id(), iodata(), boolean()) -> iodata().
+-spec encode_headers(stream_id(), binary(), boolean()) -> iodata().
 encode_headers(StreamId, HeaderBlock, EndStream) ->
     encode_headers(StreamId, HeaderBlock, EndStream, true).
 
--spec encode_headers(stream_id(), iodata(), boolean(), boolean()) -> iodata().
+-spec encode_headers(stream_id(), binary(), boolean(), boolean()) -> iodata().
 encode_headers(StreamId, HeaderBlock, EndStream, EndHeaders) ->
-    Length = iolist_size(HeaderBlock),
+    Length = byte_size(HeaderBlock),
     Flags = (case EndStream of true -> ?FLAG_END_STREAM; false -> 0 end) bor
             (case EndHeaders of true -> ?FLAG_END_HEADERS; false -> 0 end),
     [<<Length:24, ?FRAME_HEADERS:8, Flags:8, 0:1, StreamId:31>>, HeaderBlock].
@@ -186,11 +185,12 @@ encode_headers(StreamId, HeaderBlock, EndStream, EndHeaders) ->
 encode_headers_with_priority(StreamId, HeaderBlock, EndStream, EndHeaders, {Exclusive, StreamDep, Weight}) ->
     E = case Exclusive of true -> 1; false -> 0 end,
     PriorityData = <<E:1, StreamDep:31, (Weight - 1):8>>,
-    Length = 5 + iolist_size(HeaderBlock),
+    Payload = <<PriorityData/binary, HeaderBlock/binary>>,
+    Length = byte_size(Payload),
     Flags = ?FLAG_PRIORITY bor
             (case EndStream of true -> ?FLAG_END_STREAM; false -> 0 end) bor
             (case EndHeaders of true -> ?FLAG_END_HEADERS; false -> 0 end),
-    [<<Length:24, ?FRAME_HEADERS:8, Flags:8, 0:1, StreamId:31>>, PriorityData, HeaderBlock].
+    [<<Length:24, ?FRAME_HEADERS:8, Flags:8, 0:1, StreamId:31>>, Payload].
 
 %% @doc Encode a PRIORITY frame.
 -spec encode_priority(stream_id(), boolean(), stream_id(), 1..256) -> iodata().
@@ -208,12 +208,14 @@ encode_rst_stream(StreamId, ErrorCode) ->
 -spec encode_settings(settings()) -> iodata().
 encode_settings(Settings) ->
     Payload = encode_settings_payload(Settings),
-    Length = iolist_size(Payload),
-    [<<Length:24, ?FRAME_SETTINGS:8, 0:8, 0:1, 0:31>> | Payload].
+    Length = byte_size(Payload),
+    [<<Length:24, ?FRAME_SETTINGS:8, 0:8, 0:1, 0:31>>, Payload].
 
-%% Build settings payload as iolist to avoid binary-growth fold
 encode_settings_payload(Settings) ->
-    [[<<(settings_key_to_id(Key)):16, Value:32>>] || {Key, Value} <- maps:to_list(Settings)].
+    lists:foldl(fun({Key, Value}, Acc) ->
+        Id = settings_key_to_id(Key),
+        <<Acc/binary, Id:16, Value:32>>
+    end, <<>>, maps:to_list(Settings)).
 
 settings_key_to_id(header_table_size) -> ?SETTINGS_HEADER_TABLE_SIZE;
 settings_key_to_id(enable_push) -> ?SETTINGS_ENABLE_PUSH;
@@ -258,10 +260,9 @@ encode_window_update(StreamId, Increment) when Increment > 0 ->
     [<<4:24, ?FRAME_WINDOW_UPDATE:8, 0:8, 0:1, StreamId:31, 0:1, Increment:31>>].
 
 %% @doc Encode a CONTINUATION frame.
-%% HeaderBlock can be iodata (binary or iolist) to avoid unnecessary copies.
--spec encode_continuation(stream_id(), iodata(), boolean()) -> iodata().
+-spec encode_continuation(stream_id(), binary(), boolean()) -> iodata().
 encode_continuation(StreamId, HeaderBlock, EndHeaders) ->
-    Length = iolist_size(HeaderBlock),
+    Length = byte_size(HeaderBlock),
     Flags = case EndHeaders of true -> ?FLAG_END_HEADERS; false -> 0 end,
     [<<Length:24, ?FRAME_CONTINUATION:8, Flags:8, 0:1, StreamId:31>>, HeaderBlock].
 

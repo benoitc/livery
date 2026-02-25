@@ -125,8 +125,11 @@ start_h3_listener(Name, Opts) ->
     Handler = maps:get(handler, Opts),
     HandlerOpts = maps:get(handler_opts, Opts, #{}),
     Cert = maps:get(cert, Opts),
-    Key = maps:get(key, Opts),
+    KeyDer = maps:get(key, Opts),
     PoolSize = maps:get(pool_size, Opts, erlang:system_info(schedulers)),
+
+    %% Decode DER key to Erlang key record (quic expects decoded key)
+    Key = decode_private_key(KeyDer),
 
     %% Build QUIC server options
     QuicOpts = #{
@@ -189,3 +192,28 @@ validate_h3_opts(Opts) ->
         false -> error({missing_option, key})
     end,
     ok.
+
+%% @doc Decode a DER-encoded private key to Erlang key record.
+%% Supports RSAPrivateKey, ECPrivateKey, and PKCS#8 wrapped keys.
+%% Note: OTP 28+ public_key:der_decode('PrivateKeyInfo', ...) automatically
+%% unwraps PKCS#8 and returns the inner key record directly.
+decode_private_key(KeyDer) when is_binary(KeyDer) ->
+    %% Try PKCS#8 (PrivateKeyInfo) first - OTP unwraps automatically
+    case catch public_key:der_decode('PrivateKeyInfo', KeyDer) of
+        {'RSAPrivateKey', _, _, _, _, _, _, _, _, _, _} = Key -> Key;
+        {'ECPrivateKey', _, _, _, _, _} = Key -> Key;
+        _ ->
+            %% Try raw RSAPrivateKey
+            case catch public_key:der_decode('RSAPrivateKey', KeyDer) of
+                {'RSAPrivateKey', _, _, _, _, _, _, _, _, _, _} = Key -> Key;
+                _ ->
+                    %% Try raw ECPrivateKey
+                    case catch public_key:der_decode('ECPrivateKey', KeyDer) of
+                        {'ECPrivateKey', _, _, _, _, _} = Key -> Key;
+                        _ -> error({invalid_private_key_format, KeyDer})
+                    end
+            end
+    end;
+decode_private_key(Key) when is_tuple(Key) ->
+    %% Already decoded
+    Key.

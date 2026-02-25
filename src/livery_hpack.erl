@@ -24,15 +24,25 @@
 -type header() :: {binary(), binary()}.
 -type headers() :: [header()].
 
+%% Dynamic table using map with monotonic IDs for O(1) lookup.
+%% - entries: map from ID to {Name, Value, EntrySize}
+%% - head_id: ID of newest entry (incremented on insert)
+%% - tail_id: ID of oldest entry (incremented on eviction)
+%% Index calculation: Index 1 = head_id, Index 2 = head_id - 1, etc.
+%% Valid indices: 1 to (head_id - tail_id)
 -record(encoder, {
-    dynamic_table :: queue:queue({binary(), binary(), non_neg_integer()}),
+    entries = #{} :: #{non_neg_integer() => {binary(), binary(), non_neg_integer()}},
+    head_id = 0 :: non_neg_integer(),
+    tail_id = 0 :: non_neg_integer(),
     table_size = 0 :: non_neg_integer(),
     max_table_size = 4096 :: non_neg_integer(),
     pending_size_update = false :: boolean()
 }).
 
 -record(decoder, {
-    dynamic_table :: queue:queue({binary(), binary(), non_neg_integer()}),
+    entries = #{} :: #{non_neg_integer() => {binary(), binary(), non_neg_integer()}},
+    head_id = 0 :: non_neg_integer(),
+    tail_id = 0 :: non_neg_integer(),
     table_size = 0 :: non_neg_integer(),
     max_table_size = 4096 :: non_neg_integer()
 }).
@@ -50,7 +60,9 @@ encoder_new() ->
 -spec encoder_new(non_neg_integer()) -> encoder().
 encoder_new(MaxSize) ->
     #encoder{
-        dynamic_table = queue:new(),
+        entries = #{},
+        head_id = 0,
+        tail_id = 0,
         table_size = 0,
         max_table_size = MaxSize
     }.
@@ -117,7 +129,9 @@ decoder_new() ->
 -spec decoder_new(non_neg_integer()) -> decoder().
 decoder_new(MaxSize) ->
     #decoder{
-        dynamic_table = queue:new(),
+        entries = #{},
+        head_id = 0,
+        tail_id = 0,
         table_size = 0,
         max_table_size = MaxSize
     }.
@@ -268,30 +282,63 @@ decode_integer_rest(<<1:1, Val:7, Rest/binary>>, Acc, Shift) ->
     decode_integer_rest(Rest, Acc + (Val bsl Shift), Shift + 7).
 
 %% String encoding (section 5.2)
-%% Uses Huffman encoding when it provides smaller output
+%% Uses Huffman encoding when it provides smaller output.
+%% Fast-path: skip Huffman for very short strings (< 6 bytes) or strings
+%% with mostly high-entropy characters where Huffman savings are minimal.
 encode_string(String) when is_binary(String) ->
     LiteralLen = byte_size(String),
-    HuffmanEncoded = huffman_encode(String),
-    HuffmanLen = byte_size(HuffmanEncoded),
-
-    %% Use Huffman if it's smaller
-    case HuffmanLen < LiteralLen of
+    %% Fast-path: very short strings rarely benefit from Huffman
+    %% (overhead of Huffman encoding often exceeds savings)
+    case LiteralLen < 6 orelse is_high_entropy(String) of
         true ->
-            %% Huffman encoded (H=1)
-            if
-                HuffmanLen < 127 ->
-                    [<<1:1, HuffmanLen:7>>, HuffmanEncoded];
-                true ->
-                    [<<1:1, 127:7>> | encode_integer_rest(HuffmanLen - 127)] ++ [HuffmanEncoded]
-            end;
+            encode_string_literal(String, LiteralLen);
         false ->
-            %% Literal (H=0)
-            if
-                LiteralLen < 127 ->
-                    [<<0:1, LiteralLen:7>>, String];
+            %% Normal path: compute and compare
+            HuffmanEncoded = huffman_encode(String),
+            HuffmanLen = byte_size(HuffmanEncoded),
+            case HuffmanLen < LiteralLen of
                 true ->
-                    [<<0:1, 127:7>> | encode_integer_rest(LiteralLen - 127)] ++ [String]
+                    encode_string_huffman(HuffmanEncoded, HuffmanLen);
+                false ->
+                    encode_string_literal(String, LiteralLen)
             end
+    end.
+
+%% Check if string has high entropy (mostly non-common chars).
+%% Common HPACK chars (5-6 bit codes): 0-9, a-z, A, _, -, ., /, =, :
+%% If more than 50% are uncommon (7+ bit codes), skip Huffman.
+is_high_entropy(<<>>) -> false;
+is_high_entropy(String) ->
+    UncommonCount = count_uncommon_chars(String, 0),
+    UncommonCount * 2 > byte_size(String).
+
+count_uncommon_chars(<<>>, Count) -> Count;
+count_uncommon_chars(<<C, Rest/binary>>, Count) ->
+    %% Common chars have 5-6 bit Huffman codes
+    IsCommon = (C >= $0 andalso C =< $9) orelse
+               (C >= $a andalso C =< $z) orelse
+               C =:= $- orelse C =:= $. orelse C =:= $/ orelse
+               C =:= $= orelse C =:= $: orelse C =:= $_ orelse
+               C =:= $  orelse C =:= $A,
+    case IsCommon of
+        true -> count_uncommon_chars(Rest, Count);
+        false -> count_uncommon_chars(Rest, Count + 1)
+    end.
+
+encode_string_literal(String, LiteralLen) ->
+    if
+        LiteralLen < 127 ->
+            [<<0:1, LiteralLen:7>>, String];
+        true ->
+            [<<0:1, 127:7>> | encode_integer_rest(LiteralLen - 127)] ++ [String]
+    end.
+
+encode_string_huffman(HuffmanEncoded, HuffmanLen) ->
+    if
+        HuffmanLen < 127 ->
+            [<<1:1, HuffmanLen:7>>, HuffmanEncoded];
+        true ->
+            [<<1:1, 127:7>> | encode_integer_rest(HuffmanLen - 127)] ++ [HuffmanEncoded]
     end.
 
 %% String decoding (section 5.2)
@@ -530,6 +577,7 @@ get_static_entry(61) -> {<<"www-authenticate">>, <<>>};
 get_static_entry(_) -> undefined.
 
 %% Dynamic table operations for encoder
+%% Uses map with monotonic IDs for O(1) lookup.
 add_to_dynamic_table(Name, Value, #encoder{max_table_size = MaxSize} = Encoder) ->
     EntrySize = byte_size(Name) + byte_size(Value) + 32,
     %% First evict if necessary
@@ -537,9 +585,12 @@ add_to_dynamic_table(Name, Value, #encoder{max_table_size = MaxSize} = Encoder) 
     %% Only add if entry fits
     if
         EntrySize =< MaxSize ->
-            NewTable = queue:in({Name, Value, EntrySize}, Encoder1#encoder.dynamic_table),
-            Encoder1#encoder{dynamic_table = NewTable,
-                            table_size = Encoder1#encoder.table_size + EntrySize};
+            #encoder{entries = Entries, head_id = HeadId, table_size = TableSize} = Encoder1,
+            NewHeadId = HeadId + 1,
+            NewEntries = Entries#{NewHeadId => {Name, Value, EntrySize}},
+            Encoder1#encoder{entries = NewEntries,
+                            head_id = NewHeadId,
+                            table_size = TableSize + EntrySize};
         true ->
             Encoder1
     end.
@@ -549,19 +600,24 @@ evict_to_fit(#encoder{max_table_size = MaxSize} = Encoder, EntrySize) ->
 
 evict_to_size(Encoder, TargetSize) when TargetSize < 0 ->
     %% Clear entire table
-    Encoder#encoder{dynamic_table = queue:new(), table_size = 0};
+    Encoder#encoder{entries = #{}, head_id = 0, tail_id = 0, table_size = 0};
 evict_to_size(#encoder{table_size = Size} = Encoder, TargetSize) when Size =< TargetSize ->
     Encoder;
-evict_to_size(#encoder{dynamic_table = Table, table_size = Size} = Encoder, TargetSize) ->
-    case queue:out(Table) of
-        {{value, {_, _, EntrySize}}, NewTable} ->
-            evict_to_size(Encoder#encoder{dynamic_table = NewTable,
+evict_to_size(#encoder{entries = Entries, tail_id = TailId, table_size = Size} = Encoder, TargetSize) ->
+    %% Evict oldest entry (tail_id + 1)
+    OldestId = TailId + 1,
+    case maps:find(OldestId, Entries) of
+        {ok, {_, _, EntrySize}} ->
+            NewEntries = maps:remove(OldestId, Entries),
+            evict_to_size(Encoder#encoder{entries = NewEntries,
+                                          tail_id = OldestId,
                                           table_size = Size - EntrySize}, TargetSize);
-        {empty, _} ->
+        error ->
             Encoder#encoder{table_size = 0}
     end.
 
 %% Dynamic table operations for decoder
+%% Uses map with monotonic IDs for O(1) lookup.
 add_to_decoder_table(Name, Value, #decoder{max_table_size = MaxSize} = Decoder) ->
     EntrySize = byte_size(Name) + byte_size(Value) + 32,
     %% First evict if necessary
@@ -569,9 +625,12 @@ add_to_decoder_table(Name, Value, #decoder{max_table_size = MaxSize} = Decoder) 
     %% Only add if entry fits
     if
         EntrySize =< MaxSize ->
-            NewTable = queue:in({Name, Value, EntrySize}, Decoder1#decoder.dynamic_table),
-            Decoder1#decoder{dynamic_table = NewTable,
-                            table_size = Decoder1#decoder.table_size + EntrySize};
+            #decoder{entries = Entries, head_id = HeadId, table_size = TableSize} = Decoder1,
+            NewHeadId = HeadId + 1,
+            NewEntries = Entries#{NewHeadId => {Name, Value, EntrySize}},
+            Decoder1#decoder{entries = NewEntries,
+                            head_id = NewHeadId,
+                            table_size = TableSize + EntrySize};
         true ->
             Decoder1
     end.
@@ -580,15 +639,19 @@ evict_decoder_to_fit(#decoder{max_table_size = MaxSize} = Decoder, EntrySize) ->
     evict_decoder_to_size(Decoder, MaxSize - EntrySize).
 
 evict_decoder_to_size(Decoder, TargetSize) when TargetSize < 0 ->
-    Decoder#decoder{dynamic_table = queue:new(), table_size = 0};
+    Decoder#decoder{entries = #{}, head_id = 0, tail_id = 0, table_size = 0};
 evict_decoder_to_size(#decoder{table_size = Size} = Decoder, TargetSize) when Size =< TargetSize ->
     Decoder;
-evict_decoder_to_size(#decoder{dynamic_table = Table, table_size = Size} = Decoder, TargetSize) ->
-    case queue:out(Table) of
-        {{value, {_, _, EntrySize}}, NewTable} ->
-            evict_decoder_to_size(Decoder#decoder{dynamic_table = NewTable,
+evict_decoder_to_size(#decoder{entries = Entries, tail_id = TailId, table_size = Size} = Decoder, TargetSize) ->
+    %% Evict oldest entry (tail_id + 1)
+    OldestId = TailId + 1,
+    case maps:find(OldestId, Entries) of
+        {ok, {_, _, EntrySize}} ->
+            NewEntries = maps:remove(OldestId, Entries),
+            evict_decoder_to_size(Decoder#decoder{entries = NewEntries,
+                                                   tail_id = OldestId,
                                                    table_size = Size - EntrySize}, TargetSize);
-        {empty, _} ->
+        error ->
             Decoder#decoder{table_size = 0}
     end.
 
@@ -598,43 +661,54 @@ lookup_table(Index, _) when Index =< 61 ->
         undefined -> error;
         {Name, Value} -> {ok, Name, Value}
     end;
-lookup_table(Index, #decoder{dynamic_table = Table}) ->
+lookup_table(Index, #decoder{entries = Entries, head_id = HeadId, tail_id = TailId}) ->
     DynIndex = Index - 61,
-    lookup_dynamic(Table, DynIndex).
+    lookup_dynamic(Entries, HeadId, TailId, DynIndex).
 
-lookup_dynamic(Table, Index) ->
-    %% Dynamic table is FIFO but indexed from newest to oldest
-    %% So we need to reverse-index
-    List = queue:to_list(Table),
-    Len = length(List),
-    ReverseIndex = Len - Index + 1,
-    case ReverseIndex >= 1 andalso ReverseIndex =< Len of
+%% O(1) lookup using map with monotonic IDs.
+%% Index 1 = newest (head_id), Index 2 = head_id - 1, etc.
+lookup_dynamic(Entries, HeadId, TailId, Index) ->
+    TableSize = HeadId - TailId,
+    case Index >= 1 andalso Index =< TableSize of
         true ->
-            {Name, Value, _} = lists:nth(ReverseIndex, List),
-            {ok, Name, Value};
+            %% Index 1 = head_id, Index 2 = head_id - 1, etc.
+            ActualId = HeadId - Index + 1,
+            case maps:find(ActualId, Entries) of
+                {ok, {Name, Value, _}} ->
+                    {ok, Name, Value};
+                error ->
+                    error
+            end;
         false ->
             error
     end.
 
-%% Huffman decoding (simplified - uses lookup table)
+%% Huffman decoding - uses list accumulation for O(n) instead of O(n²).
 huffman_decode(Data) ->
-    huffman_decode(Data, <<>>, 0, 0).
+    %% Accumulate chars in reverse order as list, convert to binary at end
+    case huffman_decode_acc(Data, [], 0, 0) of
+        {ok, RevChars} ->
+            {ok, list_to_binary(lists:reverse(RevChars))};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
-huffman_decode(<<>>, Acc, _, _) ->
+huffman_decode_acc(<<>>, Acc, _, _) ->
     {ok, Acc};
-huffman_decode(<<Byte, Rest/binary>>, Acc, Bits, Code) ->
+huffman_decode_acc(<<Byte, Rest/binary>>, Acc, Bits, Code) ->
     %% Process byte bit by bit
     huffman_decode_bits(<<Byte>>, 8, Rest, Acc, Bits, Code).
 
 huffman_decode_bits(_, 0, Rest, Acc, Bits, Code) ->
-    huffman_decode(Rest, Acc, Bits, Code);
+    huffman_decode_acc(Rest, Acc, Bits, Code);
 huffman_decode_bits(<<Byte, _/binary>> = Data, BitsLeft, Rest, Acc, Bits, Code) when BitsLeft > 0 ->
     Bit = (Byte bsr (BitsLeft - 1)) band 1,
     NewCode = (Code bsl 1) bor Bit,
     NewBits = Bits + 1,
     case huffman_lookup(NewCode, NewBits) of
         {ok, Char} ->
-            huffman_decode_bits(Data, BitsLeft - 1, Rest, <<Acc/binary, Char>>, 0, 0);
+            %% Prepend char to accumulator list (O(1))
+            huffman_decode_bits(Data, BitsLeft - 1, Rest, [Char | Acc], 0, 0);
         continue ->
             huffman_decode_bits(Data, BitsLeft - 1, Rest, Acc, NewBits, NewCode);
         eos ->

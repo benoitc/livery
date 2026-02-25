@@ -210,14 +210,13 @@ encode_rst_stream(StreamId, ErrorCode) ->
 -spec encode_settings(settings()) -> iodata().
 encode_settings(Settings) ->
     Payload = encode_settings_payload(Settings),
-    Length = byte_size(Payload),
+    Length = iolist_size(Payload),
     [<<Length:24, ?FRAME_SETTINGS:8, 0:8, 0:1, 0:31>>, Payload].
 
+%% O(n) encoding using iolist instead of O(n²) binary concatenation
 encode_settings_payload(Settings) ->
-    lists:foldl(fun({Key, Value}, Acc) ->
-        Id = settings_key_to_id(Key),
-        <<Acc/binary, Id:16, Value:32>>
-    end, <<>>, maps:to_list(Settings)).
+    [<<(settings_key_to_id(Key)):16, Value:32>>
+     || {Key, Value} <- maps:to_list(Settings)].
 
 settings_key_to_id(header_table_size) -> ?SETTINGS_HEADER_TABLE_SIZE;
 settings_key_to_id(enable_push) -> ?SETTINGS_ENABLE_PUSH;

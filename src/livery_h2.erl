@@ -32,7 +32,7 @@
     scheme :: binary(),
     authority :: binary(),
     headers :: [{binary(), binary()}],
-    body :: binary() | undefined
+    body :: iolist() | undefined  %% Use iolist for O(n) body accumulation
 }).
 
 %% Connection preface
@@ -54,7 +54,7 @@
     mode = normal :: normal | tunnel,  %% tunnel for CONNECT streams
     window_size :: integer(),
     request :: undefined | #h2_request{},
-    header_block = <<>> :: binary(),  %% For CONTINUATION
+    header_block = [] :: iolist(),  %% For CONTINUATION - use iolist for O(n) accumulation
     end_headers = false :: boolean(),
     send_buffer = <<>> :: binary(),   %% Buffered data waiting for flow control
     send_end_stream = false :: boolean()  %% END_STREAM pending for buffered data
@@ -70,6 +70,11 @@
     remote_settings :: map(),
     settings_acked = false :: boolean(),
     settings_sent_at = undefined :: undefined | integer(),  %% For SETTINGS_ACK timeout
+
+    %% Cached settings for O(1) access (updated when settings change)
+    local_max_frame_size = ?DEFAULT_MAX_FRAME_SIZE :: non_neg_integer(),
+    remote_max_frame_size = ?DEFAULT_MAX_FRAME_SIZE :: non_neg_integer(),
+    remote_initial_window_size = ?DEFAULT_WINDOW_SIZE :: non_neg_integer(),
 
     %% Flow control
     conn_window_out :: integer(),  %% Outbound (to peer)
@@ -104,6 +109,10 @@ init(Opts) ->
     #h2_state{
         local_settings = LocalSettings,
         remote_settings = livery_h2_frame:default_settings(),
+        %% Initialize cached settings
+        local_max_frame_size = maps:get(max_frame_size, LocalSettings, ?DEFAULT_MAX_FRAME_SIZE),
+        remote_max_frame_size = ?DEFAULT_MAX_FRAME_SIZE,
+        remote_initial_window_size = ?DEFAULT_WINDOW_SIZE,
         conn_window_out = ?DEFAULT_WINDOW_SIZE,
         conn_window_in = ?DEFAULT_WINDOW_SIZE,
         encoder = livery_hpack:encoder_new(maps:get(header_table_size, LocalSettings)),
@@ -141,8 +150,7 @@ handle_buffer(#h2_state{phase = preface, buffer = Buffer} = State, Acc) ->
             {ok, lists:reverse(Acc), State}
     end;
 
-handle_buffer(#h2_state{buffer = Buffer, local_settings = LocalSettings} = State, Acc) ->
-    MaxFrameSize = maps:get(max_frame_size, LocalSettings, ?DEFAULT_MAX_FRAME_SIZE),
+handle_buffer(#h2_state{buffer = Buffer, local_max_frame_size = MaxFrameSize} = State, Acc) ->
     case livery_h2_frame:decode(Buffer, MaxFrameSize) of
         {ok, Frame, Rest} ->
             case handle_frame(Frame, State#h2_state{buffer = Rest}) of
@@ -229,7 +237,8 @@ handle_frame({headers, StreamId, HeaderBlock, EndStream, EndHeaders, Priority}, 
 handle_frame({continuation, StreamId, HeaderBlock, EndHeaders}, State) ->
     case get_stream(StreamId, State) of
         {ok, #stream{end_headers = false, header_block = Existing} = Stream} ->
-            NewBlock = <<Existing/binary, HeaderBlock/binary>>,
+            %% Prepend to iolist (O(1)), will reverse when finalizing
+            NewBlock = [HeaderBlock | Existing],
             case EndHeaders of
                 true ->
                     %% Complete the headers
@@ -274,12 +283,11 @@ handle_frame({data, StreamId, Data, EndStream}, State) ->
             NewConnWindow = State#h2_state.conn_window_in - DataSize,
             NewStreamWindow = Stream#stream.window_size - DataSize,
 
-            %% Accumulate body
-            ExistingBody = case Req#h2_request.body of
-                undefined -> <<>>;
-                B -> B
+            %% Accumulate body using iolist (O(1) prepend, reverse at end)
+            NewBody = case Req#h2_request.body of
+                undefined -> [Data];
+                Existing -> [Data | Existing]
             end,
-            NewBody = <<ExistingBody/binary, Data/binary>>,
             NewReq = Req#h2_request{body = NewBody},
 
             %% Batch update: compute final stream state and update once
@@ -344,13 +352,12 @@ handle_headers(StreamId, HeaderBlock, EndStream, EndHeaders, _Priority, State) -
                     RstFrame = livery_h2_frame:encode_rst_stream(StreamId, 7), %% REFUSED_STREAM
                     {ok, [{send, RstFrame}], State};
                 false ->
-                    %% Create new stream
-                    InitialWindow = maps:get(initial_window_size, State#h2_state.remote_settings),
+                    %% Create new stream (use cached initial window size for O(1) access)
                     Stream = #stream{
                         id = StreamId,
                         state = case EndStream of true -> half_closed_remote; false -> open end,
-                        window_size = InitialWindow,
-                        header_block = HeaderBlock,
+                        window_size = State#h2_state.remote_initial_window_size,
+                        header_block = [HeaderBlock],  %% Wrap in list for iolist accumulation
                         end_headers = EndHeaders
                     },
 
@@ -381,7 +388,9 @@ validate_client_stream_id(_StreamId, _MaxStreamId) ->
     true.
 
 finalize_headers(#stream{id = StreamId, header_block = HeaderBlock, state = StreamState} = Stream, State) ->
-    case livery_hpack:decode(HeaderBlock, State#h2_state.decoder) of
+    %% Flatten iolist header block (accumulated in reverse order)
+    FinalBlock = iolist_to_binary(lists:reverse(HeaderBlock)),
+    case livery_hpack:decode(FinalBlock, State#h2_state.decoder) of
         {ok, Headers, Decoder1} ->
             %% Check max_header_list_size per RFC 7540 Section 6.5.2
             MaxHeaderListSize = maps:get(max_header_list_size, State#h2_state.local_settings, 8192),
@@ -428,7 +437,7 @@ finalize_headers(#stream{id = StreamId, header_block = HeaderBlock, state = Stre
 
                             NewStream = Stream#stream{
                                 request = Request,
-                                header_block = <<>>,
+                                header_block = [],
                                 end_headers = true
                             },
                             State1 = State#h2_state{decoder = Decoder1},
@@ -554,9 +563,15 @@ apply_settings(Settings, State) ->
             update_all_stream_windows(Delta, State)
     end,
 
+    %% Update cached settings for O(1) access
+    NewRemoteMaxFrameSize = maps:get(max_frame_size, NewRemote, State1#h2_state.remote_max_frame_size),
+    NewRemoteInitialWindowSize = maps:get(initial_window_size, NewRemote, State1#h2_state.remote_initial_window_size),
+
     State1#h2_state{
         remote_settings = NewRemote,
-        encoder = Encoder
+        encoder = Encoder,
+        remote_max_frame_size = NewRemoteMaxFrameSize,
+        remote_initial_window_size = NewRemoteInitialWindowSize
     }.
 
 update_all_stream_windows(Delta, #h2_state{streams = Streams} = State) ->
@@ -578,12 +593,14 @@ update_stream(#stream{id = StreamId} = Stream,
     NewCount = case IsNew of true -> Count + 1; false -> Count end,
     State#h2_state{streams = Streams#{StreamId => Stream}, active_stream_count = NewCount}.
 
+%% Use maps:take/2 for single map operation instead of is_key + remove
 remove_stream(StreamId, #h2_state{streams = Streams, active_stream_count = Count} = State) ->
-    NewCount = case maps:is_key(StreamId, Streams) of
-        true -> max(0, Count - 1);
-        false -> Count
-    end,
-    State#h2_state{streams = maps:remove(StreamId, Streams), active_stream_count = NewCount}.
+    case maps:take(StreamId, Streams) of
+        {_Stream, NewStreams} ->
+            State#h2_state{streams = NewStreams, active_stream_count = max(0, Count - 1)};
+        error ->
+            State
+    end.
 
 %% Flow control
 maybe_send_window_updates(_StreamId, DataSize, _State) when DataSize < 16384 ->
@@ -630,8 +647,8 @@ drain_stream_buffer_internal(StreamId, State) ->
             %% Nothing to drain
             {ok, [], State, drained};
         {ok, #stream{send_buffer = Buffer, send_end_stream = EndStream} = Stream} ->
-            %% Try to send buffered data
-            MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+            %% Try to send buffered data (use cached max_frame_size for O(1) access)
+            MaxFrameSize = State#h2_state.remote_max_frame_size,
             ConnWindow = State#h2_state.conn_window_out,
             StreamWindow = Stream#stream.window_size,
 
@@ -709,8 +726,8 @@ send_response(StreamId, Status, Headers, Body, State) ->
     %% Encode headers with HPACK
     {HeaderBlock, Encoder1} = livery_hpack:encode(AllHeaders, State#h2_state.encoder),
 
-    %% Get peer's max_frame_size
-    MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+    %% Use cached max_frame_size for O(1) access
+    MaxFrameSize = State#h2_state.remote_max_frame_size,
 
     EndStream = byte_size(Body) =:= 0,
     HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlock, EndStream, true),
@@ -778,13 +795,15 @@ send_stream_data(StreamId, Data, EndStream, State) ->
             send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State);
         error ->
             %% Stream not found - create minimal state for sending
-            InitialWindow = maps:get(initial_window_size, State#h2_state.remote_settings),
-            Stream = #stream{id = StreamId, state = open, window_size = InitialWindow},
+            %% Use cached initial window size for O(1) access
+            Stream = #stream{id = StreamId, state = open,
+                            window_size = State#h2_state.remote_initial_window_size},
             send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State)
     end.
 
 send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State) ->
-    MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
+    %% Use cached max_frame_size for O(1) access
+    MaxFrameSize = State#h2_state.remote_max_frame_size,
     ConnWindow = State#h2_state.conn_window_out,
     StreamWindow = Stream#stream.window_size,
     DataSize = byte_size(Data),
@@ -861,19 +880,25 @@ close(ErrorCode, #h2_state{max_stream_id = LastStreamId}) ->
 request_to_livery_req(#h2_request{method = Method, path = Path, qs = Qs,
                                    headers = Headers, body = Body},
                       Handler, HandlerOpts, Peer) ->
+    %% Flatten iolist body (accumulated in reverse order)
+    FinalBody = case Body of
+        undefined -> <<>>;
+        B when is_binary(B) -> B;
+        B -> iolist_to_binary(lists:reverse(B))
+    end,
     #livery_req{
         method = Method,
         path = Path,
         qs = Qs,
         version = {2, 0},
         headers = Headers,
-        body = case Body of undefined -> <<>>; B -> B end,
+        body = FinalBody,
         peer = Peer,
         sock = undefined,
         handler = Handler,
         handler_opts = HandlerOpts,
-        has_body = Body =/= undefined andalso byte_size(Body) > 0,
-        body_length = case Body of undefined -> 0; B -> byte_size(B) end
+        has_body = FinalBody =/= <<>>,
+        body_length = byte_size(FinalBody)
     }.
 
 %% @doc Get the remaining time until SETTINGS_ACK timeout.

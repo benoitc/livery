@@ -198,6 +198,41 @@ detect_protocol(State, Buffer) ->
     end.
 
 %% Main connection loop
+connection_loop(#state{socket = Socket, protocol = h2,
+                        protocol_state = ProtocolState, transport = Transport,
+                        idle_timeout = IdleTimeout} = State) ->
+    %% For H2, use the minimum of idle timeout and SETTINGS_ACK timeout
+    SettingsTimeout = livery_h2:settings_ack_timeout(ProtocolState),
+    Timeout = case SettingsTimeout of
+        infinity -> IdleTimeout;
+        T -> min(T, IdleTimeout)
+    end,
+    receive
+        {tcp, Socket, Data} ->
+            handle_data(h2, Data, State);
+        {ssl, Socket, Data} ->
+            handle_data(h2, Data, State);
+        {tcp_closed, Socket} ->
+            terminate(State);
+        {ssl_closed, Socket} ->
+            terminate(State);
+        {tcp_error, Socket, _Reason} ->
+            terminate(State);
+        {ssl_error, Socket, _Reason} ->
+            terminate(State)
+    after Timeout ->
+        %% Check if this is a settings timeout or idle timeout
+        case livery_h2:check_settings_timeout(ProtocolState) of
+            timeout ->
+                %% SETTINGS_ACK timeout per RFC 7540 Section 6.5
+                GoawayFrame = livery_h2:close(4, ProtocolState), %% SETTINGS_TIMEOUT
+                send_data(Socket, Transport, GoawayFrame),
+                terminate(State);
+            ok ->
+                %% Idle timeout
+                terminate(State)
+        end
+    end;
 connection_loop(#state{socket = Socket, protocol = Protocol,
                         idle_timeout = IdleTimeout} = State) ->
     receive
@@ -268,16 +303,40 @@ handle_h1_data(Data, #state{socket = Socket, transport = Transport,
     end.
 
 %% HTTP/2 data handling
+%% Optimized to batch all response frames and send in a single syscall
 handle_h2_data(Data, #state{socket = Socket, transport = Transport,
                              handler = Handler, handler_opts = HandlerOpts,
                              peer = Peer, protocol_state = ProtocolState} = State) ->
     case livery_h2:handle_data(Data, ProtocolState) of
         {ok, Responses, NewProtocolState} ->
-            case process_h2_responses(Responses, Socket, Transport, Handler,
-                                       HandlerOpts, Peer, NewProtocolState) of
-                {ok, FinalProtocolState} ->
-                    set_active(State),
-                    connection_loop(State#state{protocol_state = FinalProtocolState});
+            case process_h2_responses(Responses, Handler, HandlerOpts, Peer,
+                                       NewProtocolState, []) of
+                {ok, FrameAcc, FinalProtocolState} ->
+                    %% Send all batched frames in one syscall
+                    case send_h2_batch(FrameAcc, Socket, Transport) of
+                        ok ->
+                            set_active(State),
+                            connection_loop(State#state{protocol_state = FinalProtocolState});
+                        {error, _Reason} ->
+                            terminate(State#state{protocol_state = FinalProtocolState})
+                    end;
+                {stream, StreamId, Status, Headers, StreamFun, FrameAcc, FinalProtocolState} ->
+                    %% Flush batched frames, then handle streaming response
+                    case send_h2_batch(FrameAcc, Socket, Transport) of
+                        ok ->
+                            case handle_h2_stream_response(StreamId, Status, Headers, StreamFun,
+                                                           Socket, Transport, FinalProtocolState) of
+                                {ok, StreamState} ->
+                                    set_active(State),
+                                    connection_loop(State#state{protocol_state = StreamState});
+                                {error, _Reason, StreamState} ->
+                                    GoawayFrame = livery_h2:close(1, StreamState),
+                                    send_data(Socket, Transport, GoawayFrame),
+                                    terminate(State#state{protocol_state = StreamState})
+                            end;
+                        {error, _Reason} ->
+                            terminate(State#state{protocol_state = FinalProtocolState})
+                    end;
                 {error, _Reason, FinalProtocolState} ->
                     GoawayFrame = livery_h2:close(1, FinalProtocolState),
                     send_data(Socket, Transport, GoawayFrame),
@@ -290,43 +349,40 @@ handle_h2_data(Data, #state{socket = Socket, transport = Transport,
             terminate(State#state{protocol_state = NewProtocolState})
     end.
 
-%% Process HTTP/2 responses
-process_h2_responses([], _Socket, _Transport, _Handler, _HandlerOpts, _Peer, State) ->
-    {ok, State};
-process_h2_responses([settings_acked | Rest], Socket, Transport, Handler,
-                      HandlerOpts, Peer, State) ->
-    process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State);
-process_h2_responses([{send, IoData} | Rest], Socket, Transport, Handler,
-                      HandlerOpts, Peer, State) ->
-    case send_data(Socket, Transport, IoData) of
-        ok ->
-            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State);
-        {error, Reason} ->
-            {error, Reason, State}
-    end;
-process_h2_responses([{request, StreamId, H2Request} | Rest], Socket, Transport,
-                      Handler, HandlerOpts, Peer, State) ->
-    case handle_h2_request(StreamId, H2Request, Socket, Transport, Handler,
-                            HandlerOpts, Peer, State) of
-        {ok, NewState} ->
-            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
-        {error, Reason, NewState} ->
-            {error, Reason, NewState}
-    end;
-process_h2_responses([{http_error, StreamId, Status} | Rest], Socket, Transport,
-                      Handler, HandlerOpts, Peer, State) ->
-    case send_h2_error_response(StreamId, Status, Socket, Transport, State) of
-        {ok, NewState} ->
-            process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, NewState);
-        {error, Reason, NewState} ->
-            {error, Reason, NewState}
-    end;
-process_h2_responses([_ | Rest], Socket, Transport, Handler, HandlerOpts, Peer, State) ->
-    %% Skip unknown response types
-    process_h2_responses(Rest, Socket, Transport, Handler, HandlerOpts, Peer, State).
+%% Send batched H2 frames in one syscall
+send_h2_batch([], _Socket, _Transport) ->
+    ok;
+send_h2_batch(FrameAcc, Socket, Transport) ->
+    send_data(Socket, Transport, lists:reverse(FrameAcc)).
 
-%% Handle an HTTP/2 request
-handle_h2_request(StreamId, H2Request, Socket, Transport, Handler, HandlerOpts, Peer, State) ->
+%% Process HTTP/2 responses - accumulates frames instead of sending immediately
+process_h2_responses([], _Handler, _HandlerOpts, _Peer, State, FrameAcc) ->
+    {ok, FrameAcc, State};
+process_h2_responses([settings_acked | Rest], Handler, HandlerOpts, Peer, State, FrameAcc) ->
+    process_h2_responses(Rest, Handler, HandlerOpts, Peer, State, FrameAcc);
+process_h2_responses([{send, IoData} | Rest], Handler, HandlerOpts, Peer, State, FrameAcc) ->
+    %% Accumulate frame instead of sending
+    process_h2_responses(Rest, Handler, HandlerOpts, Peer, State, [IoData | FrameAcc]);
+process_h2_responses([{request, StreamId, H2Request} | Rest], Handler, HandlerOpts, Peer, State, FrameAcc) ->
+    case handle_h2_request(StreamId, H2Request, Handler, HandlerOpts, Peer, State) of
+        {ok, ResponseFrames, NewState} ->
+            %% Accumulate response frames
+            process_h2_responses(Rest, Handler, HandlerOpts, Peer, NewState, [ResponseFrames | FrameAcc]);
+        {stream, Status, Headers, StreamFun, NewState} ->
+            %% Streaming response - need to flush and handle specially
+            {stream, StreamId, Status, Headers, StreamFun, FrameAcc, NewState};
+        {error, Reason, NewState} ->
+            {error, Reason, NewState}
+    end;
+process_h2_responses([{http_error, StreamId, Status} | Rest], Handler, HandlerOpts, Peer, State, FrameAcc) ->
+    {ResponseFrames, NewState} = make_h2_error_response(StreamId, Status, State),
+    process_h2_responses(Rest, Handler, HandlerOpts, Peer, NewState, [ResponseFrames | FrameAcc]);
+process_h2_responses([_ | Rest], Handler, HandlerOpts, Peer, State, FrameAcc) ->
+    %% Skip unknown response types
+    process_h2_responses(Rest, Handler, HandlerOpts, Peer, State, FrameAcc).
+
+%% Handle an HTTP/2 request - returns frames instead of sending
+handle_h2_request(StreamId, H2Request, Handler, HandlerOpts, Peer, State) ->
     Req = livery_h2:request_to_livery_req(H2Request, Handler, HandlerOpts, Peer),
     try
         case Handler:init(Req, HandlerOpts) of
@@ -335,23 +391,32 @@ handle_h2_request(StreamId, H2Request, Socket, Transport, Handler, HandlerOpts, 
                     {reply, Status, Headers, Body, _NewHandlerState} ->
                         {ok, ResponseFrames, NewState} =
                             livery_h2:send_response(StreamId, Status, Headers, Body, State),
-                        case send_data(Socket, Transport, ResponseFrames) of
-                            ok -> {ok, NewState};
-                            {error, Reason} -> {error, Reason, NewState}
-                        end;
+                        {ok, ResponseFrames, NewState};
                     {stream, Status, Headers, StreamFun, _NewHandlerState} ->
-                        handle_h2_stream_response(StreamId, Status, Headers, StreamFun,
-                                                   Socket, Transport, State);
+                        %% Streaming needs special handling - return marker
+                        {stream, Status, Headers, StreamFun, State};
                     _ ->
-                        send_h2_error_response(StreamId, 500, Socket, Transport, State)
+                        make_h2_error_result(StreamId, 500, State)
                 end;
             {error, _Reason} ->
-                send_h2_error_response(StreamId, 500, Socket, Transport, State)
+                make_h2_error_result(StreamId, 500, State)
         end
     catch
         _:_ ->
-            send_h2_error_response(StreamId, 500, Socket, Transport, State)
+            make_h2_error_result(StreamId, 500, State)
     end.
+
+%% Helper to create error response result
+make_h2_error_result(StreamId, Status, State) ->
+    {ResponseFrames, NewState} = make_h2_error_response(StreamId, Status, State),
+    {ok, ResponseFrames, NewState}.
+
+%% Make error response frames (doesn't send)
+make_h2_error_response(StreamId, Status, State) ->
+    Body = livery_resp:status_text(Status),
+    Headers = [{<<"content-type">>, <<"text/plain">>}],
+    {ok, ResponseFrames, NewState} = livery_h2:send_response(StreamId, Status, Headers, Body, State),
+    {ResponseFrames, NewState}.
 
 handle_h2_stream_response(StreamId, Status, Headers, StreamFun, Socket, Transport, State) ->
     {ok, HeaderFrames, State1} = livery_h2:send_response(StreamId, Status, Headers, <<>>, State),
@@ -410,15 +475,6 @@ stream_h2_chunks(StreamId, StreamFun, Socket, Transport, State) ->
             {FinalState2, _} = get(StateRef),
             erase(StateRef),
             {ok, FinalState2}
-    end.
-
-send_h2_error_response(StreamId, Status, Socket, Transport, State) ->
-    Body = livery_resp:status_text(Status),
-    Headers = [{<<"content-type">>, <<"text/plain">>}],
-    {ok, ResponseFrames, NewState} = livery_h2:send_response(StreamId, Status, Headers, Body, State),
-    case send_data(Socket, Transport, ResponseFrames) of
-        ok -> {ok, NewState};
-        {error, Reason} -> {error, Reason, NewState}
     end.
 
 %% Helpers

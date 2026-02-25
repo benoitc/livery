@@ -17,7 +17,9 @@
     send_stream_end/2,
     send_trailers/3,
     close/2,
-    request_to_livery_req/4
+    request_to_livery_req/4,
+    settings_ack_timeout/1,
+    check_settings_timeout/1
 ]).
 
 -include("livery.hrl").
@@ -67,14 +69,16 @@
     local_settings :: map(),
     remote_settings :: map(),
     settings_acked = false :: boolean(),
+    settings_sent_at = undefined :: undefined | integer(),  %% For SETTINGS_ACK timeout
 
     %% Flow control
     conn_window_out :: integer(),  %% Outbound (to peer)
     conn_window_in :: integer(),   %% Inbound (from peer)
-    conn_blocked_streams = [] :: [non_neg_integer()],  %% Streams blocked on connection window
+    conn_blocked_streams = sets:new([{version, 2}]) :: sets:set(non_neg_integer()),  %% Streams blocked on connection window
 
     %% Streams
     streams = #{} :: #{non_neg_integer() => #stream{}},
+    active_stream_count = 0 :: non_neg_integer(),  %% Cached count for O(1) lookup
     last_stream_id = 0 :: non_neg_integer(),
     max_stream_id = 0 :: non_neg_integer(),
 
@@ -123,10 +127,11 @@ handle_buffer(#h2_state{phase = preface, buffer = Buffer} = State, Acc) ->
             <<Preface:?PREFACE_SIZE/binary, Rest/binary>> = Buffer,
             case Preface =:= ?CONNECTION_PREFACE of
                 true ->
-                    %% Send our SETTINGS
+                    %% Send our SETTINGS, record timestamp for timeout
                     SettingsFrame = livery_h2_frame:encode_settings(State#h2_state.local_settings),
                     handle_buffer(
-                        State#h2_state{phase = settings, buffer = Rest},
+                        State#h2_state{phase = settings, buffer = Rest,
+                                       settings_sent_at = erlang:monotonic_time(millisecond)},
                         [{send, SettingsFrame} | Acc]
                     );
                 false ->
@@ -136,8 +141,9 @@ handle_buffer(#h2_state{phase = preface, buffer = Buffer} = State, Acc) ->
             {ok, lists:reverse(Acc), State}
     end;
 
-handle_buffer(#h2_state{buffer = Buffer} = State, Acc) ->
-    case livery_h2_frame:decode(Buffer) of
+handle_buffer(#h2_state{buffer = Buffer, local_settings = LocalSettings} = State, Acc) ->
+    MaxFrameSize = maps:get(max_frame_size, LocalSettings, ?DEFAULT_MAX_FRAME_SIZE),
+    case livery_h2_frame:decode(Buffer, MaxFrameSize) of
         {ok, Frame, Rest} ->
             case handle_frame(Frame, State#h2_state{buffer = Rest}) of
                 {ok, Responses, NewState} ->
@@ -152,16 +158,17 @@ handle_buffer(#h2_state{buffer = Buffer} = State, Acc) ->
     end.
 
 %% Frame handlers
-handle_frame({settings, Settings}, #h2_state{phase = settings} = State) ->
-    %% First SETTINGS from peer
-    NewState = apply_settings(Settings, State),
-    Ack = livery_h2_frame:encode_settings_ack(),
-    {ok, [{send, Ack}], NewState#h2_state{phase = open}};
-
-handle_frame({settings, Settings}, #h2_state{phase = open} = State) ->
-    NewState = apply_settings(Settings, State),
-    Ack = livery_h2_frame:encode_settings_ack(),
-    {ok, [{send, Ack}], NewState};
+handle_frame({settings, Settings}, #h2_state{phase = Phase} = State)
+  when Phase =:= settings; Phase =:= open ->
+    case validate_settings(Settings) of
+        ok ->
+            NewState = apply_settings(Settings, State),
+            Ack = livery_h2_frame:encode_settings_ack(),
+            NextPhase = case Phase of settings -> open; _ -> Phase end,
+            {ok, [{send, Ack}], NewState#h2_state{phase = NextPhase}};
+        {error, Reason} ->
+            {error, Reason, State}
+    end;
 
 handle_frame({settings_ack}, #h2_state{settings_acked = false} = State) ->
     %% First SETTINGS_ACK - notify connection handler
@@ -243,22 +250,24 @@ handle_frame({data, StreamId, Data, EndStream}, State) ->
             NewConnWindow = State#h2_state.conn_window_in - DataSize,
             NewStreamWindow = Stream#stream.window_size - DataSize,
 
-            NewStream = Stream#stream{window_size = NewStreamWindow},
-            State1 = State#h2_state{conn_window_in = NewConnWindow},
-            State2 = update_stream(NewStream, State1),
-
-            %% Send window updates if needed
-            WindowUpdates = maybe_send_window_updates(StreamId, DataSize, State2),
-
-            case EndStream of
+            %% Batch update: compute final stream state and update once
+            {FinalStream, Responses} = case EndStream of
                 true ->
-                    %% Tunnel closed by peer
-                    FinalStream = NewStream#stream{state = half_closed_remote},
-                    State3 = update_stream(FinalStream, State2),
-                    {ok, [{tunnel_data, StreamId, Data}, {tunnel_closed, StreamId} | WindowUpdates], State3};
+                    {Stream#stream{window_size = NewStreamWindow, state = half_closed_remote},
+                     [{tunnel_data, StreamId, Data}, {tunnel_closed, StreamId}]};
                 false ->
-                    {ok, [{tunnel_data, StreamId, Data} | WindowUpdates], State2}
-            end;
+                    {Stream#stream{window_size = NewStreamWindow},
+                     [{tunnel_data, StreamId, Data}]}
+            end,
+
+            %% Single state update
+            State1 = State#h2_state{
+                conn_window_in = NewConnWindow,
+                streams = (State#h2_state.streams)#{StreamId => FinalStream}
+            },
+            WindowUpdates = maybe_send_window_updates(StreamId, DataSize, State1),
+            {ok, Responses ++ WindowUpdates, State1};
+
         {ok, #stream{state = open, request = Req} = Stream} ->
             %% Normal request - accumulate body
             DataSize = byte_size(Data),
@@ -272,26 +281,26 @@ handle_frame({data, StreamId, Data, EndStream}, State) ->
             end,
             NewBody = <<ExistingBody/binary, Data/binary>>,
             NewReq = Req#h2_request{body = NewBody},
-            NewStream = Stream#stream{
-                window_size = NewStreamWindow,
-                request = NewReq
-            },
 
-            State1 = State#h2_state{conn_window_in = NewConnWindow},
-            State2 = update_stream(NewStream, State1),
-
-            %% Send window updates if needed
-            Responses = maybe_send_window_updates(StreamId, DataSize, State2),
-
-            case EndStream of
+            %% Batch update: compute final stream state and update once
+            {FinalStream, RequestResponse} = case EndStream of
                 true ->
-                    %% Request complete
-                    FinalStream = NewStream#stream{state = half_closed_remote},
-                    State3 = update_stream(FinalStream, State2),
-                    {ok, [{request, StreamId, NewReq} | Responses], State3};
+                    {Stream#stream{window_size = NewStreamWindow, request = NewReq,
+                                   state = half_closed_remote},
+                     [{request, StreamId, NewReq}]};
                 false ->
-                    {ok, Responses, State2}
-            end;
+                    {Stream#stream{window_size = NewStreamWindow, request = NewReq},
+                     []}
+            end,
+
+            %% Single state update
+            State1 = State#h2_state{
+                conn_window_in = NewConnWindow,
+                streams = (State#h2_state.streams)#{StreamId => FinalStream}
+            },
+            WindowUpdates = maybe_send_window_updates(StreamId, DataSize, State1),
+            {ok, RequestResponse ++ WindowUpdates, State1};
+
         {ok, #stream{state = half_closed_remote}} ->
             RstFrame = livery_h2_frame:encode_rst_stream(StreamId, 5), %% STREAM_CLOSED
             {ok, [{send, RstFrame}], State};
@@ -328,7 +337,7 @@ handle_headers(StreamId, HeaderBlock, EndStream, EndHeaders, _Priority, State) -
         true ->
             %% Check max_concurrent_streams limit
             MaxStreams = maps:get(max_concurrent_streams, State#h2_state.local_settings, ?DEFAULT_MAX_CONCURRENT_STREAMS),
-            ActiveCount = count_active_streams(State#h2_state.streams),
+            ActiveCount = State#h2_state.active_stream_count,
             case ActiveCount >= MaxStreams of
                 true ->
                     %% Refuse stream - too many concurrent streams
@@ -356,15 +365,6 @@ handle_headers(StreamId, HeaderBlock, EndStream, EndHeaders, _Priority, State) -
                     end
             end
     end.
-
-%% Count active (non-closed) streams
-count_active_streams(Streams) ->
-    maps:fold(fun(_StreamId, #stream{state = StreamState}, Acc) ->
-        case StreamState of
-            closed -> Acc;
-            _ -> Acc + 1
-        end
-    end, 0, Streams).
 
 %% Validate client-initiated stream ID per RFC 7540 Section 5.1.1
 %% Returns true or {error, Reason}
@@ -521,6 +521,21 @@ is_valid_request_pseudo_header(<<":path">>) -> true;
 is_valid_request_pseudo_header(_) -> false.
 
 %% Apply peer's settings
+%% Validate settings values per RFC 7540 Section 6.5.2
+-spec validate_settings(map()) -> ok | {error, atom()}.
+validate_settings(Settings) ->
+    validate_settings_list(maps:to_list(Settings)).
+
+validate_settings_list([]) -> ok;
+validate_settings_list([{enable_push, V} | _]) when V > 1 ->
+    {error, protocol_error};
+validate_settings_list([{initial_window_size, V} | _]) when V > 2147483647 ->
+    {error, flow_control_error};
+validate_settings_list([{max_frame_size, V} | _]) when V < 16384; V > 16777215 ->
+    {error, protocol_error};
+validate_settings_list([_ | Rest]) ->
+    validate_settings_list(Rest).
+
 apply_settings(Settings, State) ->
     NewRemote = maps:merge(State#h2_state.remote_settings, Settings),
 
@@ -557,11 +572,18 @@ get_stream(StreamId, #h2_state{streams = Streams}) ->
         error -> error
     end.
 
-update_stream(#stream{id = StreamId} = Stream, #h2_state{streams = Streams} = State) ->
-    State#h2_state{streams = Streams#{StreamId => Stream}}.
+update_stream(#stream{id = StreamId} = Stream,
+              #h2_state{streams = Streams, active_stream_count = Count} = State) ->
+    IsNew = not maps:is_key(StreamId, Streams),
+    NewCount = case IsNew of true -> Count + 1; false -> Count end,
+    State#h2_state{streams = Streams#{StreamId => Stream}, active_stream_count = NewCount}.
 
-remove_stream(StreamId, #h2_state{streams = Streams} = State) ->
-    State#h2_state{streams = maps:remove(StreamId, Streams)}.
+remove_stream(StreamId, #h2_state{streams = Streams, active_stream_count = Count} = State) ->
+    NewCount = case maps:is_key(StreamId, Streams) of
+        true -> max(0, Count - 1);
+        false -> Count
+    end,
+    State#h2_state{streams = maps:remove(StreamId, Streams), active_stream_count = NewCount}.
 
 %% Flow control
 maybe_send_window_updates(_StreamId, DataSize, _State) when DataSize < 16384 ->
@@ -573,20 +595,24 @@ maybe_send_window_updates(StreamId, DataSize, _State) ->
     [{send, ConnUpdate}, {send, StreamUpdate}].
 
 %% @doc Drain blocked streams after connection window update.
-drain_blocked_streams(#h2_state{conn_blocked_streams = []} = State) ->
-    {ok, [], State};
 drain_blocked_streams(#h2_state{conn_blocked_streams = BlockedStreams} = State) ->
-    drain_blocked_streams(BlockedStreams, [], State, []).
+    case sets:size(BlockedStreams) of
+        0 -> {ok, [], State};
+        _ -> drain_blocked_streams_loop(sets:to_list(BlockedStreams),
+                                         sets:new([{version, 2}]), State, [])
+    end.
 
-drain_blocked_streams([], StillBlocked, State, FrameAcc) ->
-    NewState = State#h2_state{conn_blocked_streams = lists:reverse(StillBlocked)},
+drain_blocked_streams_loop([], StillBlocked, State, FrameAcc) ->
+    NewState = State#h2_state{conn_blocked_streams = StillBlocked},
     {ok, [{send, F} || F <- lists:reverse(FrameAcc)], NewState};
-drain_blocked_streams([StreamId | Rest], StillBlocked, State, FrameAcc) ->
+drain_blocked_streams_loop([StreamId | Rest], StillBlocked, State, FrameAcc) ->
     case drain_stream_buffer_internal(StreamId, State) of
         {ok, Frames, NewState, still_blocked} ->
-            drain_blocked_streams(Rest, [StreamId | StillBlocked], NewState, Frames ++ FrameAcc);
+            drain_blocked_streams_loop(Rest, sets:add_element(StreamId, StillBlocked),
+                                       NewState, lists:reverse(Frames, FrameAcc));
         {ok, Frames, NewState, drained} ->
-            drain_blocked_streams(Rest, StillBlocked, NewState, Frames ++ FrameAcc)
+            drain_blocked_streams_loop(Rest, StillBlocked, NewState,
+                                       lists:reverse(Frames, FrameAcc))
     end.
 
 %% @doc Drain a stream's send buffer after window update.
@@ -682,13 +708,12 @@ send_response(StreamId, Status, Headers, Body, State) ->
 
     %% Encode headers with HPACK
     {HeaderBlock, Encoder1} = livery_hpack:encode(AllHeaders, State#h2_state.encoder),
-    HeaderBlockBin = iolist_to_binary(HeaderBlock),
 
     %% Get peer's max_frame_size
     MaxFrameSize = maps:get(max_frame_size, State#h2_state.remote_settings, ?DEFAULT_MAX_FRAME_SIZE),
 
     EndStream = byte_size(Body) =:= 0,
-    HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, EndStream, true),
+    HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlock, EndStream, true),
 
     Frames = case EndStream of
         true ->
@@ -698,13 +723,9 @@ send_response(StreamId, Status, Headers, Body, State) ->
             [HeadersFrame | DataFrames]
     end,
 
-    %% Update stream state
-    NewState = case get_stream(StreamId, State) of
-        {ok, Stream} ->
-            update_stream(Stream#stream{state = closed}, State#h2_state{encoder = Encoder1});
-        error ->
-            State#h2_state{encoder = Encoder1}
-    end,
+    %% Remove stream - response with END_STREAM closes the stream
+    %% This fixes the memory leak where streams were marked closed but never removed
+    NewState = remove_stream(StreamId, State#h2_state{encoder = Encoder1}),
 
     {ok, Frames, NewState}.
 
@@ -721,12 +742,11 @@ send_connect_response(StreamId, Status, Headers, State) ->
 
     %% Encode headers with HPACK
     {HeaderBlock, Encoder1} = livery_hpack:encode(AllHeaders, State#h2_state.encoder),
-    HeaderBlockBin = iolist_to_binary(HeaderBlock),
 
     %% CONNECT responses: END_STREAM must NOT be set for success (2xx)
     %% For failures (non-2xx), we set END_STREAM
     EndStream = Status < 200 orelse Status >= 300,
-    HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, EndStream, true),
+    HeadersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlock, EndStream, true),
 
     %% Update stream state
     NewState = case get_stream(StreamId, State) of
@@ -779,10 +799,7 @@ send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State) ->
                 send_buffer = <<(Stream#stream.send_buffer)/binary, Data/binary>>,
                 send_end_stream = EndStream
             },
-            BlockedStreams = case lists:member(StreamId, State#h2_state.conn_blocked_streams) of
-                true -> State#h2_state.conn_blocked_streams;
-                false -> [StreamId | State#h2_state.conn_blocked_streams]
-            end,
+            BlockedStreams = sets:add_element(StreamId, State#h2_state.conn_blocked_streams),
             NewState = update_stream(NewStream, State#h2_state{conn_blocked_streams = BlockedStreams}),
             {buffered, DataSize, NewState};
         _ when AvailableWindow >= DataSize ->
@@ -791,10 +808,7 @@ send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State) ->
             NewStream = Stream#stream{window_size = StreamWindow - DataSize},
             NewState = case EndStream of
                 true ->
-                    State#h2_state{
-                        conn_window_out = ConnWindow - DataSize,
-                        streams = maps:remove(StreamId, State#h2_state.streams)
-                    };
+                    remove_stream(StreamId, State#h2_state{conn_window_out = ConnWindow - DataSize});
                 false ->
                     update_stream(NewStream, State#h2_state{conn_window_out = ConnWindow - DataSize})
             end,
@@ -808,10 +822,7 @@ send_stream_data_with_fc(StreamId, Data, EndStream, Stream, State) ->
                 send_buffer = <<(Stream#stream.send_buffer)/binary, ToBuffer/binary>>,
                 send_end_stream = EndStream
             },
-            BlockedStreams = case lists:member(StreamId, State#h2_state.conn_blocked_streams) of
-                true -> State#h2_state.conn_blocked_streams;
-                false -> [StreamId | State#h2_state.conn_blocked_streams]
-            end,
+            BlockedStreams = sets:add_element(StreamId, State#h2_state.conn_blocked_streams),
             NewState = update_stream(NewStream,
                                     State#h2_state{conn_window_out = ConnWindow - AvailableWindow,
                                                    conn_blocked_streams = BlockedStreams}),
@@ -831,10 +842,9 @@ send_stream_end(StreamId, State) ->
 send_trailers(StreamId, Trailers, State) ->
     %% Encode trailers with HPACK
     {HeaderBlock, Encoder1} = livery_hpack:encode(Trailers, State#h2_state.encoder),
-    HeaderBlockBin = iolist_to_binary(HeaderBlock),
 
     %% HEADERS frame with END_STREAM and END_HEADERS flags
-    TrailersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlockBin, true, true),
+    TrailersFrame = livery_h2_frame:encode_headers(StreamId, HeaderBlock, true, true),
 
     %% Update stream state and remove stream (END_STREAM was sent)
     NewState = State#h2_state{encoder = Encoder1},
@@ -865,3 +875,22 @@ request_to_livery_req(#h2_request{method = Method, path = Path, qs = Qs,
         has_body = Body =/= undefined andalso byte_size(Body) > 0,
         body_length = case Body of undefined -> 0; B -> byte_size(B) end
     }.
+
+%% @doc Get the remaining time until SETTINGS_ACK timeout.
+%% Returns infinity if already acked or no SETTINGS was sent.
+-spec settings_ack_timeout(state()) -> integer() | infinity.
+settings_ack_timeout(#h2_state{settings_acked = true}) -> infinity;
+settings_ack_timeout(#h2_state{settings_sent_at = undefined}) -> infinity;
+settings_ack_timeout(#h2_state{settings_sent_at = SentAt}) ->
+    max(0, 5000 - (erlang:monotonic_time(millisecond) - SentAt)).
+
+%% @doc Check if SETTINGS_ACK has timed out.
+%% Returns ok or timeout.
+-spec check_settings_timeout(state()) -> ok | timeout.
+check_settings_timeout(#h2_state{settings_acked = true}) -> ok;
+check_settings_timeout(#h2_state{settings_sent_at = undefined}) -> ok;
+check_settings_timeout(#h2_state{settings_sent_at = SentAt}) ->
+    case erlang:monotonic_time(millisecond) - SentAt >= 5000 of
+        true -> timeout;
+        false -> ok
+    end.

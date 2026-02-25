@@ -30,6 +30,7 @@
     encode_continuation/3,
     %% Decoding
     decode/1,
+    decode/2,
     decode_settings_payload/1,
     %% Constants
     frame_header_size/0,
@@ -171,13 +172,13 @@ encode_data(StreamId, Data, EndStream) ->
     [<<Length:24, ?FRAME_DATA:8, Flags:8, 0:1, StreamId:31>>, Data].
 
 %% @doc Encode a HEADERS frame.
--spec encode_headers(stream_id(), binary(), boolean()) -> iodata().
+-spec encode_headers(stream_id(), iodata(), boolean()) -> iodata().
 encode_headers(StreamId, HeaderBlock, EndStream) ->
     encode_headers(StreamId, HeaderBlock, EndStream, true).
 
--spec encode_headers(stream_id(), binary(), boolean(), boolean()) -> iodata().
+-spec encode_headers(stream_id(), iodata(), boolean(), boolean()) -> iodata().
 encode_headers(StreamId, HeaderBlock, EndStream, EndHeaders) ->
-    Length = byte_size(HeaderBlock),
+    Length = iolist_size(HeaderBlock),
     Flags = (case EndStream of true -> ?FLAG_END_STREAM; false -> 0 end) bor
             (case EndHeaders of true -> ?FLAG_END_HEADERS; false -> 0 end),
     [<<Length:24, ?FRAME_HEADERS:8, Flags:8, 0:1, StreamId:31>>, HeaderBlock].
@@ -185,8 +186,9 @@ encode_headers(StreamId, HeaderBlock, EndStream, EndHeaders) ->
 encode_headers_with_priority(StreamId, HeaderBlock, EndStream, EndHeaders, {Exclusive, StreamDep, Weight}) ->
     E = case Exclusive of true -> 1; false -> 0 end,
     PriorityData = <<E:1, StreamDep:31, (Weight - 1):8>>,
-    Payload = <<PriorityData/binary, HeaderBlock/binary>>,
-    Length = byte_size(Payload),
+    %% Build payload as iolist to avoid binary copy
+    Payload = [PriorityData, HeaderBlock],
+    Length = 5 + iolist_size(HeaderBlock),
     Flags = ?FLAG_PRIORITY bor
             (case EndStream of true -> ?FLAG_END_STREAM; false -> 0 end) bor
             (case EndHeaders of true -> ?FLAG_END_HEADERS; false -> 0 end),
@@ -272,15 +274,26 @@ encode_continuation(StreamId, HeaderBlock, EndHeaders) ->
 
 %% @doc Decode a frame from binary.
 -spec decode(binary()) -> decode_result().
-decode(Data) when byte_size(Data) < 9 ->
+decode(Data) ->
+    decode(Data, 16384).  %% Default max_frame_size
+
+%% @doc Decode a frame from binary with max_frame_size validation.
+-spec decode(binary(), non_neg_integer()) -> decode_result().
+decode(Data, _MaxFrameSize) when byte_size(Data) < 9 ->
     {more, 9 - byte_size(Data)};
-decode(<<Length:24, Type:8, Flags:8, _:1, StreamId:31, Rest/binary>>) ->
-    case byte_size(Rest) >= Length of
+decode(<<Length:24, Type:8, Flags:8, _:1, StreamId:31, Rest/binary>>, MaxFrameSize) ->
+    %% Validate frame size per RFC 7540 Section 4.2
+    case Length > MaxFrameSize of
         true ->
-            <<Payload:Length/binary, Remaining/binary>> = Rest,
-            decode_frame(Type, Flags, StreamId, Payload, Remaining);
+            {error, frame_size_error};
         false ->
-            {more, Length - byte_size(Rest)}
+            case byte_size(Rest) >= Length of
+                true ->
+                    <<Payload:Length/binary, Remaining/binary>> = Rest,
+                    decode_frame(Type, Flags, StreamId, Payload, Remaining);
+                false ->
+                    {more, Length - byte_size(Rest)}
+            end
     end.
 
 decode_frame(?FRAME_DATA, Flags, StreamId, Payload, Rest) ->

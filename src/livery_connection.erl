@@ -111,20 +111,13 @@ activate(State, {ssl_pending, SslOpts}, _NegotiatedProto) ->
 
 activate(State, gen_tcp, _NegotiatedProto) ->
     Socket = State#state.socket,
-    Handler = State#state.handler,
-    HandlerOpts = State#state.handler_opts,
 
     Peer = case inet:peername(Socket) of {ok, P} -> P; _ -> undefined end,
     inet:setopts(Socket, [{active, once}]),
 
-    %% Plain TCP - assume HTTP/1.1 directly
-    ProtocolState = livery_h1:init(Handler, HandlerOpts),
-    NewState = State#state{
-        peer = Peer,
-        protocol = h1,
-        protocol_state = ProtocolState
-    },
-    connection_loop(NewState);
+    %% Plain TCP - detect protocol (support HTTP/2 prior knowledge)
+    NewState = State#state{peer = Peer},
+    detect_loop(NewState, <<>>);
 
 activate(State, ssl, NegotiatedProto) ->
     Socket = State#state.socket,

@@ -4,13 +4,14 @@ rebar.lock
 *.beam
 *.plt
 erl_crash.dump
+*.crashdump
 .eunit/
 logs/
 doc/
 .idea/
 *.iml
 
-# Checkout directories for examples
+# Local dep overrides (symlinks to sibling projects)
 _checkouts/
 
 # Generated/downloaded compliance test files

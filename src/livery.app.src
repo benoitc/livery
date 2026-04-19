@@ -1,0 +1,21 @@
+{application, livery, [
+    {description, "Livery: a modern Erlang web framework over HTTP/1.1, HTTP/2, and HTTP/3"},
+    {vsn, "0.1.0"},
+    {registered, [livery_sup]},
+    {mod, {livery_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        ssl,
+        crypto,
+        public_key,
+        h1,
+        h2,
+        quic,
+        ws
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/benoitc/livery"}]}
+]}.

@@ -38,6 +38,27 @@ services:
       - livery-net
     entrypoint: ["/tests/run-tests.sh"]
 
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    container_name: livery-benchmark
+    depends_on:
+      server:
+        condition: service_healthy
+    volumes:
+      - ./certs:/certs:ro
+      - ./benchmarks:/bench:ro
+    environment:
+      - SERVER_HOST=server
+      - HTTP_PORT=9080
+      - HTTPS_PORT=9443
+      - REQUESTS=10000
+      - CONCURRENCY=100
+    networks:
+      - livery-net
+    entrypoint: ["/bench/run-benchmarks.sh"]
+
 networks:
   livery-net:
     driver: bridge

@@ -68,7 +68,8 @@ start_server() ->
         handler => livery_routing_handler,
         handler_opts => HandlerOpts,
         cert => CertDer,
-        key => PrivateKey
+        key => PrivateKey,
+        max_streams_bidi => 1000  % Allow 1000 concurrent streams for benchmarking
     }),
     io:format("Started HTTP/3 listener on port 9443 (UDP)~n"),
 

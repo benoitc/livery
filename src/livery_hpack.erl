@@ -2,7 +2,8 @@
 %%
 %% Optimized for server-side use:
 %% - Static table with fast tuple lookup
-%% - Dynamic table as queue with O(1) insert/evict
+%% - Dynamic table with O(1) indexed access via array
+%% - Skip lowercase for already-lowercase headers
 %% - Pre-encoded common response headers
 %% - Huffman encoding with lookup tables
 -module(livery_hpack).
@@ -31,10 +32,14 @@
     pending_size_update = false :: boolean()
 }).
 
+%% Decoder uses array for O(1) lookup
 -record(decoder, {
-    dynamic_table :: queue:queue({binary(), binary(), non_neg_integer()}),
-    table_size = 0 :: non_neg_integer(),
-    max_table_size = 4096 :: non_neg_integer()
+    dynamic_table :: array:array({binary(), binary(), non_neg_integer()} | undefined),
+    table_entries = 0 :: non_neg_integer(),  %% Number of entries
+    table_head = 0 :: non_neg_integer(),     %% Next insertion index (circular)
+    table_size = 0 :: non_neg_integer(),     %% Current size in bytes
+    max_table_size = 4096 :: non_neg_integer(),
+    array_size = 128 :: non_neg_integer()    %% Array capacity
 }).
 
 -opaque encoder() :: #encoder{}.
@@ -78,7 +83,7 @@ encode_headers([{Name, Value} | Rest], Encoder, Acc) ->
     encode_headers(Rest, Encoder1, [Encoded | Acc]).
 
 encode_header(Name, Value, Encoder) ->
-    LowerName = string:lowercase(Name),
+    LowerName = ensure_lowercase(Name),
     case static_table_find(LowerName, Value) of
         {exact, Index} ->
             %% Indexed header field (section 6.1)
@@ -90,6 +95,24 @@ encode_header(Name, Value, Encoder) ->
             %% Literal header with literal name (section 6.2.1)
             encode_literal_new_name(LowerName, Value, Encoder)
     end.
+
+%% Skip lowercase conversion for already-lowercase headers
+%% Pseudo-headers (starting with :) are always lowercase per RFC 7540
+ensure_lowercase(<<$:, _/binary>> = Name) -> Name;
+ensure_lowercase(Name) ->
+    case is_lowercase(Name) of
+        true -> Name;
+        false -> string:lowercase(Name)
+    end.
+
+%% Fast check if binary is already lowercase
+%% Valid header name chars: a-z, 0-9, -
+is_lowercase(<<>>) -> true;
+is_lowercase(<<C, Rest/binary>>) when C >= $a, C =< $z ->
+    is_lowercase(Rest);
+is_lowercase(<<C, Rest/binary>>) when C =:= $-; C >= $0, C =< $9 ->
+    is_lowercase(Rest);
+is_lowercase(_) -> false.
 
 encode_literal_indexed_name(Index, Value, Encoder) ->
     %% Literal with indexing, indexed name
@@ -116,10 +139,14 @@ decoder_new() ->
 %% @doc Create a new decoder with specified max table size.
 -spec decoder_new(non_neg_integer()) -> decoder().
 decoder_new(MaxSize) ->
+    %% Start with array size of 128, will grow if needed
     #decoder{
-        dynamic_table = queue:new(),
+        dynamic_table = array:new([{size, 128}, {default, undefined}]),
+        table_entries = 0,
+        table_head = 0,
         table_size = 0,
-        max_table_size = MaxSize
+        max_table_size = MaxSize,
+        array_size = 128
     }.
 
 %% @doc Set max dynamic table size for decoder.
@@ -561,7 +588,7 @@ evict_to_size(#encoder{dynamic_table = Table, table_size = Size} = Encoder, Targ
             Encoder#encoder{table_size = 0}
     end.
 
-%% Dynamic table operations for decoder
+%% Dynamic table operations for decoder (array-based for O(1) lookup)
 add_to_decoder_table(Name, Value, #decoder{max_table_size = MaxSize} = Decoder) ->
     EntrySize = byte_size(Name) + byte_size(Value) + 32,
     %% First evict if necessary
@@ -569,49 +596,109 @@ add_to_decoder_table(Name, Value, #decoder{max_table_size = MaxSize} = Decoder) 
     %% Only add if entry fits
     if
         EntrySize =< MaxSize ->
-            NewTable = queue:in({Name, Value, EntrySize}, Decoder1#decoder.dynamic_table),
-            Decoder1#decoder{dynamic_table = NewTable,
-                            table_size = Decoder1#decoder.table_size + EntrySize};
+            %% Grow array if needed
+            Decoder2 = maybe_grow_array(Decoder1),
+            #decoder{dynamic_table = Table, table_head = Head,
+                     table_entries = Entries, array_size = ArrSize} = Decoder2,
+            %% Insert at head position (circular buffer)
+            NewTable = array:set(Head, {Name, Value, EntrySize}, Table),
+            NewHead = (Head + 1) rem ArrSize,
+            Decoder2#decoder{
+                dynamic_table = NewTable,
+                table_head = NewHead,
+                table_entries = Entries + 1,
+                table_size = Decoder2#decoder.table_size + EntrySize
+            };
         true ->
             Decoder1
     end.
+
+maybe_grow_array(#decoder{table_entries = Entries, array_size = ArrSize} = Decoder)
+  when Entries >= ArrSize ->
+    %% Double the array size
+    NewSize = ArrSize * 2,
+    #decoder{dynamic_table = OldTable, table_head = Head} = Decoder,
+    %% Copy entries to new array, preserving order
+    NewTable = array:new([{size, NewSize}, {default, undefined}]),
+    %% Copy from oldest to newest
+    {NewTable2, _} = copy_entries(OldTable, NewTable, Head, Entries, ArrSize),
+    Decoder#decoder{
+        dynamic_table = NewTable2,
+        table_head = Entries,  %% Head is now at Entries (after all copied elements)
+        array_size = NewSize
+    };
+maybe_grow_array(Decoder) ->
+    Decoder.
+
+copy_entries(_OldTable, NewTable, _Head, 0, _OldSize) ->
+    {NewTable, 0};
+copy_entries(OldTable, NewTable, Head, Remaining, OldSize) ->
+    %% Index 1 (most recent) is at Head - 1
+    %% Index N (oldest) is at Head - N
+    %% So we iterate from oldest to newest
+    OldestIdx = (Head - Remaining + OldSize) rem OldSize,
+    Entry = array:get(OldestIdx, OldTable),
+    NewIdx = Remaining - 1,  %% Oldest goes to position 0, etc.
+    NewTable2 = array:set(NewIdx, Entry, NewTable),
+    copy_entries(OldTable, NewTable2, Head, Remaining - 1, OldSize).
 
 evict_decoder_to_fit(#decoder{max_table_size = MaxSize} = Decoder, EntrySize) ->
     evict_decoder_to_size(Decoder, MaxSize - EntrySize).
 
 evict_decoder_to_size(Decoder, TargetSize) when TargetSize < 0 ->
-    Decoder#decoder{dynamic_table = queue:new(), table_size = 0};
+    %% Clear entire table
+    Decoder#decoder{
+        dynamic_table = array:new([{size, Decoder#decoder.array_size}, {default, undefined}]),
+        table_entries = 0,
+        table_head = 0,
+        table_size = 0
+    };
 evict_decoder_to_size(#decoder{table_size = Size} = Decoder, TargetSize) when Size =< TargetSize ->
     Decoder;
-evict_decoder_to_size(#decoder{dynamic_table = Table, table_size = Size} = Decoder, TargetSize) ->
-    case queue:out(Table) of
-        {{value, {_, _, EntrySize}}, NewTable} ->
-            evict_decoder_to_size(Decoder#decoder{dynamic_table = NewTable,
-                                                   table_size = Size - EntrySize}, TargetSize);
-        {empty, _} ->
-            Decoder#decoder{table_size = 0}
+evict_decoder_to_size(#decoder{table_entries = 0} = Decoder, _TargetSize) ->
+    Decoder#decoder{table_size = 0};
+evict_decoder_to_size(#decoder{dynamic_table = Table, table_entries = Entries,
+                                table_head = Head, array_size = ArrSize,
+                                table_size = Size} = Decoder, TargetSize) ->
+    %% Evict oldest entry (at position Head - Entries)
+    OldestIdx = (Head - Entries + ArrSize) rem ArrSize,
+    case array:get(OldestIdx, Table) of
+        {_, _, EntrySize} ->
+            NewTable = array:set(OldestIdx, undefined, Table),
+            evict_decoder_to_size(
+                Decoder#decoder{
+                    dynamic_table = NewTable,
+                    table_entries = Entries - 1,
+                    table_size = Size - EntrySize
+                },
+                TargetSize
+            );
+        undefined ->
+            Decoder#decoder{table_size = 0, table_entries = 0}
     end.
 
-%% Table lookup
+%% Table lookup - O(1) for dynamic table
 lookup_table(Index, _) when Index =< 61 ->
     case get_static_entry(Index) of
         undefined -> error;
         {Name, Value} -> {ok, Name, Value}
     end;
-lookup_table(Index, #decoder{dynamic_table = Table}) ->
+lookup_table(Index, #decoder{} = Decoder) ->
     DynIndex = Index - 61,
-    lookup_dynamic(Table, DynIndex).
+    lookup_dynamic(Decoder, DynIndex).
 
-lookup_dynamic(Table, Index) ->
-    %% Dynamic table is FIFO but indexed from newest to oldest
-    %% So we need to reverse-index
-    List = queue:to_list(Table),
-    Len = length(List),
-    ReverseIndex = Len - Index + 1,
-    case ReverseIndex >= 1 andalso ReverseIndex =< Len of
+%% O(1) dynamic table lookup using array
+lookup_dynamic(#decoder{dynamic_table = Table, table_entries = Entries,
+                        table_head = Head, array_size = ArrSize}, Index) ->
+    case Index >= 1 andalso Index =< Entries of
         true ->
-            {Name, Value, _} = lists:nth(ReverseIndex, List),
-            {ok, Name, Value};
+            %% Index 1 = most recent = Head - 1
+            %% Index N = Head - N
+            ActualIdx = (Head - Index + ArrSize) rem ArrSize,
+            case array:get(ActualIdx, Table) of
+                undefined -> error;
+                {Name, Value, _Size} -> {ok, Name, Value}
+            end;
         false ->
             error
     end.

@@ -34,7 +34,7 @@ init(Opts) ->
         ssl_opts => SslOpts
     },
 
-    Children = [
+    AcceptorChildren = [
         #{
             id => {livery_acceptor, N},
             start => {livery_acceptor, start_link, [AcceptorOpts]},
@@ -52,7 +52,7 @@ init(Opts) ->
         period => 60
     },
 
-    {ok, {SupFlags, Children}}.
+    {ok, {SupFlags, AcceptorChildren}}.
 
 %% Internal functions
 

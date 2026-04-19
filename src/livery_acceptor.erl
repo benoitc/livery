@@ -37,7 +37,7 @@ start_link(Opts) ->
 acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts) ->
     case gen_tcp:accept(ListenSocket) of
         {ok, Socket} ->
-            spawn_connection(Socket, gen_tcp, Handler, HandlerOpts, undefined),
+            spawn_connection(Socket, gen_tcp, Handler, HandlerOpts, SslOpts),
             acceptor_loop(ListenSocket, gen_tcp, Handler, HandlerOpts, SslOpts);
         {error, closed} ->
             ok;
@@ -57,7 +57,7 @@ acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts) ->
     case ssl:transport_accept(ListenSocket) of
         {ok, TlsSocket} ->
             %% Pass raw TLS socket to connection process for handshake
-            spawn_connection(TlsSocket, {ssl_pending, SslOpts}, Handler, HandlerOpts, undefined),
+            spawn_connection(TlsSocket, ssl, Handler, HandlerOpts, SslOpts),
             acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts);
         {error, closed} ->
             ok;
@@ -72,12 +72,15 @@ acceptor_loop(ListenSocket, ssl, Handler, HandlerOpts, SslOpts) ->
     end.
 
 %% @private Spawn connection handler and transfer socket ownership.
-spawn_connection(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
-    case livery_connection:start(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) of
+spawn_connection(Socket, Transport, Handler, HandlerOpts, SslOpts) ->
+    ActualTransport = case SslOpts of
+        [] -> Transport;
+        _ -> {ssl_pending, SslOpts}
+    end,
+    case livery_connection:start(Socket, ActualTransport, Handler, HandlerOpts, undefined) of
         {ok, Pid} ->
             TransportMod = case Transport of
                 gen_tcp -> gen_tcp;
-                {ssl_pending, _} -> ssl;
                 ssl -> ssl
             end,
             case TransportMod:controlling_process(Socket, Pid) of
@@ -89,7 +92,6 @@ spawn_connection(Socket, Transport, Handler, HandlerOpts, NegotiatedProto) ->
         {error, _Reason} ->
             case Transport of
                 gen_tcp -> gen_tcp:close(Socket);
-                {ssl_pending, _} -> ssl:close(Socket);
                 ssl -> ssl:close(Socket)
             end
     end.

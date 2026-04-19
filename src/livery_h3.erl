@@ -51,8 +51,9 @@
 -define(H3_STREAM_QPACK_ENCODER, 16#02).
 -define(H3_STREAM_QPACK_DECODER, 16#03).
 
-%% Default max field section size per RFC 9114 (no default, use 16KB as sensible limit)
--define(DEFAULT_MAX_FIELD_SECTION_SIZE, 16384).
+%% Default max field section size per RFC 9114
+%% Must match the value in livery_h3_frame:default_settings()
+-define(DEFAULT_MAX_FIELD_SECTION_SIZE, 65536).
 
 -record(h3_state, {
     quic_conn :: reference() | undefined,
@@ -89,11 +90,12 @@
     buffer = <<>> :: binary(),
     headers = [] :: [{binary(), binary()}],
     headers_received = false :: boolean(),
-    body = <<>> :: binary(),
+    body = [] :: iolist(),  %% Use iolist for O(1) prepend
     data_received = false :: boolean(),
     trailers = [] :: [{binary(), binary()}],
     trailers_received = false :: boolean(),
     fin_received = false :: boolean(),
+    dispatched = false :: boolean(),  %% Track if request was dispatched
     handler_state :: term(),
     %% WebSocket over HTTP/3 (RFC 9220)
     mode = normal :: normal | websocket,
@@ -319,15 +321,12 @@ handle_event(info, {quic, QuicConn, {connected, _Info}},
 
 handle_event(info, {quic, QuicConn, {stream_data, StreamId, Data, Fin}},
              _StateName, #h3_state{quic_conn = QuicConn} = State) ->
-    error_logger:info_msg("[H3] Received stream_data: StreamId=~p, DataSize=~p, Fin=~p~n",
-                          [StreamId, byte_size(Data), Fin]),
     %% Check if this is a unidirectional stream
     case is_unidirectional_stream(StreamId) of
         true ->
             State1 = process_uni_stream_data(StreamId, Data, Fin, State),
             {keep_state, State1};
         false ->
-            error_logger:info_msg("[H3] Processing bidi stream ~p~n", [StreamId]),
             State1 = process_bidi_stream_data(StreamId, Data, Fin, State),
             {keep_state, State1}
     end;
@@ -418,11 +417,8 @@ setup_h3_streams(#h3_state{quic_conn = QuicConn} = State) ->
 
 do_send_headers(StreamId, Headers, Fin, #h3_state{quic_conn = QuicConn, qpack_encoder = Encoder,
                                                   qpack_encoder_stream = EncStream} = State) ->
-    error_logger:info_msg("[H3] do_send_headers: StreamId=~p, Fin=~p, Headers=~p~n",
-                          [StreamId, Fin, Headers]),
     %% Encode headers using QPACK
     {EncodedHeaders, Encoder1} = livery_qpack:encode(Headers, Encoder),
-    error_logger:info_msg("[H3] QPACK encoded headers: ~p bytes~n", [byte_size(EncodedHeaders)]),
 
     %% Send any pending encoder instructions on the encoder stream
     EncoderInstructions = livery_qpack:get_encoder_instructions(Encoder1),
@@ -436,12 +432,8 @@ do_send_headers(StreamId, Headers, Fin, #h3_state{quic_conn = QuicConn, qpack_en
 
     %% Wrap in HTTP/3 HEADERS frame
     Frame = livery_h3_frame:encode_headers(EncodedHeaders),
-    error_logger:info_msg("[H3] Sending HEADERS frame: ~p bytes on stream ~p~n",
-                          [byte_size(Frame), StreamId]),
     %% Send on the QUIC stream
-    Result = quic:send_data(QuicConn, StreamId, Frame, Fin),
-    error_logger:info_msg("[H3] quic:send_data result for headers: ~p~n", [Result]),
-    case Result of
+    case quic:send_data(QuicConn, StreamId, Frame, Fin) of
         ok ->
             {ok, State#h3_state{qpack_encoder = Encoder2}};
         {error, _} = Error ->
@@ -452,12 +444,8 @@ do_send_data(StreamId, Data, Fin, #h3_state{quic_conn = QuicConn} = State) ->
     %% Wrap in HTTP/3 DATA frame
     DataBin = iolist_to_binary(Data),
     Frame = livery_h3_frame:encode_data(DataBin),
-    error_logger:info_msg("[H3] Sending DATA frame: ~p bytes on stream ~p, Fin=~p~n",
-                          [byte_size(Frame), StreamId, Fin]),
     %% Send on the QUIC stream
-    Result = quic:send_data(QuicConn, StreamId, Frame, Fin),
-    error_logger:info_msg("[H3] quic:send_data result for data: ~p~n", [Result]),
-    case Result of
+    case quic:send_data(QuicConn, StreamId, Frame, Fin) of
         ok ->
             {ok, State};
         {error, _} = Error ->
@@ -523,9 +511,11 @@ process_uni_stream_by_type(StreamId, control, Data, _Fin, #h3_state{uni_streams 
     NewInfo = #uni_stream_info{type = control, buffer = Rest},
     %% Process settings from received frames
     State1 = apply_peer_settings(Messages, State),
+    %% Only set settings_received if we actually got a SETTINGS frame
+    HasSettings = lists:any(fun({settings, _}) -> true; (_) -> false end, Messages),
     State1#h3_state{
         uni_streams = maps:put(StreamId, NewInfo, UniStreams),
-        settings_received = true
+        settings_received = HasSettings orelse State#h3_state.settings_received
     };
 
 process_uni_stream_by_type(StreamId, qpack_encoder, Data, _Fin,
@@ -594,41 +584,48 @@ apply_peer_settings([_ | Rest], State) ->
     apply_peer_settings(Rest, State).
 
 process_bidi_stream_data(StreamId, Data, Fin, #h3_state{streams = Streams} = State) ->
-    error_logger:info_msg("[H3] process_bidi_stream_data: StreamId=~p, DataSize=~p, Fin=~p~n",
-                          [StreamId, byte_size(Data), Fin]),
     StreamState = maps:get(StreamId, Streams, #stream_state{}),
     Buffer = <<(StreamState#stream_state.buffer)/binary, Data/binary>>,
     {NewStreamState, State1} = process_h3_frames(StreamId, Buffer, Fin, StreamState, State),
 
     FinalStreamState = NewStreamState#stream_state{fin_received = Fin},
-    error_logger:info_msg("[H3] After frame processing: headers_received=~p, Fin=~p~n",
-                          [FinalStreamState#stream_state.headers_received, Fin]),
-    NewStreams = case Fin andalso FinalStreamState#stream_state.headers_received of
+    %% Dispatch when headers are complete (not waiting for FIN)
+    %% This enables stream-level concurrency for streaming uploads
+    case FinalStreamState#stream_state.headers_received andalso
+         not FinalStreamState#stream_state.dispatched of
         true ->
-            error_logger:info_msg("[H3] Dispatching request for stream ~p~n", [StreamId]),
-            %% Stream complete - dispatch to handler
+            %% Headers complete - dispatch to handler
             State2 = dispatch_request(StreamId, FinalStreamState, State1),
-            maps:remove(StreamId, State2#h3_state.streams);
+            %% Mark as dispatched
+            DispatchedState = FinalStreamState#stream_state{dispatched = true},
+            case Fin of
+                true ->
+                    %% Stream complete, clean up
+                    State2#h3_state{streams = maps:remove(StreamId, State2#h3_state.streams)};
+                false ->
+                    %% Keep stream for body data
+                    State2#h3_state{streams = maps:put(StreamId, DispatchedState, State2#h3_state.streams)}
+            end;
+        false when Fin ->
+            %% Stream complete (already dispatched or headers-only), clean up
+            State1#h3_state{streams = maps:remove(StreamId, State1#h3_state.streams)};
         false ->
-            maps:put(StreamId, FinalStreamState, State1#h3_state.streams)
-    end,
-    State1#h3_state{streams = NewStreams}.
+            %% Waiting for more data
+            State1#h3_state{streams = maps:put(StreamId, FinalStreamState, State1#h3_state.streams)}
+    end.
 
 process_h3_frames(StreamId, Buffer, Fin, StreamState, State) ->
     case livery_h3_frame:decode(Buffer) of
         {ok, Frame, Rest} ->
-            error_logger:info_msg("[H3] Decoded frame: ~p~n", [Frame]),
             {StreamState1, State1} = handle_h3_frame(StreamId, Frame, Fin andalso Rest =:= <<>>, StreamState, State),
             process_h3_frames(StreamId, Rest, Fin, StreamState1, State1);
-        {more, Needed} ->
-            error_logger:info_msg("[H3] Frame decode needs more: ~p bytes~n", [Needed]),
+        {more, _Needed} ->
             {StreamState#stream_state{buffer = Buffer}, State};
-        {error, Reason} ->
-            error_logger:warning_msg("[H3] Frame decode error: ~p~n", [Reason]),
+        {error, _Reason} ->
             {StreamState#stream_state{buffer = Buffer}, State}
     end.
 
-handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState,
+handle_h3_frame(StreamId, {headers, Payload}, _Fin, StreamState,
                 #h3_state{qpack_decoder = Decoder, max_field_section_size = MaxSize,
                           quic_conn = QuicConn} = State) ->
     %% Decode QPACK headers
@@ -650,18 +647,13 @@ handle_h3_frame(StreamId, {headers, Payload}, Fin, StreamState,
                     case StreamState#stream_state.data_received of
                         true ->
                             %% This is trailers (HEADERS after DATA)
+                            %% Just store trailers - dispatch will happen in process_bidi_stream_data
+                            %% when FIN is processed to avoid duplicate dispatches
                             StreamState1 = StreamState#stream_state{
                                 trailers = Headers,
                                 trailers_received = true
                             },
-                            %% Trailers must have FIN set per RFC 9114
-                            case Fin of
-                                true ->
-                                    {StreamState1, dispatch_request(StreamId, StreamState1, State1)};
-                                false ->
-                                    %% Invalid: trailers without FIN - store anyway
-                                    {StreamState1, State1}
-                            end;
+                            {StreamState1, State1};
                         false ->
                             %% This is initial headers
                             StreamState1 = StreamState#stream_state{
@@ -682,11 +674,17 @@ handle_h3_frame(StreamId, {data, Payload}, Fin,
     %% WebSocket mode - DATA frames contain WebSocket frames
     process_websocket_data(StreamId, Payload, Fin, StreamState, State);
 
+handle_h3_frame(_StreamId, {data, _Payload}, _Fin,
+                #stream_state{headers_received = false} = StreamState, State) ->
+    %% DATA before HEADERS - protocol error per RFC 9114
+    %% Ignore the data and keep waiting for headers
+    {StreamState, State};
+
 handle_h3_frame(_StreamId, {data, Payload}, _Fin, StreamState, State) ->
-    %% Normal mode - accumulate body
+    %% Normal mode - accumulate body using iolist prepend (O(1) instead of O(n))
     Body = StreamState#stream_state.body,
     StreamState1 = StreamState#stream_state{
-        body = <<Body/binary, Payload/binary>>,
+        body = [Payload | Body],  %% Prepend for O(1), reverse at dispatch
         data_received = true
     },
     {StreamState1, State};
@@ -701,17 +699,9 @@ handle_h3_frame(_StreamId, _Frame, _Fin, StreamState, State) ->
 
 dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailers = Trailers} = StreamState,
                  #h3_state{handler = Handler, handler_opts = HandlerOpts, quic_conn = QuicConn} = State) ->
-    %% Extract pseudo-headers
-    Method = get_header(<<":method">>, Headers, <<"GET">>),
-    Path = get_header(<<":path">>, Headers, <<"/">>),
-    Scheme = get_header(<<":scheme">>, Headers, <<"https">>),
-    Authority = get_header(<<":authority">>, Headers, <<>>),
-    Protocol = get_header(<<":protocol">>, Headers, undefined),
-
-    %% Validate :authority pseudo-header (RFC 9114 Section 4.3.1)
-    %% :authority MUST NOT be empty for http/https URIs
-    case validate_authority(Method, Authority) of
-        ok ->
+    %% Validate and extract pseudo-headers per RFC 9114 Section 4.3
+    case validate_pseudo_headers(Headers) of
+        {ok, Method, Scheme, Authority, Path, Protocol} ->
             %% Check for Extended CONNECT (RFC 9220)
             case {Method, Protocol} of
                 {<<"CONNECT">>, <<"websocket">>} ->
@@ -722,16 +712,95 @@ dispatch_request(StreamId, #stream_state{headers = Headers, body = Body, trailer
                     dispatch_normal_request(StreamId, Method, Path, Scheme, Authority,
                                             Headers, Body, Trailers, Handler, HandlerOpts, State)
             end;
-        {error, missing_authority} ->
-            %% Send 400 Bad Request - missing :authority
-            send_error_response(StreamId, 400, <<"Missing :authority header">>, QuicConn, State)
+        {error, Reason} ->
+            %% Invalid pseudo-headers - send 400 Bad Request
+            ErrorMsg = case Reason of
+                missing_method -> <<"Missing :method pseudo-header">>;
+                missing_scheme -> <<"Missing :scheme pseudo-header">>;
+                missing_path -> <<"Missing :path pseudo-header">>;
+                missing_authority -> <<"Missing :authority pseudo-header">>;
+                duplicate_pseudo_header -> <<"Duplicate pseudo-header">>;
+                _ -> <<"Invalid request">>
+            end,
+            send_error_response(StreamId, 400, ErrorMsg, QuicConn, State)
     end.
+
+%% @doc Validate pseudo-headers per RFC 9114 Section 4.3.
+%% Required: :method, :scheme, :path (non-CONNECT)
+%% :authority MUST be present for http/https
+%% No duplicates allowed
+-spec validate_pseudo_headers([{binary(), binary()}]) ->
+    {ok, binary(), binary(), binary(), binary(), binary() | undefined} | {error, term()}.
+validate_pseudo_headers(Headers) ->
+    %% Extract pseudo-headers, checking for duplicates
+    case extract_pseudo_headers(Headers) of
+        {ok, PseudoMap} ->
+            Method = maps:get(<<":method">>, PseudoMap, undefined),
+            Scheme = maps:get(<<":scheme">>, PseudoMap, undefined),
+            Authority = maps:get(<<":authority">>, PseudoMap, undefined),
+            Path = maps:get(<<":path">>, PseudoMap, undefined),
+            Protocol = maps:get(<<":protocol">>, PseudoMap, undefined),
+
+            %% Validate required pseudo-headers
+            case Method of
+                undefined ->
+                    {error, missing_method};
+                <<"CONNECT">> when Protocol =/= undefined ->
+                    %% Extended CONNECT (RFC 9220) - :scheme, :authority, :path required
+                    case {Scheme, Authority, Path} of
+                        {undefined, _, _} -> {error, missing_scheme};
+                        {_, undefined, _} -> {error, missing_authority};
+                        {_, _, undefined} -> {error, missing_path};
+                        _ -> {ok, Method, Scheme, Authority, Path, Protocol}
+                    end;
+                <<"CONNECT">> ->
+                    %% Regular CONNECT - only :authority required, no :scheme/:path
+                    case Authority of
+                        undefined -> {error, missing_authority};
+                        _ -> {ok, Method, <<>>, Authority, <<>>, undefined}
+                    end;
+                _ ->
+                    %% Normal request - :method, :scheme, :path, :authority required
+                    case {Scheme, Path} of
+                        {undefined, _} -> {error, missing_scheme};
+                        {_, undefined} -> {error, missing_path};
+                        _ ->
+                            case Authority of
+                                undefined -> {error, missing_authority};
+                                <<>> -> {error, missing_authority};
+                                _ -> {ok, Method, Scheme, Authority, Path, Protocol}
+                            end
+                    end
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Extract pseudo-headers into a map, checking for duplicates.
+extract_pseudo_headers(Headers) ->
+    extract_pseudo_headers(Headers, #{}).
+
+extract_pseudo_headers([], Acc) ->
+    {ok, Acc};
+extract_pseudo_headers([{<<$:, _/binary>> = Name, Value} | Rest], Acc) ->
+    case maps:is_key(Name, Acc) of
+        true ->
+            %% Duplicate pseudo-header
+            {error, duplicate_pseudo_header};
+        false ->
+            extract_pseudo_headers(Rest, Acc#{Name => Value})
+    end;
+extract_pseudo_headers([_ | Rest], Acc) ->
+    %% Skip regular headers
+    extract_pseudo_headers(Rest, Acc).
 
 dispatch_normal_request(StreamId, Method, Path, _Scheme, _Authority,
                         Headers, Body, _Trailers, Handler, HandlerOpts,
                         #h3_state{peer = Peer} = State) ->
     %% Parse path and query string
     {PathOnly, Qs} = split_path_qs(Path),
+    %% Convert body from iolist (reverse order) to binary
+    BodyBin = iolist_to_binary(lists:reverse(Body)),
     %% Build request record
     Req = #livery_req{
         method = Method,
@@ -739,15 +808,16 @@ dispatch_normal_request(StreamId, Method, Path, _Scheme, _Authority,
         qs = Qs,
         version = {3, 0},
         headers = filter_pseudo_headers(Headers),
-        body = Body,
+        body = BodyBin,
         peer = Peer,
         sock = undefined,
         handler = Handler,
         handler_opts = HandlerOpts,
-        has_body = Body =/= <<>>,
-        body_length = byte_size(Body)
+        has_body = BodyBin =/= <<>>,
+        body_length = byte_size(BodyBin)
     },
     %% Call handler
+    QuicConn = State#h3_state.quic_conn,
     try
         case Handler:init(Req, HandlerOpts) of
             {ok, Req1, HandlerState} ->
@@ -765,21 +835,23 @@ dispatch_normal_request(StreamId, Method, Path, _Scheme, _Authority,
                         end,
                         State;
                     {stream, Status, RespHeaders, StreamFun, _HandlerState1} ->
-                        %% Send streaming response
-                        spawn_link(fun() ->
+                        %% Send streaming response using spawn_monitor
+                        spawn_monitor(fun() ->
                             send_h3_stream(StreamId, Status, RespHeaders, StreamFun, State)
                         end),
                         State;
                     _ ->
-                        State
+                        %% Unhandled handler return - send 500
+                        send_error_response(StreamId, 500, <<"Internal Server Error">>, QuicConn, State)
                 end;
             {error, _Reason} ->
-                State
+                %% Handler init failed - send 500
+                send_error_response(StreamId, 500, <<"Internal Server Error">>, QuicConn, State)
         end
     catch
         _:_ ->
-            %% Send 500 error
-            State
+            %% Handler exception - send 500
+            send_error_response(StreamId, 500, <<"Internal Server Error">>, QuicConn, State)
     end.
 
 get_header(Name, Headers, Default) ->
@@ -793,17 +865,6 @@ filter_pseudo_headers(Headers) ->
 
 is_pseudo_header(<<$:, _/binary>>) -> true;
 is_pseudo_header(_) -> false.
-
-%% @doc Validate :authority pseudo-header per RFC 9114 Section 4.3.1.
-%% :authority MUST NOT be empty for http/https requests (non-CONNECT).
-%% For CONNECT requests without :protocol, :authority is the target.
-validate_authority(<<"CONNECT">>, _Authority) ->
-    %% CONNECT can have different authority semantics
-    ok;
-validate_authority(_Method, <<>>) ->
-    {error, missing_authority};
-validate_authority(_Method, _Authority) ->
-    ok.
 
 %% @doc Send an error response on a stream.
 send_error_response(StreamId, Status, Body, QuicConn, State) ->
@@ -843,7 +904,6 @@ calculate_field_section_size(Headers) ->
 %% @doc Send a streaming HTTP/3 response.
 %% Sends headers, then calls StreamFun with a send callback, then finalizes.
 send_h3_stream(StreamId, Status, RespHeaders, StreamFun, State) ->
-    error_logger:info_msg("[H3] send_h3_stream started: StreamId=~p, Status=~p~n", [StreamId, Status]),
     AllHeaders = [{<<":status">>, integer_to_binary(Status)} | RespHeaders],
     case do_send_headers(StreamId, AllHeaders, false, State) of
         {ok, State1} ->
@@ -901,6 +961,12 @@ validate_connect_request(Headers) ->
     end.
 
 %% @doc Handle WebSocket upgrade via Extended CONNECT.
+%% First check if peer advertised Extended CONNECT support in SETTINGS.
+handle_websocket_upgrade(StreamId, _Headers, _StreamState, _Handler, _HandlerOpts,
+                         #h3_state{peer_enable_connect_protocol = 0, quic_conn = QuicConn} = State) ->
+    %% Peer didn't enable Extended CONNECT in SETTINGS - reject with 501
+    send_error_response(StreamId, 501, <<"Extended CONNECT not supported">>, QuicConn, State);
+
 handle_websocket_upgrade(StreamId, Headers, StreamState, Handler, HandlerOpts, State) ->
     case validate_connect_request(Headers) of
         ok ->
@@ -1003,7 +1069,8 @@ decode_ws_frames(Buffer, Acc) ->
         {more, _} ->
             {lists:reverse(Acc), Buffer};
         {error, _} ->
-            {lists:reverse(Acc), Buffer}
+            %% Clear buffer on decode error to avoid repeated failures
+            {lists:reverse(Acc), <<>>}
     end.
 
 %% @doc Process decoded WebSocket frames by calling handler.

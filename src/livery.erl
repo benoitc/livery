@@ -54,7 +54,8 @@
     handler_opts => term(),
     cert := binary(),           % DER-encoded certificate
     key := binary() | term(),   % DER-encoded private key or key term
-    pool_size => pos_integer()  % Number of listener processes (default: scheduler count)
+    pool_size => pos_integer(), % Number of listener processes (default: scheduler count)
+    max_streams_bidi => pos_integer() % Max concurrent bidi streams per connection (default: 100)
 }.
 
 -export_type([listener_opts/0, h3_listener_opts/0]).
@@ -105,6 +106,7 @@ which_listeners() ->
 %% - `cert' (required): DER-encoded certificate binary
 %% - `key' (required): DER-encoded private key or key term
 %% - `pool_size': Number of listener processes (default: scheduler count)
+%% - `max_streams_bidi': Max concurrent bidirectional streams per connection (default: 100)
 %%
 %% Example:
 %% ```
@@ -127,6 +129,7 @@ start_h3_listener(Name, Opts) ->
     Cert = maps:get(cert, Opts),
     KeyDer = maps:get(key, Opts),
     PoolSize = maps:get(pool_size, Opts, erlang:system_info(schedulers)),
+    MaxStreamsBidi = maps:get(max_streams_bidi, Opts, 100),
 
     %% Decode DER key to Erlang key record (quic expects decoded key)
     Key = decode_private_key(KeyDer),
@@ -137,6 +140,7 @@ start_h3_listener(Name, Opts) ->
         key => Key,
         alpn => [<<"h3">>],
         pool_size => PoolSize,
+        max_streams_bidi => MaxStreamsBidi,
         connection_handler => fun(ConnPid, ConnRef) ->
             %% Start HTTP/3 handler for this connection
             error_logger:info_msg("[livery] H3 connection_handler called for ~p, ref=~p~n",

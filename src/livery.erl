@@ -114,8 +114,12 @@ router_handler(Router, Opts) ->
         Method = livery_req:method(Req),
         Path = livery_req:path(Req),
         case livery_router:match(Method, Path, Router) of
-            {ok, Handler, Bindings, _Meta} ->
-                invoke_route(Handler, livery_req:set_bindings(Bindings, Req));
+            {ok, Handler, Bindings, Meta} ->
+                Req1 = livery_req:set_bindings(Bindings, Req),
+                %% A route may carry its own middleware stack under
+                %% `Meta`'s `middleware' key; it runs inside any
+                %% service-level stack, just for this route.
+                dispatch(route_stack(Meta), Handler, Req1);
             {error, not_found} ->
                 NotFound(Req);
             {error, {method_not_allowed, Methods}} ->
@@ -123,12 +127,11 @@ router_handler(Router, Opts) ->
         end
     end.
 
--spec invoke_route(livery_middleware:handler(), livery_req:req()) ->
-    livery_resp:resp().
-invoke_route({M, F}, Req) when is_atom(M), is_atom(F) ->
-    M:F(Req);
-invoke_route(Fun, Req) when is_function(Fun, 1) ->
-    Fun(Req).
+-spec route_stack(term()) -> livery_middleware:stack().
+route_stack(Meta) when is_map(Meta) ->
+    maps:get(middleware, Meta, []);
+route_stack(_Meta) ->
+    [].
 
 -spec default_not_found(livery_req:req()) -> livery_resp:resp().
 default_not_found(_Req) ->

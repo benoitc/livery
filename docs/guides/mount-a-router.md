@@ -46,6 +46,24 @@ The service-level `middleware` stack wraps every route.
   method.
 - Path bindings on `livery_req:bindings/1` / `binding/2,3`.
 
+## Per-route middleware
+
+A route's optional `Meta` map (the fourth tuple element) may carry
+a `middleware` stack that runs only for that route, inside any
+service-level stack:
+
+```erlang
+Auth = {my_auth, #{required => true}},
+Router = livery_router:compile([
+    {<<"GET">>,  <<"/public">>,  {my_app, public}},
+    {<<"GET">>,  <<"/private">>, {my_app, private}, #{middleware => [Auth]}}
+]).
+```
+
+`/private` runs `Auth` before its handler; `/public` does not.
+Nesting is service stack (outermost) → route match → route stack →
+handler.
+
 ## Customising 404 / 405
 
 To control the fallbacks, build the handler yourself with

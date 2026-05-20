@@ -87,6 +87,15 @@ schema, response schemas, tags. `match/3` returns it as the
 fourth element, and `livery_openapi:build/1` emits an OpenAPI 3.1
 document from the same route table.
 
+`Meta` may also carry a `middleware` key — a `livery_middleware`
+stack that `livery:router_handler/1` runs for that route only,
+inside any service-level stack:
+
+```erlang
+{<<"GET">>, <<"/admin">>, {admin, index},
+ #{middleware => [{my_auth, #{role => admin}}]}}
+```
+
 ## Performance
 
 The radix trie does no allocation on lookup besides the bindings

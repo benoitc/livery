@@ -194,6 +194,34 @@ router_handler_custom_fallbacks_test() ->
         #{method => <<"GET">>, path => <<"/missing">>}),
     ?assertEqual(<<"nope">>, livery_test_adapter:body(Cap)).
 
+router_handler_runs_per_route_middleware_test() ->
+    AddHeader = livery_middleware:after_response(
+        fun(R) -> livery_resp:with_header(<<"x-route">>, <<"1">>, R) end),
+    Router = livery_router:compile([
+        {<<"GET">>, <<"/plain">>,   {?MODULE, rh_index}},
+        {<<"GET">>, <<"/wrapped">>, {?MODULE, rh_index},
+         #{middleware => [AddHeader]}}
+    ]),
+    H = livery:router_handler(Router),
+    Plain = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/plain">>}),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"x-route">>, Plain)),
+    Wrapped = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/wrapped">>}),
+    ?assertEqual(<<"1">>, livery_test_adapter:header(<<"x-route">>, Wrapped)).
+
+router_handler_per_route_short_circuit_test() ->
+    Guard = fun(_Req, _Next) -> livery_resp:text(403, <<"blocked">>) end,
+    Router = livery_router:compile([
+        {<<"GET">>, <<"/guarded">>, fun(_R) -> error(must_not_be_called) end,
+         #{middleware => [Guard]}}
+    ]),
+    H = livery:router_handler(Router),
+    Cap = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/guarded">>}),
+    ?assertEqual(403, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"blocked">>, livery_test_adapter:body(Cap)).
+
 %% Route handlers used by the router_handler tests.
 rh_index(_Req) -> livery_resp:text(200, <<"index">>).
 rh_greet(Req) -> livery_resp:text(200, [<<"hello, ">>, livery_req:binding(<<"name">>, Req)]).

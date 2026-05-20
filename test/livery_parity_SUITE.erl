@@ -33,6 +33,7 @@
     streaming_chunked_response/1,
     sse_response/1,
     ndjson_response/1,
+    file_response/1,
     response_with_trailers/1,
     handler_crash_returns_500/1,
     middleware_short_circuit/1,
@@ -56,6 +57,7 @@ groups() ->
         streaming_chunked_response,
         sse_response,
         ndjson_response,
+        file_response,
         handler_crash_returns_500,
         middleware_short_circuit,
         middleware_after_response,
@@ -195,6 +197,25 @@ ndjson_response(Config) ->
     ?assertEqual(<<"application/x-ndjson">>,
                  header(<<"content-type">>, Resp)),
     ?assertEqual(<<"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n">>, body(Resp)).
+
+file_response(Config) ->
+    Body = <<"file body served from disk">>,
+    Path = filename:join(
+        temp_dir(),
+        "livery_parity_file_" ++
+        integer_to_list(erlang:unique_integer([positive])) ++ ".bin"),
+    ok = file:write_file(Path, Body),
+    try
+        Resp = drive(Config, [], fun(_R) ->
+            livery_resp:file(200, Path)
+        end, #{}),
+        ?assertEqual(200, status(Resp)),
+        ?assertEqual(Body, body(Resp)),
+        ?assertEqual(integer_to_binary(byte_size(Body)),
+                     header(<<"content-length">>, Resp))
+    after
+        file:delete(Path)
+    end.
 
 response_with_trailers(Config) ->
     Handler = fun(_R) ->
@@ -465,6 +486,12 @@ collect_h3(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->
 body_bytes({buffered, IoData}) -> iolist_to_binary(IoData);
 body_bytes(empty)              -> <<>>;
 body_bytes(_)                  -> <<>>.
+
+temp_dir() ->
+    case os:getenv("TMPDIR") of
+        false -> "/tmp";
+        Dir   -> Dir
+    end.
 
 normalize_headers(Hs) ->
     [{normalize_header_name(N), to_binary(V)} || {N, V} <- Hs].

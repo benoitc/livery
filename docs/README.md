@@ -47,6 +47,7 @@ solution.
 - [Return a streaming response](guides/stream-chunked.md)
 - [Return Server-Sent Events](guides/server-sent-events.md)
 - [Return trailers](guides/return-trailers.md)
+- [Serve a file](guides/serve-a-file.md)
 - [Send an empty or redirect response](guides/empty-and-redirects.md)
 
 **Routing & middleware**

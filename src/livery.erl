@@ -183,10 +183,16 @@ Walk a response body variant and drive the adapter callbacks.
 
 Called once a handler has returned. The walker emits status and
 headers, then iterates the body variant (`full`, `chunked`, `sse`,
-`empty`, or upgrade/file placeholders) into
-`Adapter:send_headers/4`, `Adapter:send_data/3`, and
-`Adapter:send_trailers/2`. Errors from the adapter are propagated
-by stopping the walk and returning the error tuple.
+`file`, `empty`, or `upgrade`) into `Adapter:send_headers/4`,
+`Adapter:send_data/3`, and `Adapter:send_trailers/2`. Errors from
+the adapter are propagated by stopping the walk and returning the
+error tuple.
+
+A `{file, Path, Range}` body is streamed from the filesystem in
+64 KiB chunks. `Content-Length` is set from the resolved segment
+(unless the handler already set it); a byte range adds a
+`Content-Range` header. A missing file emits `404`, an
+unsatisfiable range emits `416`.
 """.
 -spec emit(module(), livery_adapter:stream(), livery_resp:resp()) ->
     ok | {error, term()}.
@@ -245,10 +251,39 @@ emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers) ->
             close_stream(Adapter, Stream, Trailers);
         Other -> Other
     end;
-emit_body(Adapter, Stream, _Status, _Hs, {file, _Path, _Range}, _Trailers) ->
-    %% File emission lands once the H1 adapter wires sendfile.
-    Adapter:reset(Stream, file_emission_not_implemented),
-    {error, not_implemented};
+emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers) ->
+    case file_segment(Path, Range) of
+        {error, enoent} ->
+            Adapter:send_headers(Stream, 404, [], #{end_stream => true});
+        {error, range_not_satisfiable} ->
+            Adapter:send_headers(Stream, 416, [], #{end_stream => true});
+        {error, Reason} ->
+            Adapter:reset(Stream, Reason),
+            {error, Reason};
+        {ok, Offset, Length, FileSize} ->
+            {Status1, Hs1} = file_headers(Status, Hs, Offset, Length,
+                                          FileSize, Range),
+            HasTrailers = Trailers =/= undefined,
+            case Length of
+                0 when not HasTrailers ->
+                    Adapter:send_headers(Stream, Status1, Hs1,
+                                         #{end_stream => true});
+                0 ->
+                    case Adapter:send_headers(Stream, Status1, Hs1,
+                                              #{end_stream => false}) of
+                        ok    -> emit_trailers(Adapter, Stream, Trailers);
+                        Other -> Other
+                    end;
+                _ ->
+                    case Adapter:send_headers(Stream, Status1, Hs1,
+                                              #{end_stream => false}) of
+                        ok ->
+                            stream_file(Adapter, Stream, Path, Offset,
+                                        Length, Trailers);
+                        Other -> Other
+                    end
+            end
+    end;
 emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers) ->
     %% Upgrades are handled at the adapter level (livery_ws, livery_wt).
     Adapter:reset(Stream, upgrade_not_handled_at_emit),
@@ -265,6 +300,120 @@ close_stream(Adapter, Stream, undefined) ->
     Adapter:send_data(Stream, <<>>, #{end_stream => true});
 close_stream(Adapter, Stream, Trailers) ->
     emit_trailers(Adapter, Stream, Trailers).
+
+%%====================================================================
+%% File emission
+%%====================================================================
+
+-define(FILE_CHUNK_SIZE, 65536).
+
+-type trailers() :: undefined
+                  | [{binary(), binary()}]
+                  | fun(() -> [{binary(), binary()}]).
+
+-spec file_segment(file:name_all(),
+                   undefined | {non_neg_integer(), non_neg_integer() | eof}) ->
+    {ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
+  | {error, enoent | not_a_regular_file | range_not_satisfiable}.
+file_segment(Path, Range) ->
+    case filelib:is_regular(Path) of
+        true ->
+            resolve_range(Range, filelib:file_size(Path));
+        false ->
+            case filelib:is_file(Path) of
+                true  -> {error, not_a_regular_file};
+                false -> {error, enoent}
+            end
+    end.
+
+-spec resolve_range(undefined | {non_neg_integer(), non_neg_integer() | eof},
+                    non_neg_integer()) ->
+    {ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
+  | {error, range_not_satisfiable}.
+resolve_range(undefined, Size) ->
+    {ok, 0, Size, Size};
+resolve_range({Offset, eof}, Size)
+        when is_integer(Offset), Offset >= 0, Offset =< Size ->
+    {ok, Offset, Size - Offset, Size};
+resolve_range({Offset, Length}, Size)
+        when is_integer(Offset), is_integer(Length),
+             Offset >= 0, Length >= 0, Offset =< Size ->
+    {ok, Offset, min(Length, Size - Offset), Size};
+resolve_range(_Range, _Size) ->
+    {error, range_not_satisfiable}.
+
+-spec file_headers(100..599, [{binary(), iodata()}],
+                   non_neg_integer(), non_neg_integer(), non_neg_integer(),
+                   undefined | {non_neg_integer(), non_neg_integer() | eof}) ->
+    {100..599, [{binary(), iodata()}]}.
+file_headers(Status, Hs, _Offset, Length, _FileSize, undefined) ->
+    {Status, set_content_length(Hs, Length)};
+file_headers(Status, Hs, _Offset, 0, _FileSize, _Range) ->
+    {Status, set_content_length(Hs, 0)};
+file_headers(Status, Hs, Offset, Length, FileSize, _Range) ->
+    Hs1 = set_content_length(Hs, Length),
+    Last = Offset + Length - 1,
+    CR = iolist_to_binary([<<"bytes ">>, integer_to_binary(Offset), <<"-">>,
+                           integer_to_binary(Last), <<"/">>,
+                           integer_to_binary(FileSize)]),
+    {Status, [{<<"content-range">>, CR} | Hs1]}.
+
+-spec set_content_length([{binary(), iodata()}], non_neg_integer()) ->
+    [{binary(), iodata()}].
+set_content_length(Hs, Length) ->
+    case has_header(<<"content-length">>, Hs) of
+        true  -> Hs;
+        false -> [{<<"content-length">>, integer_to_binary(Length)} | Hs]
+    end.
+
+-spec has_header(binary(), [{binary(), iodata()}]) -> boolean().
+has_header(Name, Hs) ->
+    Lower = string:lowercase(Name),
+    lists:any(fun({K, _}) -> string:lowercase(K) =:= Lower end, Hs).
+
+-spec stream_file(module(), livery_adapter:stream(), file:name_all(),
+                  non_neg_integer(), non_neg_integer(),
+                  trailers()) -> ok | {error, term()}.
+stream_file(Adapter, Stream, Path, Offset, Length, Trailers) ->
+    case file:open(Path, [read, raw, binary]) of
+        {ok, Fd} ->
+            try
+                {ok, _} = file:position(Fd, Offset),
+                send_file_chunks(Adapter, Stream, Fd, Length, Trailers)
+            after
+                file:close(Fd)
+            end;
+        {error, Reason} ->
+            Adapter:reset(Stream, Reason),
+            {error, Reason}
+    end.
+
+-spec send_file_chunks(module(), livery_adapter:stream(), file:io_device(),
+                       non_neg_integer(), trailers()) ->
+    ok | {error, term()}.
+send_file_chunks(Adapter, Stream, Fd, Remaining, Trailers) ->
+    HasTrailers = Trailers =/= undefined,
+    case file:read(Fd, min(Remaining, ?FILE_CHUNK_SIZE)) of
+        eof ->
+            close_stream(Adapter, Stream, Trailers);
+        {ok, Data} ->
+            Rest = Remaining - byte_size(Data),
+            Last = Rest =< 0,
+            EndStream = Last andalso not HasTrailers,
+            case Adapter:send_data(Stream, Data, #{end_stream => EndStream}) of
+                ok when Last andalso HasTrailers ->
+                    emit_trailers(Adapter, Stream, Trailers);
+                ok when Last ->
+                    ok;
+                ok ->
+                    send_file_chunks(Adapter, Stream, Fd, Rest, Trailers);
+                Other ->
+                    Other
+            end;
+        {error, Reason} ->
+            Adapter:reset(Stream, Reason),
+            {error, Reason}
+    end.
 
 %%====================================================================
 %% SSE framing (RFC text/event-stream)

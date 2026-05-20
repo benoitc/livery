@@ -104,12 +104,12 @@ emit_sse_iolist_data_test() ->
     {Cap, _} = emit_through(livery_resp:sse(200, Producer)),
     ?assertEqual(<<"data: ab\n\n">>, livery_test_adapter:body(Cap)).
 
-emit_file_resets_stream_test() ->
-    Resp = livery_resp:file(200, "/tmp/nope"),
+emit_missing_file_returns_404_test() ->
+    Resp = livery_resp:file(200, "/tmp/livery-no-such-file-zzz"),
     {Cap, R} = emit_through(Resp),
-    ?assertEqual({error, not_implemented}, R),
-    ?assertEqual(file_emission_not_implemented,
-                 livery_test_adapter:reset_reason(Cap)).
+    ?assertEqual(ok, R),
+    ?assertEqual(404, livery_test_adapter:status(Cap)),
+    ?assertEqual(undefined, livery_test_adapter:reset_reason(Cap)).
 
 emit_upgrade_resets_stream_test() ->
     Resp = livery_resp:upgrade(ws, undefined),

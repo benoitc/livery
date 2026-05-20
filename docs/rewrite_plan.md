@@ -282,9 +282,13 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   (mount at `/openapi.json`). `livery_openapi_validate` provides a
   JSON-Schema-subset `validate/2` plus a `422` body-validation
   middleware. `livery_openapi:redoc_handler/0,1` serves a
-  self-contained Redoc UI page inline via `livery_resp:html/2`
-  (no static-file support needed). Swagger UI and full JSON Schema
-  deferred.
+  self-contained Redoc UI page inline via `livery_resp:html/2`.
+  File responses now stream end to end: `livery_resp:file/2,3`
+  emits `{file, Path, Range}` and `livery:emit/3` streams the file
+  in 64 KiB chunks over H1/H2/H3, sets `Content-Length`/
+  `Content-Range`, and maps a missing file to `404` and an
+  unsatisfiable range to `416` (parity SUITE `file_response`).
+  Swagger UI and full JSON Schema deferred.
 - Phase 10, 1 week: MCP (`livery_mcp*`).
 - Phase 11, partial (optional): `livery_wt:upgrade/3` bridges an
   extended-CONNECT request to `webtransport:accept/4` via

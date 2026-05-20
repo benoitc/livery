@@ -12,7 +12,9 @@
         h1,
         h2,
         quic,
-        ws
+        ws,
+        instrument,
+        webtransport
     ]},
     {env, []},
     {modules, []},

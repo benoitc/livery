@@ -2,24 +2,24 @@
 -define(LIVERY_HRL, true).
 
 -record(livery_req, {
-    protocol :: h1 | h2 | h3,
-    method :: binary(),
+    protocol = h1 :: h1 | h2 | h3,
+    method = <<"GET">> :: binary(),
     scheme = <<"http">> :: binary(),
     authority = <<>> :: binary(),
     path = <<"/">> :: binary(),
     raw_query = <<>> :: binary(),
     bindings = #{} :: #{binary() => binary()},
     headers = [] :: [{binary(), binary()}],
-    peer :: {inet:ip_address(), inet:port_number()} | undefined,
-    tls :: undefined | map(),
+    peer = undefined :: {inet:ip_address(), inet:port_number()} | undefined,
+    tls = undefined :: undefined | map(),
     body = empty :: empty
                   | {buffered, iodata()}
                   | {stream, term()},
-    adapter :: module() | undefined,
-    stream :: term(),
-    engine_pid :: pid() | undefined,
+    adapter = undefined :: module() | undefined,
+    stream = undefined :: term(),
+    engine_pid = undefined :: pid() | undefined,
     req_id = <<>> :: binary(),
-    started_at :: integer() | undefined,
+    started_at = undefined :: integer() | undefined,
     meta = #{} :: map()
 }).
 
@@ -31,7 +31,8 @@
                          | {sse, fun((term()) -> ok)}
                          | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
                          | {upgrade, ws | wt, term()}
-                         | empty,
+                         | empty
+                         | taken_over,
     trailers :: undefined
               | [{binary(), binary()}]
               | fun(() -> [{binary(), binary()}])

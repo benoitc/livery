@@ -68,6 +68,45 @@ trailers_passthrough_test() ->
     ?assertEqual([{<<"grpc-status">>, <<"0">>}], livery_resp:trailers(R1)).
 
 %%====================================================================
+%% NDJSON builder
+%%====================================================================
+
+ndjson_sets_content_type_test() ->
+    R = livery_resp:ndjson(200, fun(_) -> ok end),
+    ?assertEqual(<<"application/x-ndjson">>,
+                 header(R, <<"content-type">>)),
+    ?assertMatch({chunked, _}, livery_resp:body(R)).
+
+ndjson_encodes_each_emitted_term_with_newline_test() ->
+    Producer = fun(Emit) ->
+        Emit(#{<<"n">> => 1}),
+        Emit(#{<<"n">> => 2}),
+        ok
+    end,
+    Cap = livery_test_adapter:run(
+        [], fun(_R) -> livery_resp:ndjson(200, Producer) end, #{}),
+    ?assertEqual(<<"{\"n\":1}\n{\"n\":2}\n">>,
+                 livery_test_adapter:body(Cap)),
+    ?assertEqual(<<"application/x-ndjson">>,
+                 livery_test_adapter:header(<<"content-type">>, Cap)).
+
+ndjson_extra_headers_keep_default_content_type_test() ->
+    R = livery_resp:ndjson(200,
+        [{<<"cache-control">>, <<"no-cache">>}],
+        fun(_) -> ok end),
+    ?assertEqual(<<"application/x-ndjson">>,
+                 header(R, <<"content-type">>)),
+    ?assertEqual(<<"no-cache">>,
+                 header(R, <<"cache-control">>)).
+
+ndjson_user_content_type_wins_test() ->
+    R = livery_resp:ndjson(200,
+        [{<<"Content-Type">>, <<"application/json-seq">>}],
+        fun(_) -> ok end),
+    ?assertEqual(<<"application/json-seq">>,
+                 header(R, <<"content-type">>)).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 

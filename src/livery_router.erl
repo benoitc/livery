@@ -1,20 +1,20 @@
-%% @doc Radix-style path-segment router.
-%%
-%% Routes are compiled into an immutable trie. Each segment of a
-%% pattern is one of:
-%%
-%% <ul>
-%%   <li>static, e.g. `users' in `/users/new';</li>
-%%   <li>parameter, prefixed with `:', e.g. `:id' in `/users/:id';</li>
-%%   <li>wildcard, prefixed with `*', e.g. `*path' in `/files/*path',
-%%       matching all remaining segments joined back with `/'.</li>
-%% </ul>
-%%
-%% `match/3' returns `{ok, Handler, Bindings, Meta}' on a method-aware
-%% hit, `{error, {method_not_allowed, Methods}}' when the path matches
-%% but no route is registered for the requested method, or
-%% `{error, not_found}' otherwise.
 -module(livery_router).
+-moduledoc """
+Radix-style path-segment router.
+
+Routes are compiled into an immutable trie. Each segment of a
+pattern is one of:
+
+- static, e.g. `users` in `/users/new`;
+- parameter, prefixed with `:`, e.g. `:id` in `/users/:id`;
+- wildcard, prefixed with `*`, e.g. `*path` in `/files/*path`,
+  matching all remaining segments joined back with `/`.
+
+`match/3` returns `{ok, Handler, Bindings, Meta}` on a
+method-aware hit, `{error, {method_not_allowed, Methods}}` when
+the path matches but no route is registered for the requested
+method, or `{error, not_found}` otherwise.
+""".
 
 -export([
     new/0,
@@ -46,19 +46,22 @@
 %% Public API
 %%====================================================================
 
+-doc "Empty router with no routes.".
 -spec new() -> router().
 new() -> #node{}.
 
-%% @doc Insert one route.
-%%
-%% Method may be `'_'' to match any HTTP method. Later additions with
-%% the same Method+Pattern replace the previous entry.
+-doc """
+Insert one route.
+
+Method may be `'_'` to match any HTTP method. Later additions with
+the same Method+Pattern replace the previous entry.
+""".
 -spec add(method(), pattern(), handler(), meta(), router()) -> router().
 add(Method, Pattern, Handler, Meta, Router) ->
     Segments = split(Pattern),
     insert(Segments, Method, Handler, Meta, Router).
 
-%% @doc Build a router from a list of routes in one shot.
+-doc "Build a router from a list of routes in one shot.".
 -spec compile([{method(), pattern(), handler()} |
                {method(), pattern(), handler(), meta()}]) -> router().
 compile(Routes) ->
@@ -73,7 +76,7 @@ compile(Routes) ->
         Routes
     ).
 
-%% @doc Look up a route.
+-doc "Look up a route by method and path.".
 -spec match(method(), binary(), router()) ->
     {ok, handler(), bindings(), meta()}
   | {error, not_found}
@@ -200,8 +203,7 @@ split(Path) when is_binary(Path) ->
         _    -> binary:split(Path1, <<"/">>, [global])
     end.
 
--spec join([binary()]) -> binary().
-join([])   -> <<>>;
+-spec join([binary(), ...]) -> binary().
 join([S])  -> S;
 join(Segs) -> iolist_to_binary(lists:join(<<"/">>, Segs)).
 

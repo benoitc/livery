@@ -1,4 +1,7 @@
 -module(livery_app).
+-moduledoc """
+OTP application callback for Livery. Starts `livery_sup` at boot.
+""".
 -behaviour(application).
 
 -export([start/2, stop/1]).

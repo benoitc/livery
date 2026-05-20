@@ -49,7 +49,8 @@ solution.
 - [Return trailers](guides/return-trailers.md)
 - [Send an empty or redirect response](guides/empty-and-redirects.md)
 
-**Middleware**
+**Routing & middleware**
+- [Mount a router on a service](guides/mount-a-router.md)
 - [Write a custom middleware](guides/custom-middleware.md)
 - [Cap request body size](guides/cap-body-size.md)
 - [Add per-request deadlines](guides/add-deadlines.md)

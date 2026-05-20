@@ -21,7 +21,10 @@
     alt_svc_advertised_on_h1_and_h2_only/1,
     which_listeners_reports_all_three/1,
     router_service_dispatches_routes/1,
-    service_without_handler_or_router_fails/1
+    service_without_handler_or_router_fails/1,
+    stop_accepting_refuses_new_connections/1,
+    drain_lets_inflight_finish/1,
+    drain_times_out_on_stuck_request/1
 ]).
 
 %%====================================================================
@@ -33,7 +36,10 @@ all() ->
      alt_svc_advertised_on_h1_and_h2_only,
      which_listeners_reports_all_three,
      router_service_dispatches_routes,
-     service_without_handler_or_router_fails].
+     service_without_handler_or_router_fails,
+     stop_accepting_refuses_new_connections,
+     drain_lets_inflight_finish,
+     drain_times_out_on_stuck_request].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -123,6 +129,56 @@ service_without_handler_or_router_fails(_Config) ->
     ?assertMatch({error, _}, livery:start_service(#{http => #{port => 0}})),
     process_flag(trap_exit, false).
 
+stop_accepting_refuses_new_connections(_Config) ->
+    {ok, Pid} = livery:start_service(#{
+        http => #{port => 0},
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end}),
+    Port = maps:get(h1, livery:which_listeners(Pid)),
+    ?assertMatch({ok, 200, _, <<"ok">>}, http_try(Port, <<"/">>)),
+    ok = livery_service:stop_accepting(Pid),
+    ?assertMatch({error, _}, http_try(Port, <<"/">>)),
+    livery:stop_service(Pid).
+
+drain_lets_inflight_finish(_Config) ->
+    Self = self(),
+    Ref = make_ref(),
+    Handler = fun(_R) ->
+        Self ! {ready, Ref, self()},
+        receive {release, Ref} -> ok end,
+        livery_resp:text(200, <<"done">>)
+    end,
+    {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
+    Port = maps:get(h1, livery:which_listeners(Pid)),
+    spawn(fun() -> Self ! {client_done, http_get(Port, <<"/">>)} end),
+    WPid = receive {ready, Ref, P} -> P after 5000 -> ct:fail(no_request) end,
+    ?assertEqual(1, livery_drain:in_flight()),
+    %% Drain in the background; release the in-flight request so it
+    %% can finish during the drain window.
+    spawn(fun() -> Self ! {drain_done, livery:drain(Pid, #{timeout => 5000})} end),
+    WPid ! {release, Ref},
+    ?assertEqual({200, <<"done">>},
+                 receive {client_done, R} -> R after 5000 -> ct:fail(no_client) end),
+    ?assertEqual(ok,
+                 receive {drain_done, D} -> D after 6000 -> ct:fail(no_drain) end),
+    ?assertNot(is_process_alive(Pid)).
+
+drain_times_out_on_stuck_request(_Config) ->
+    Self = self(),
+    Ref = make_ref(),
+    Handler = fun(_R) ->
+        Self ! {ready, Ref, self()},
+        receive after infinity -> ok end
+    end,
+    {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
+    Port = maps:get(h1, livery:which_listeners(Pid)),
+    spawn(fun() -> catch http_get(Port, <<"/">>) end),
+    WPid = receive {ready, Ref, P} -> P after 5000 -> ct:fail(no_request) end,
+    ?assertEqual({error, timeout},
+                 livery:drain(Pid, #{timeout => 300, poll_interval => 50})),
+    ?assertNot(is_process_alive(Pid)),
+    %% Clean up the stuck worker so it does not pollute later tests.
+    exit(WPid, kill).
+
 %%====================================================================
 %% Fixtures
 %%====================================================================
@@ -160,6 +216,17 @@ http_req(Method, Port, Path) ->
         hackney:request(Method, Url, [], <<>>,
                         [with_body, {recv_timeout, 5000}]),
     {Status, Body}.
+
+%% Like http_get but returns the raw hackney result (no match) and
+%% uses a fresh connection (pool disabled), so a closed listen socket
+%% surfaces as {error, _}. `stop_accepting' keeps existing pooled
+%% keep-alive connections alive, so the test must dial anew.
+http_try(Port, Path) ->
+    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
+                            integer_to_binary(Port), Path]),
+    hackney:request(<<"GET">>, Url, [], <<>>,
+                    [with_body, {pool, false},
+                     {connect_timeout, 1000}, {recv_timeout, 1000}]).
 
 body_via_h1(Port) ->
     Url = url(<<"http">>, Port),

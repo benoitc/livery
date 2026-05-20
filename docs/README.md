@@ -58,6 +58,9 @@ solution.
 - [Propagate request IDs](guides/propagate-request-ids.md)
 - [Catch handler errors](guides/handler-errors.md)
 
+**Operations**
+- [Shut down gracefully](guides/graceful-shutdown.md)
+
 **Testing and migration**
 - [Test handlers without a socket](guides/test-handlers.md)
 - [Migrate from Cowboy](guides/migrate-from-cowboy.md)

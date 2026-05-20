@@ -13,6 +13,8 @@ response-emission walker that every adapter calls back into.
     stop_listener/1,
     start_service/1,
     stop_service/1,
+    drain/1,
+    drain/2,
     which_listeners/1,
     router_handler/1,
     router_handler/2,
@@ -62,10 +64,24 @@ See `livery_service:start_link/1` for the opts shape.
 start_service(Opts) ->
     livery_service:start_link(Opts).
 
--doc "Stop a running service by pid.".
+-doc "Stop a running service by pid (immediate; cuts off in-flight).".
 -spec stop_service(pid()) -> ok.
 stop_service(Pid) when is_pid(Pid) ->
     livery_service:stop(Pid).
+
+-doc "Gracefully drain and stop a service. See `livery_drain:drain/1`.".
+-spec drain(pid()) -> ok | {error, timeout}.
+drain(Pid) when is_pid(Pid) ->
+    livery_drain:drain(Pid).
+
+-doc """
+Gracefully drain and stop a service: stop accepting new
+connections, wait up to the timeout for in-flight requests to
+finish, then stop. See `livery_drain:drain/2`.
+""".
+-spec drain(pid(), livery_drain:opts()) -> ok | {error, timeout}.
+drain(Pid, Opts) when is_pid(Pid) ->
+    livery_drain:drain(Pid, Opts).
 
 -doc """
 List the bound ports of a running service, keyed by protocol.

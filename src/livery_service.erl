@@ -21,13 +21,14 @@ livery:start_service(#{
 }).
 ```
 
-Returns `{ok, ServicePid}`. The service pid owns the listeners
-and shuts them down when stopped via `livery:stop_service/1`. A
-crash takes them all down together.
+Supply exactly one of `handler` (a single catch-all) or `router`
+(a compiled `livery_router` the service dispatches through, via
+`livery:router_handler/1`).
 
-Routing (Phase 9-ish) is out of scope here: pass a single
-`handler` for now. When `livery_router` integration lands, this
-module accepts a `router` key instead.
+Returns `{ok, ServicePid}`. The service pid owns the listeners and
+shuts them down when stopped via `livery:stop_service/1`. A crash
+takes them all down together. For a polite shutdown that lets
+in-flight requests finish, use `livery:drain/1,2`.
 """.
 -behaviour(gen_server).
 
@@ -36,6 +37,7 @@ module accepts a `router` key instead.
 -export([
     start_link/1,
     stop/1,
+    stop_accepting/1,
     which_listeners/1
 ]).
 
@@ -96,6 +98,15 @@ stop(Pid) when is_pid(Pid) ->
     gen_server:stop(Pid).
 
 -doc """
+Stop the service's listeners (no new connections) while leaving
+the gen_server and any in-flight requests running. Used by
+`livery_drain` to begin a graceful shutdown.
+""".
+-spec stop_accepting(pid()) -> ok.
+stop_accepting(Pid) when is_pid(Pid) ->
+    gen_server:call(Pid, stop_accepting).
+
+-doc """
 Return the ports the service is bound to, by protocol. Keys are
 present only for protocols that were configured.
 """.
@@ -128,6 +139,11 @@ init(Opts) ->
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
     {reply, term(), #state{}}.
+handle_call(stop_accepting, _From, State) ->
+    _ = stop_h3(State#state.h3),
+    _ = stop_h2(State#state.h2),
+    _ = stop_h1(State#state.h1),
+    {reply, ok, State#state{h1 = undefined, h2 = undefined, h3 = undefined}};
 handle_call(which_listeners, _From, State) ->
     {reply, listeners_map(State), State};
 handle_call(_, _, State) ->

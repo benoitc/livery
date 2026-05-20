@@ -78,8 +78,18 @@ hook in Phase 2+) to cancel; alternatively the worker observes
 `{error, closed}` from the next `send_data` and breaks out of its
 producer loop.
 
+## Graceful shutdown
+
+Because every request runs as a `livery_req_proc` child of the one
+`livery_req_sup`, the in-flight count is just that supervisor's
+active children. `livery_drain` uses this: it stops the listeners
+from accepting new connections, waits for the active children to
+reach zero (within a window), then stops the service. See
+[How to shut down gracefully](../guides/graceful-shutdown.md).
+
 ## See also
 
 - Concept: [Architecture](architecture.md)
 - Concept: [Streaming and backpressure](streaming-and-backpressure.md)
-- Reference: `livery_req_proc`
+- Recipe: [Shut down gracefully](../guides/graceful-shutdown.md)
+- Reference: `livery_req_proc`, `livery_drain`

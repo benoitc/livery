@@ -274,10 +274,12 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   parameters; operation id/summary/tags/requestBody/responses from
   the route's `Meta`). `to_json/1` serialises it; `handler/1`
   returns a Livery handler that serves it as `application/json`
-  (mount at `/openapi.json`). Request/response validation
-  middleware and the Redoc/Swagger UI from `priv/` are deferred
-  (UI needs `livery_resp:file` emission, which the adapters do not
-  wire yet).
+  (mount at `/openapi.json`). `livery_openapi_validate` provides a
+  JSON-Schema-subset `validate/2` plus a `422` body-validation
+  middleware. `livery_openapi:redoc_handler/0,1` serves a
+  self-contained Redoc UI page inline via `livery_resp:html/2`
+  (no static-file support needed). Swagger UI and full JSON Schema
+  deferred.
 - Phase 10, 1 week: MCP (`livery_mcp*`).
 - Phase 11, partial (optional): `livery_wt:upgrade/3` bridges an
   extended-CONNECT request to `webtransport:accept/4` via

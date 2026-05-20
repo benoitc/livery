@@ -1,5 +1,57 @@
 # The middleware pipeline
 
+## A modern, value-based model
+
+Livery's middleware is the **Tower/Axum** model, not the legacy
+`(req, res, next)` one. The difference is the core of the design
+(principle #4 in [design.md](../design.md): *"Axum + Tower
+ergonomics"*).
+
+**Legacy** (Express, Rack, Cowboy middlewares): a middleware gets a
+mutable request *and* response object and a `next` callback. You
+mutate the response in place and remember to call `next()`; control
+flow is implicit and the response is shared, mutable state.
+
+```text
+%% legacy shape — mutate-and-next
+fun(Req, Res, Next) -> Res2 = set_header(Res, ...), Next(Req, Res2) end
+```
+
+**Livery** (Tower-style continuation over immutable values): a
+middleware gets the request and a `Next` continuation, and *returns*
+a response. There is no mutable response object; each stage either
+returns a response, transforms one, or wraps the downstream call.
+
+```erlang
+%% Livery shape — continuation-passing, values in/out
+call(Req, Next, State) ->
+    Resp = Next(Req),                       %% run the rest of the stack
+    livery_resp:with_header(<<"x-served-by">>, <<"livery">>, Resp).
+```
+
+Why it matters:
+
+- **Immutable values.** `Req` and `Resp` are plain records, never a
+  shared mutable handle — safe to pass between processes, trivial to
+  test, no "did I forget to return the response" bugs.
+- **Composition is a value.** `Next` *is* "the rest of the
+  pipeline" as a function; wrapping it in `try`/`catch`, a timeout,
+  or a span is just calling it inside your own code.
+- **Pairs with extractors.** Like Axum, typed input comes from
+  `livery_ext` (`json/1`, `query/2`, `bearer_token/1`), not from
+  mutating the request as it flows.
+
+### The alternative we did not take
+
+The other modern model is the **interceptor chain** (Pedestal,
+gRPC): the pipeline is a *data value* — a queue of
+`#{enter, leave, error}` stages you can reorder, push/pop at
+runtime, and pause/resume, with uniform error handling in a `leave`
+phase. It is more introspectable and dynamic, at the cost of more
+indirection and being less familiar to the Axum audience Livery
+targets. Livery chose the Tower onion; reach for interceptors only
+if you need to manipulate the chain mid-request.
+
 ## Shape
 
 A middleware stack is an ordered list. Each entry is either:

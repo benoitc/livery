@@ -9,6 +9,7 @@
         ssl,
         crypto,
         public_key,
+        inets,
         h1,
         h2,
         quic,

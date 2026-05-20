@@ -37,17 +37,57 @@ call(Req, Next, State) ->
                 false -> Next(Req)
             end;
         Token ->
-            case livery_auth:verify(Token, verify_opts(State)) of
-                {ok, Claims} ->
-                    Next(livery_req:set_meta(user, Claims, Req));
-                {error, Reason} ->
-                    unauthorized(reason_text(Reason))
+            case resolve_keys(State) of
+                {ok, VerifyOpts} ->
+                    verify_with_rotation(Token, VerifyOpts, State, Req, Next);
+                {error, _} ->
+                    unauthorized(<<"key resolution failed">>)
             end
     end.
 
+%% Verify; on a no_matching_key failure with a jwks_uri, refresh the
+%% JWKS once (rotation) and retry before giving up.
+verify_with_rotation(Token, VerifyOpts, State, Req, Next) ->
+    case livery_auth:verify(Token, VerifyOpts) of
+        {ok, Claims} ->
+            Next(livery_req:set_meta(user, Claims, Req));
+        {error, no_matching_key} when is_map_key(jwks_uri, State) ->
+            case refresh_keys(State) of
+                {ok, VerifyOpts1} ->
+                    case livery_auth:verify(Token, VerifyOpts1) of
+                        {ok, Claims} ->
+                            Next(livery_req:set_meta(user, Claims, Req));
+                        {error, Reason} ->
+                            unauthorized(reason_text(Reason))
+                    end;
+                {error, _} ->
+                    unauthorized(<<"no matching key">>)
+            end;
+        {error, Reason} ->
+            unauthorized(reason_text(Reason))
+    end.
+
+-spec resolve_keys(map()) -> {ok, livery_auth:verify_opts()} | {error, term()}.
+resolve_keys(#{jwks_uri := Uri} = State) ->
+    case livery_auth_jwks:keys(Uri, jwks_opts(State)) of
+        {ok, Keys} -> {ok, verify_opts(State#{keys => Keys})};
+        {error, _} = E -> E
+    end;
+resolve_keys(State) ->
+    {ok, verify_opts(State)}.
+
+refresh_keys(#{jwks_uri := Uri} = State) ->
+    case livery_auth_jwks:refresh(Uri, jwks_opts(State)) of
+        {ok, Keys} -> {ok, verify_opts(State#{keys => Keys})};
+        {error, _} = E -> E
+    end.
+
+jwks_opts(State) ->
+    maps:with([fetch, ttl], State).
+
 -spec verify_opts(map()) -> livery_auth:verify_opts().
 verify_opts(State) ->
-    maps:without([required], State).
+    maps:without([required, jwks_uri, fetch, ttl], State).
 
 -spec unauthorized(binary()) -> livery_resp:resp().
 unauthorized(Detail) ->

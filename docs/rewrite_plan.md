@@ -258,16 +258,18 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   are lazily created and cached in `persistent_term/0` keyed by
   meter name. Both middlewares compose with the rest of the
   stack.
-- Phase 8, partial: `livery_auth:verify/2` does JWT verification
-  (RS256 + ES256) against a supplied JWK set with `exp`/`nbf`/
-  `iss`/`aud` claim validation, using OTP `public_key`/`crypto`
-  only (no network). `livery_auth_bearer` middleware verifies the
-  bearer token and stashes claims as `meta(user, _)`;
-  `livery_ext:user/1,2` reads them back. OIDC discovery, live JWKS
-  rotation over HTTP, RFC 7662 introspection, and session cookies
-  are deferred (they need an HTTP client choice and are
-  network-bound); the static-JWK verifier is the testable core
-  they layer on.
+- Phase 8, mostly done: `livery_auth:verify/2` does JWT
+  verification (RS256 + ES256) against a JWK set with
+  `exp`/`nbf`/`iss`/`aud` validation, OTP `public_key`/`crypto`
+  only. `livery_auth_bearer` verifies the bearer token and stashes
+  claims as `meta(user, _)`; `livery_ext:user/1,2` reads them back.
+  `livery_auth_oidc:discover/1,2` fetches OIDC discovery docs and
+  `livery_auth_jwks:keys/1,2` fetches + caches JWKS in
+  `persistent_term` with a TTL; the bearer middleware accepts a
+  `jwks_uri` and refreshes once on `no_matching_key` so key
+  rotation is transparent. HTTP fetch is pluggable (default OTP
+  `httpc`; tests inject a fetcher, no network). RFC 7662
+  introspection and session cookies still deferred.
 - Phase 9, partial: `livery_openapi:build/1` emits an OpenAPI 3.1
   document map from route metadata (Livery `:param`/`*wildcard`
   rewritten to `{param}` templates with synthesised path

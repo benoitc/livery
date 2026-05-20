@@ -15,7 +15,8 @@
         quic,
         ws,
         instrument,
-        webtransport
+        webtransport,
+        barrel_mcp
     ]},
     {env, []},
     {modules, []},

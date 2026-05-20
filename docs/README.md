@@ -61,6 +61,7 @@ solution.
 - [Propagate request IDs](guides/propagate-request-ids.md)
 - [Catch handler errors](guides/handler-errors.md)
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
+- [Serve MCP tools](guides/serve-mcp-tools.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

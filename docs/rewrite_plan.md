@@ -104,9 +104,9 @@ Git deps declared in `rebar.config`, hex later:
 | `quic`         | QUIC, quic_h3 subsystem, QPACK                    | required  |
 | `ws`           | WebSocket (RFC 6455 + RFC 8441 + RFC 9220)        | required  |
 | `webtransport` | WT sessions over h2 and h3                        | Phase 11  |
-| `barrel_mcp`   | MCP protocol core (library use, not Cowboy)       | Phase 10  |
+| `barrel_mcp`   | MCP protocol core + engine (2.0, cowboy-free)     | required  |
 | `instrument`   | Tracer, meter, propagation, logger bridge         | Phase 7   |
-| `hackney`      | Reference client for tests only                   | test only |
+| `hackney`      | HTTP client (barrel_mcp client + test driver)     | required  |
 
 Local development uses `_checkouts/` symlinks to the sibling projects
 (`../erlang_h1`, `../erlang_h2`, `../erlang_quic`, `../erlang_ws`,
@@ -305,7 +305,22 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   `min`/`maxProperties`, `additionalProperties`, and
   `allOf`/`anyOf`/`oneOf`). `$ref`/`if`/`then`/`else` still out of
   scope.
-- Phase 10, 1 week: MCP (`livery_mcp*`).
+- Phase 10, done: `livery_mcp:handler/0,1` serves the MCP
+  Streamable HTTP transport by delegating to
+  `barrel_mcp_http_engine:handle/6` (the transport-neutral engine in
+  `barrel_mcp` 2.0). Per request it builds a `Responder` whose
+  `reply`/`stream_start`/`stream_chunk`/`stream_end` closures call
+  the Livery adapter's `send_headers`/`send_data`, then returns the
+  `taken_over` sentinel; the same handler works on H1/H2/H3. Tools,
+  resources, and prompts are registered through `barrel_mcp`'s own
+  registry (`barrel_mcp:reg_tool/4` etc.); the `barrel_mcp` app runs
+  as a Livery dependency. No separate `livery_mcp_session` module is
+  needed: the engine manages `Mcp-Session-Id` sessions via
+  `barrel_mcp_session`. `livery_mcp_SUITE` drives a real
+  initialize -> notifications/initialized -> tools/list ->
+  tools/call session over H1. barrel_mcp 2.0 dropped cowboy; it
+  still pulls hackney (its MCP client), so hackney moved from a
+  test-only dep to a runtime dep, unified at 4.0.0.
 - Phase 11, partial (optional): `livery_wt:upgrade/3` bridges an
   extended-CONNECT request to `webtransport:accept/4` via
   `livery_h2:accept_wt/4` and `livery_h3:accept_wt/4` (reconstructs

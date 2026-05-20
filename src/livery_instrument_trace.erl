@@ -24,10 +24,39 @@ The span is `kind => server` and gets these attributes:
 Errors from the handler are recorded on the span via
 `instrument_tracer:record_exception/2` and re-raised so the
 request process's own crash handling still runs.
+
+## Correlating logs with traces
+
+Call `install_logger/0` once at boot to add the `instrument`
+logger filter. It enriches every `logger` event emitted while a
+span is active (so, inside this middleware) with `trace_id`,
+`span_id`, and `trace_flags` in the event metadata. Stack this
+middleware outside `livery_access_log` and the access-log lines
+carry the same ids as the request's span.
 """.
 -behaviour(livery_middleware).
 
--export([call/3]).
+-export([call/3, install_logger/0, install_logger/1, uninstall_logger/0]).
+
+-doc """
+Install the `instrument` logger filter so log events carry the
+active span's `trace_id`/`span_id`. Call once at application
+start. Idempotent.
+""".
+-spec install_logger() -> ok | {error, term()}.
+install_logger() ->
+    install_logger(#{filter => true}).
+
+-doc "`install_logger/0` with explicit `instrument_logger` options.".
+-spec install_logger(map()) -> ok | {error, term()}.
+install_logger(Opts) ->
+    instrument_logger:install(Opts).
+
+-doc "Remove the `instrument` logger filter installed by `install_logger/0`.".
+-spec uninstall_logger() -> ok.
+uninstall_logger() ->
+    _ = instrument_logger:uninstall(),
+    ok.
 
 -spec call(livery_req:req(), livery_middleware:next(),
            map()) -> livery_resp:resp().

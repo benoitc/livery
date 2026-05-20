@@ -86,3 +86,47 @@ stacked_trace_and_metrics_compose() ->
         #{method => <<"POST">>, path => <<"/items">>}),
     ?assertEqual(201, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"made">>, livery_test_adapter:body(Cap)).
+
+%%====================================================================
+%% Logger bridge: logs inside a traced request carry trace context
+%%====================================================================
+
+logs_carry_trace_context_test() ->
+    {ok, _} = application:ensure_all_started(instrument),
+    Self = self(),
+    HandlerId = trace_log_capture,
+    Primary = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    ok = livery_instrument_trace:install_logger(),
+    ok = logger:add_handler(HandlerId, ?MODULE,
+        #{config => Self, level => all, formatter => {logger_formatter, #{}}}),
+    try
+        Handler = fun(_R) ->
+            logger:log(info, #{marker => livery_trace_test}, #{}),
+            livery_resp:text(200, <<"ok">>)
+        end,
+        _ = livery_test_adapter:run([{livery_instrument_trace, #{}}], Handler, #{}),
+        Meta = wait_trace_meta(500),
+        ?assert(maps:is_key(trace_id, Meta)),
+        ?assert(maps:is_key(span_id, Meta))
+    after
+        logger:remove_handler(HandlerId),
+        livery_instrument_trace:uninstall_logger(),
+        logger:set_primary_config(level, maps:get(level, Primary))
+    end.
+
+wait_trace_meta(Timeout) ->
+    receive
+        {log_event, #{msg := {report, #{marker := livery_trace_test}},
+                      meta := Meta}} ->
+            Meta;
+        {log_event, _Other} ->
+            wait_trace_meta(Timeout)
+    after Timeout ->
+        #{}
+    end.
+
+%% logger handler callback used by logs_carry_trace_context_test
+log(Event, #{config := Pid}) ->
+    Pid ! {log_event, Event},
+    ok.

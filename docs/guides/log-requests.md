@@ -72,7 +72,35 @@ Stack = [
 ].
 ```
 
+## Correlate access logs with traces
+
+If you also run the `livery_instrument_trace` middleware, install
+the `instrument` logger filter once at boot:
+
+```erlang
+ok = livery_instrument_trace:install_logger().
+```
+
+The filter enriches every `logger` event emitted while a span is
+active with the span's `trace_id`, `span_id`, and `trace_flags` in
+the event metadata. Stack the trace middleware *outside*
+`livery_access_log` and each access-log line carries the same ids
+as the request's span:
+
+```erlang
+Stack = [
+    {livery_request_id, undefined},
+    {livery_instrument_trace, #{}},
+    {livery_access_log, #{}},
+    %% ... handler
+].
+```
+
+Any `logger` call your handler makes during the request inherits
+the same ids, so application logs and access logs line up with the
+trace in your backend.
+
 ## See also
 
-- Reference: `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`
+- Reference: `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`, `livery_instrument_trace`
 - Recipe: [Propagate request IDs](propagate-request-ids.md)

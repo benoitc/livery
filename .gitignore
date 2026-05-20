@@ -6,6 +6,7 @@ rebar.lock
 erl_crash.dump
 *.crashdump
 .eunit/
+.DS_Store
 logs/
 doc/
 .idea/

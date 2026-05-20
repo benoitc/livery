@@ -71,6 +71,102 @@ nested_object_path_test() ->
                      #{<<"user">> => #{}}, Schema)).
 
 %%====================================================================
+%% Expanded keywords
+%%====================================================================
+
+-define(V(Val, Schema), livery_openapi_validate:validate(Val, Schema)).
+
+enforces_const_test() ->
+    Schema = #{const => <<"v1">>},
+    ?assertEqual(ok, ?V(<<"v1">>, Schema)),
+    ?assertMatch({error, _}, ?V(<<"v2">>, Schema)).
+
+enforces_exclusive_bounds_test() ->
+    Schema = #{type => <<"number">>,
+               exclusiveMinimum => 0, exclusiveMaximum => 10},
+    ?assertEqual(ok, ?V(5, Schema)),
+    ?assertMatch({error, _}, ?V(0, Schema)),
+    ?assertMatch({error, _}, ?V(10, Schema)).
+
+enforces_multiple_of_test() ->
+    Schema = #{type => <<"integer">>, multipleOf => 5},
+    ?assertEqual(ok, ?V(15, Schema)),
+    ?assertMatch({error, _}, ?V(7, Schema)).
+
+enforces_pattern_test() ->
+    Schema = #{type => <<"string">>, pattern => <<"^[a-z]+$">>},
+    ?assertEqual(ok, ?V(<<"abc">>, Schema)),
+    ?assertMatch({error, _}, ?V(<<"abc1">>, Schema)).
+
+accepts_type_union_test() ->
+    Schema = #{type => [<<"string">>, <<"null">>]},
+    ?assertEqual(ok, ?V(<<"x">>, Schema)),
+    ?assertEqual(ok, ?V(null, Schema)),
+    ?assertMatch({error, _}, ?V(42, Schema)).
+
+enforces_array_size_test() ->
+    Schema = #{type => <<"array">>, minItems => 1, maxItems => 2},
+    ?assertEqual(ok, ?V([1], Schema)),
+    ?assertMatch({error, _}, ?V([], Schema)),
+    ?assertMatch({error, _}, ?V([1, 2, 3], Schema)).
+
+enforces_unique_items_test() ->
+    Schema = #{type => <<"array">>, uniqueItems => true},
+    ?assertEqual(ok, ?V([1, 2, 3], Schema)),
+    ?assertMatch({error, _}, ?V([1, 1, 2], Schema)).
+
+enforces_property_count_test() ->
+    Schema = #{type => <<"object">>, minProperties => 1, maxProperties => 2},
+    ?assertEqual(ok, ?V(#{<<"a">> => 1}, Schema)),
+    ?assertMatch({error, _}, ?V(#{}, Schema)),
+    ?assertMatch({error, _},
+                 ?V(#{<<"a">> => 1, <<"b">> => 2, <<"c">> => 3}, Schema)).
+
+rejects_additional_properties_test() ->
+    Schema = #{type => <<"object">>,
+               properties => #{<<"a">> => #{type => <<"integer">>}},
+               additionalProperties => false},
+    ?assertEqual(ok, ?V(#{<<"a">> => 1}, Schema)),
+    ?assertMatch({error, [{<<"$.b">>, _}]},
+                 ?V(#{<<"a">> => 1, <<"b">> => 2}, Schema)).
+
+validates_additional_properties_schema_test() ->
+    Schema = #{type => <<"object">>,
+               properties => #{<<"a">> => #{type => <<"integer">>}},
+               additionalProperties => #{type => <<"string">>}},
+    ?assertEqual(ok, ?V(#{<<"a">> => 1, <<"b">> => <<"ok">>}, Schema)),
+    ?assertMatch({error, [{<<"$.b">>, _}]},
+                 ?V(#{<<"a">> => 1, <<"b">> => 2}, Schema)).
+
+enforces_all_of_test() ->
+    Schema = #{allOf => [
+        #{type => <<"integer">>},
+        #{minimum => 10}
+    ]},
+    ?assertEqual(ok, ?V(15, Schema)),
+    ?assertMatch({error, _}, ?V(5, Schema)).
+
+enforces_any_of_test() ->
+    Schema = #{anyOf => [
+        #{type => <<"string">>},
+        #{type => <<"integer">>}
+    ]},
+    ?assertEqual(ok, ?V(<<"x">>, Schema)),
+    ?assertEqual(ok, ?V(7, Schema)),
+    ?assertMatch({error, _}, ?V(true, Schema)).
+
+enforces_one_of_test() ->
+    Schema = #{oneOf => [
+        #{type => <<"integer">>, minimum => 0},
+        #{type => <<"integer">>, maximum => 5}
+    ]},
+    %% 10 matches only the first; -1 matches only the second.
+    ?assertEqual(ok, ?V(10, Schema)),
+    ?assertEqual(ok, ?V(-1, Schema)),
+    %% 3 matches both -> not exactly one.
+    ?assertMatch({error, _}, ?V(3, Schema)).
+
+%%====================================================================
 %% Middleware
 %%====================================================================
 
@@ -120,6 +216,26 @@ redoc_handler_serves_html_test() ->
 
 redoc_handler_custom_spec_url_test() ->
     Handler = livery_openapi:redoc_handler(<<"/v2/openapi.json">>),
+    Cap = livery_test_adapter:run([], Handler, #{}),
+    Body = livery_test_adapter:body(Cap),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"/v2/openapi.json">>)).
+
+%%====================================================================
+%% Swagger UI handler
+%%====================================================================
+
+swagger_ui_handler_serves_html_test() ->
+    Handler = livery_openapi:swagger_ui_handler(),
+    Cap = livery_test_adapter:run([], Handler, #{path => <<"/docs">>}),
+    ?assertEqual(200, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"text/html; charset=utf-8">>,
+                 livery_test_adapter:header(<<"content-type">>, Cap)),
+    Body = livery_test_adapter:body(Cap),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"SwaggerUIBundle">>)),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"/openapi.json">>)).
+
+swagger_ui_handler_custom_spec_url_test() ->
+    Handler = livery_openapi:swagger_ui_handler(<<"/v2/openapi.json">>),
     Cap = livery_test_adapter:run([], Handler, #{}),
     Body = livery_test_adapter:body(Cap),
     ?assertNotEqual(nomatch, binary:match(Body, <<"/v2/openapi.json">>)).

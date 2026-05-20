@@ -283,7 +283,7 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   field, and stashes the response as `meta(user, _)`. The HTTP
   call is pluggable (`fetch`), defaulting to OTP `httpc`. Phase 8
   done.
-- Phase 9, partial: `livery_openapi:build/1` emits an OpenAPI 3.1
+- Phase 9, done: `livery_openapi:build/1` emits an OpenAPI 3.1
   document map from route metadata (Livery `:param`/`*wildcard`
   rewritten to `{param}` templates with synthesised path
   parameters; operation id/summary/tags/requestBody/responses from
@@ -298,7 +298,13 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   in 64 KiB chunks over H1/H2/H3, sets `Content-Length`/
   `Content-Range`, and maps a missing file to `404` and an
   unsatisfiable range to `416` (parity SUITE `file_response`).
-  Swagger UI and full JSON Schema deferred.
+  `livery_openapi:swagger_ui_handler/0,1` serves a Swagger UI page
+  alongside Redoc. `livery_openapi_validate` now covers a broad
+  JSON Schema subset (`type` unions, `const`, exclusive bounds,
+  `multipleOf`, `pattern`, `min`/`maxItems`, `uniqueItems`,
+  `min`/`maxProperties`, `additionalProperties`, and
+  `allOf`/`anyOf`/`oneOf`). `$ref`/`if`/`then`/`else` still out of
+  scope.
 - Phase 10, 1 week: MCP (`livery_mcp*`).
 - Phase 11, partial (optional): `livery_wt:upgrade/3` bridges an
   extended-CONNECT request to `webtransport:accept/4` via

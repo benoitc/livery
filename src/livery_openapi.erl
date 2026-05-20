@@ -44,7 +44,9 @@ JsonBytes = livery_openapi:to_json(Doc).
     to_json/1,
     handler/1,
     redoc_handler/0,
-    redoc_handler/1
+    redoc_handler/1,
+    swagger_ui_handler/0,
+    swagger_ui_handler/1
 ]).
 
 -export_type([build_opts/0, route/0, document/0]).
@@ -217,6 +219,36 @@ redoc_html(SpecUrl) ->
      <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
      <<"</head><body><redoc spec-url=\"">>, SpecUrl, <<"\"></redoc>">>,
      <<"<script src=\"https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js\"></script>">>,
+     <<"</body></html>">>].
+
+-doc "Swagger UI handler loading the spec from `/openapi.json`.".
+-spec swagger_ui_handler() -> fun((livery_req:req()) -> livery_resp:resp()).
+swagger_ui_handler() ->
+    swagger_ui_handler(<<"/openapi.json">>).
+
+-doc """
+Return a Livery handler serving a Swagger UI documentation page
+that loads the OpenAPI spec from `SpecUrl`. Self-contained HTML
+(the Swagger UI bundle is pulled from a CDN); no static files
+needed.
+""".
+-spec swagger_ui_handler(binary()) ->
+    fun((livery_req:req()) -> livery_resp:resp()).
+swagger_ui_handler(SpecUrl) when is_binary(SpecUrl) ->
+    Html = swagger_ui_html(SpecUrl),
+    fun(_Req) -> livery_resp:html(200, Html) end.
+
+-spec swagger_ui_html(binary()) -> iodata().
+swagger_ui_html(SpecUrl) ->
+    [<<"<!DOCTYPE html><html><head><meta charset=\"utf-8\">">>,
+     <<"<title>API documentation</title>">>,
+     <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
+     <<"<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css\">">>,
+     <<"</head><body><div id=\"swagger-ui\"></div>">>,
+     <<"<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js\"></script>">>,
+     <<"<script>window.onload=function(){SwaggerUIBundle({url:\"">>,
+     SpecUrl,
+     <<"\",dom_id:\"#swagger-ui\"});};</script>">>,
      <<"</body></html>">>].
 
 %%====================================================================

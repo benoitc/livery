@@ -60,6 +60,7 @@ solution.
 - [Log every request](guides/log-requests.md)
 - [Propagate request IDs](guides/propagate-request-ids.md)
 - [Catch handler errors](guides/handler-errors.md)
+- [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

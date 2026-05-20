@@ -1,8 +1,8 @@
 %% @doc Example Livery service: REST + path params + SSE + NDJSON +
 %% an OpenAPI document, all served over HTTP/1.1 on one port.
 %%
-%% `livery:start_service/1' takes a single handler, so this example
-%% shows how to drive `livery_router' from inside that handler. Run:
+%% The service dispatches through a compiled `livery_router' passed
+%% as the `router' key; path parameters are bound automatically. Run:
 %%
 %%     {ok, Pid} = livery_example_api:start(8080).
 %%     %% curl http://127.0.0.1:8080/
@@ -12,7 +12,7 @@
 %%     livery_example_api:stop(Pid).
 -module(livery_example_api).
 
--export([start/0, start/1, stop/1, handler/1]).
+-export([start/0, start/1, stop/1]).
 -export([index/1, greet/1, events/1, ticks/1, openapi/1]).
 
 start() -> start(8080).
@@ -22,25 +22,14 @@ start(Port) ->
         http       => #{port => Port},
         middleware => [{livery_request_id, undefined},
                        {livery_access_log, #{}}],
-        handler    => fun ?MODULE:handler/1
+        router     => router()
     }).
 
 stop(Pid) ->
     livery:stop_service(Pid).
 
-%% Single service handler that dispatches through livery_router.
-handler(Req) ->
-    Method = livery_req:method(Req),
-    Path = livery_req:path(Req),
-    case livery_router:match(Method, Path, router()) of
-        {ok, {M, F}, Bindings, _Meta} ->
-            M:F(livery_req:set_bindings(Bindings, Req));
-        {error, not_found} ->
-            livery_resp:text(404, <<"not found">>);
-        {error, {method_not_allowed, _}} ->
-            livery_resp:text(405, <<"method not allowed">>)
-    end.
-
+%% The service dispatches through this router and sets path bindings
+%% before invoking each handler.
 router() ->
     livery_router:compile([
         {<<"GET">>, <<"/">>,           {?MODULE, index}},

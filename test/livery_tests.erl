@@ -139,6 +139,66 @@ stop_listener_rejects_unknown_handle_test() ->
                  livery:stop_listener({foo, bar})).
 
 %%====================================================================
+%% router_handler/1,2
+%%====================================================================
+
+router_handler_routes_and_binds_test() ->
+    Router = livery_router:compile([
+        {<<"GET">>, <<"/">>,         {?MODULE, rh_index}},
+        {<<"GET">>, <<"/hi/:name">>, {?MODULE, rh_greet}}
+    ]),
+    H = livery:router_handler(Router),
+    Cap1 = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/">>}),
+    ?assertEqual(<<"index">>, livery_test_adapter:body(Cap1)),
+    Cap2 = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/hi/ada">>}),
+    ?assertEqual(<<"hello, ada">>, livery_test_adapter:body(Cap2)).
+
+router_handler_fun_route_test() ->
+    Router = livery_router:compile([
+        {<<"GET">>, <<"/ping">>, fun(_R) -> livery_resp:text(200, <<"pong">>) end}
+    ]),
+    H = livery:router_handler(Router),
+    Cap = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/ping">>}),
+    ?assertEqual(<<"pong">>, livery_test_adapter:body(Cap)).
+
+router_handler_not_found_test() ->
+    Router = livery_router:compile([{<<"GET">>, <<"/">>, {?MODULE, rh_index}}]),
+    H = livery:router_handler(Router),
+    Cap = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/missing">>}),
+    ?assertEqual(404, livery_test_adapter:status(Cap)).
+
+router_handler_method_not_allowed_sets_allow_test() ->
+    Router = livery_router:compile([
+        {<<"GET">>,  <<"/x">>, {?MODULE, rh_index}},
+        {<<"POST">>, <<"/x">>, {?MODULE, rh_index}}
+    ]),
+    H = livery:router_handler(Router),
+    Cap = livery_test_adapter:run([], H,
+        #{method => <<"DELETE">>, path => <<"/x">>}),
+    ?assertEqual(405, livery_test_adapter:status(Cap)),
+    Allow = livery_test_adapter:header(<<"allow">>, Cap),
+    ?assertNotEqual(nomatch, binary:match(Allow, <<"GET">>)),
+    ?assertNotEqual(nomatch, binary:match(Allow, <<"POST">>)).
+
+router_handler_custom_fallbacks_test() ->
+    Router = livery_router:compile([{<<"GET">>, <<"/">>, {?MODULE, rh_index}}]),
+    H = livery:router_handler(Router, #{
+        not_found => fun(_R) -> livery_resp:text(404, <<"nope">>) end,
+        method_not_allowed => fun(_R, _M) -> livery_resp:text(405, <<"no">>) end
+    }),
+    Cap = livery_test_adapter:run([], H,
+        #{method => <<"GET">>, path => <<"/missing">>}),
+    ?assertEqual(<<"nope">>, livery_test_adapter:body(Cap)).
+
+%% Route handlers used by the router_handler tests.
+rh_index(_Req) -> livery_resp:text(200, <<"index">>).
+rh_greet(Req) -> livery_resp:text(200, [<<"hello, ">>, livery_req:binding(<<"name">>, Req)]).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 

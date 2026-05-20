@@ -14,6 +14,8 @@ response-emission walker that every adapter calls back into.
     start_service/1,
     stop_service/1,
     which_listeners/1,
+    router_handler/1,
+    router_handler/2,
     dispatch/3,
     emit/3
 ]).
@@ -73,6 +75,72 @@ Returns a map containing only the protocols that were configured.
 -spec which_listeners(pid()) -> #{h1 | h2 | h3 => inet:port_number()}.
 which_listeners(Pid) when is_pid(Pid) ->
     livery_service:which_listeners(Pid).
+
+%%====================================================================
+%% Router dispatch
+%%====================================================================
+
+-doc """
+Turn a compiled router into a request handler.
+
+Returns a `fun((livery_req:req()) -> livery_resp:resp())` that
+matches the request's method and path against `Router`, sets the
+captured path parameters as bindings, and invokes the matched
+route handler. Unmatched paths get `404`; a path that exists for a
+different method gets `405` with an `Allow` header.
+
+Pass the result as the `handler` for a listener, or give the
+router directly to `start_service/1` (which calls this for you).
+""".
+-spec router_handler(livery_router:router()) ->
+    fun((livery_req:req()) -> livery_resp:resp()).
+router_handler(Router) ->
+    router_handler(Router, #{}).
+
+-doc """
+`router_handler/1` with fallbacks.
+
+`Opts` may set `not_found => fun((Req) -> Resp)` and
+`method_not_allowed => fun((Req, [Method]) -> Resp)` to override the
+default `404`/`405` responses.
+""".
+-spec router_handler(livery_router:router(), map()) ->
+    fun((livery_req:req()) -> livery_resp:resp()).
+router_handler(Router, Opts) ->
+    NotFound = maps:get(not_found, Opts, fun default_not_found/1),
+    NotAllowed = maps:get(method_not_allowed, Opts,
+                          fun default_method_not_allowed/2),
+    fun(Req) ->
+        Method = livery_req:method(Req),
+        Path = livery_req:path(Req),
+        case livery_router:match(Method, Path, Router) of
+            {ok, Handler, Bindings, _Meta} ->
+                invoke_route(Handler, livery_req:set_bindings(Bindings, Req));
+            {error, not_found} ->
+                NotFound(Req);
+            {error, {method_not_allowed, Methods}} ->
+                NotAllowed(Req, Methods)
+        end
+    end.
+
+-spec invoke_route(livery_middleware:handler(), livery_req:req()) ->
+    livery_resp:resp().
+invoke_route({M, F}, Req) when is_atom(M), is_atom(F) ->
+    M:F(Req);
+invoke_route(Fun, Req) when is_function(Fun, 1) ->
+    Fun(Req).
+
+-spec default_not_found(livery_req:req()) -> livery_resp:resp().
+default_not_found(_Req) ->
+    livery_resp:text(404, <<"not found">>).
+
+-spec default_method_not_allowed(livery_req:req(),
+                                 [binary() | '_']) -> livery_resp:resp().
+default_method_not_allowed(_Req, Methods) ->
+    Allow = [M || M <- Methods, M =/= '_'],
+    Resp = livery_resp:text(405, <<"method not allowed">>),
+    livery_resp:with_header(<<"allow">>,
+        iolist_to_binary(lists:join(<<", ">>, Allow)), Resp).
 
 %%====================================================================
 %% Dispatch and emit

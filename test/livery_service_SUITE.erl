@@ -19,7 +19,9 @@
 -export([
     one_call_serves_all_three/1,
     alt_svc_advertised_on_h1_and_h2_only/1,
-    which_listeners_reports_all_three/1
+    which_listeners_reports_all_three/1,
+    router_service_dispatches_routes/1,
+    service_without_handler_or_router_fails/1
 ]).
 
 %%====================================================================
@@ -29,7 +31,9 @@
 all() ->
     [one_call_serves_all_three,
      alt_svc_advertised_on_h1_and_h2_only,
-     which_listeners_reports_all_three].
+     which_listeners_reports_all_three,
+     router_service_dispatches_routes,
+     service_without_handler_or_router_fails].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -94,6 +98,31 @@ which_listeners_reports_all_three(Config) ->
         livery:stop_service(Pid)
     end.
 
+router_service_dispatches_routes(_Config) ->
+    Router = livery_router:compile([
+        {<<"GET">>,  <<"/">>,        fun(_R) -> livery_resp:text(200, <<"root">>) end},
+        {<<"GET">>,  <<"/hi/:name">>,
+         fun(R) -> livery_resp:text(200, livery_req:binding(<<"name">>, R)) end},
+        {<<"POST">>, <<"/">>,        fun(_R) -> livery_resp:text(201, <<"made">>) end}
+    ]),
+    {ok, Pid} = livery:start_service(#{http => #{port => 0}, router => Router}),
+    try
+        Port = maps:get(h1, livery:which_listeners(Pid)),
+        ?assertEqual({200, <<"root">>}, http_get(Port, <<"/">>)),
+        ?assertEqual({200, <<"ada">>},  http_get(Port, <<"/hi/ada">>)),
+        %% unknown path -> 404
+        {404, _} = http_get(Port, <<"/missing">>),
+        %% wrong method on a known path -> 405
+        {405, _} = http_delete(Port, <<"/">>)
+    after
+        livery:stop_service(Pid)
+    end.
+
+service_without_handler_or_router_fails(_Config) ->
+    process_flag(trap_exit, true),
+    ?assertMatch({error, _}, livery:start_service(#{http => #{port => 0}})),
+    process_flag(trap_exit, false).
+
 %%====================================================================
 %% Fixtures
 %%====================================================================
@@ -117,6 +146,20 @@ start_full_service(Config) ->
 %%====================================================================
 %% Clients
 %%====================================================================
+
+http_get(Port, Path) ->
+    http_req(<<"GET">>, Port, Path).
+
+http_delete(Port, Path) ->
+    http_req(<<"DELETE">>, Port, Path).
+
+http_req(Method, Port, Path) ->
+    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
+                            integer_to_binary(Port), Path]),
+    {ok, Status, _Hs, Body} =
+        hackney:request(Method, Url, [], <<>>,
+                        [with_body, {recv_timeout, 5000}]),
+    {Status, Body}.
 
 body_via_h1(Port) ->
     Url = url(<<"http">>, Port),

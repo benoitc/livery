@@ -55,7 +55,10 @@ module accepts a `router` key instead.
     http       => listener_opts(),
     https      => listener_opts(),
     http3      => listener_opts(),
-    handler    := livery_middleware:handler(),
+    %% Supply exactly one of `handler' (a catch-all) or `router' (a
+    %% compiled livery_router that the service dispatches through).
+    handler    => livery_middleware:handler(),
+    router     => livery_router:router(),
     middleware => livery_middleware:stack(),
     alt_svc    => advertise | none
 }.
@@ -107,8 +110,8 @@ which_listeners(Pid) ->
 -spec init(service_opts()) -> {ok, #state{}} | {stop, term()}.
 init(Opts) ->
     process_flag(trap_exit, true),
-    Handler = maps:get(handler, Opts),
     try
+        Handler = resolve_handler(Opts),
         %% Start H3 first so the bound UDP port is known before
         %% building the Alt-Svc value used by H1 and H2.
         H3 = maybe_start_h3(Opts, base_stack(Opts), Handler),
@@ -149,6 +152,18 @@ code_change(_, State, _) -> {ok, State}.
 %%====================================================================
 %% Internals
 %%====================================================================
+
+%% Resolve the effective handler from the config: a compiled
+%% `router' (dispatched via livery:router_handler/1) or a single
+%% catch-all `handler'. Exactly one must be given.
+-spec resolve_handler(service_opts()) -> livery_middleware:handler().
+resolve_handler(Opts) ->
+    case {maps:find(router, Opts), maps:find(handler, Opts)} of
+        {{ok, _}, {ok, _}} -> throw(both_router_and_handler);
+        {{ok, Router}, _}  -> livery:router_handler(Router);
+        {_, {ok, H}}       -> H;
+        {error, error}     -> throw(no_handler_or_router)
+    end.
 
 -spec base_stack(service_opts()) -> livery_middleware:stack().
 base_stack(Opts) ->

@@ -224,7 +224,10 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   on H1/H2 responses. `livery_service_SUITE` smoke covering a
   single `livery:start_service/1` call serving the same handler
   on all three protocols. quiche-client / ngtcp2-client interop
-  deferred to docker-CI.
+  deferred to docker-CI. `start_service/1` also accepts a compiled
+  `router` (instead of a single `handler`) via
+  `livery:router_handler/1,2`, so the service owns method/path
+  dispatch, path-parameter binding, and 404/405 (with `Allow`).
 - Phase 5, done: `livery_ws:upgrade/3` over `livery_h1` (plain
   Upgrade), `livery_h2` (RFC 8441 extended CONNECT, via
   `livery_ws_h2`), and `livery_h3` (RFC 9220 extended CONNECT, via

@@ -261,7 +261,7 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   are lazily created and cached in `persistent_term/0` keyed by
   meter name. Both middlewares compose with the rest of the
   stack.
-- Phase 8, mostly done: `livery_auth:verify/2` does JWT
+- Phase 8, done: `livery_auth:verify/2` does JWT
   verification (RS256 + ES256) against a JWK set with
   `exp`/`nbf`/`iss`/`aud` validation, OTP `public_key`/`crypto`
   only. `livery_auth_bearer` verifies the bearer token and stashes
@@ -276,8 +276,13 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   payload (base64url, OTP `crypto` only), stashed as
   `meta(session, _)` and read via `livery_ext:session/1,2`, with
   `sign/2` + `set_cookie_header/2` + `clear_cookie_header/1` for
-  login/logout and an optional `exp` from `max_age`. RFC 7662
-  introspection still deferred.
+  login/logout and an optional `exp` from `max_age`.
+  `livery_auth_introspect` adds RFC 7662 token introspection for
+  opaque/reference tokens: POSTs the token to the configured
+  `endpoint` with HTTP Basic client auth, trusts the `active`
+  field, and stashes the response as `meta(user, _)`. The HTTP
+  call is pluggable (`fetch`), defaulting to OTP `httpc`. Phase 8
+  done.
 - Phase 9, partial: `livery_openapi:build/1` emits an OpenAPI 3.1
   document map from route metadata (Livery `:param`/`*wildcard`
   rewritten to `{param}` templates with synthesised path

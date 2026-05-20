@@ -41,6 +41,7 @@ solution.
 - [Read query string parameters](guides/read-query-strings.md)
 - [Read headers](guides/read-headers.md)
 - [Extract a bearer token](guides/bearer-tokens.md)
+- [Use signed session cookies](guides/session-cookies.md)
 - [Read a streaming request body](guides/read-streaming-body.md)
 
 **Writing responses**

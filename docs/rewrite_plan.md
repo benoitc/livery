@@ -271,8 +271,13 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   `persistent_term` with a TTL; the bearer middleware accepts a
   `jwks_uri` and refreshes once on `no_matching_key` so key
   rotation is transparent. HTTP fetch is pluggable (default OTP
-  `httpc`; tests inject a fetcher, no network). RFC 7662
-  introspection and session cookies still deferred.
+  `httpc`; tests inject a fetcher, no network). `livery_auth_session`
+  is a stateless signed-cookie middleware: HMAC-SHA256 over a JSON
+  payload (base64url, OTP `crypto` only), stashed as
+  `meta(session, _)` and read via `livery_ext:session/1,2`, with
+  `sign/2` + `set_cookie_header/2` + `clear_cookie_header/1` for
+  login/logout and an optional `exp` from `max_age`. RFC 7662
+  introspection still deferred.
 - Phase 9, partial: `livery_openapi:build/1` emits an OpenAPI 3.1
   document map from route metadata (Livery `:param`/`*wildcard`
   rewritten to `{param}` templates with synthesised path

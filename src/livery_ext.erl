@@ -20,8 +20,11 @@ when the route is configured for buffered intake).
     query/2,
     header/2,
     bearer_token/1,
+    cookie/2,
     user/1,
-    user/2
+    user/2,
+    session/1,
+    session/2
 ]).
 
 -export_type([json_error/0, form_error/0]).
@@ -116,6 +119,32 @@ parse_bearer(<<"BEARER ", T/binary>>) -> {ok, T};
 parse_bearer(_) -> error.
 
 -doc """
+Return the value of a request cookie by name.
+
+Parses the `Cookie` header (RFC 6265 `name=value` pairs separated
+by `; `). Returns `undefined` when the header or the named cookie
+is absent.
+""".
+-spec cookie(binary(), livery_req:req()) -> binary() | undefined.
+cookie(Name, Req) ->
+    case livery_req:header(<<"cookie">>, Req) of
+        undefined -> undefined;
+        Value     -> find_cookie(Name, Value)
+    end.
+
+-spec find_cookie(binary(), binary()) -> binary() | undefined.
+find_cookie(Name, Header) ->
+    Pairs = binary:split(Header, <<";">>, [global]),
+    lists:foldl(fun
+        (_Pair, Found) when Found =/= undefined -> Found;
+        (Pair, undefined) ->
+            case binary:split(string:trim(Pair), <<"=">>) of
+                [Name, Value] -> Value;
+                _             -> undefined
+            end
+    end, undefined, Pairs).
+
+-doc """
 Return the authenticated principal stored on the request.
 
 `livery_auth_bearer` (and other auth middlewares) place the
@@ -130,6 +159,22 @@ user(Req) ->
 -spec user(livery_req:req(), Default) -> term() | Default.
 user(Req, Default) ->
     livery_req:meta(user, Req, Default).
+
+-doc """
+Return the session map stored on the request.
+
+`livery_auth_session` places the verified session payload under
+`meta(session, _)`. Returns `undefined` when no session middleware
+ran or no valid session cookie was present.
+""".
+-spec session(livery_req:req()) -> term() | undefined.
+session(Req) ->
+    livery_req:meta(session, Req).
+
+-doc "`session/1` with a fallback default.".
+-spec session(livery_req:req(), Default) -> term() | Default.
+session(Req, Default) ->
+    livery_req:meta(session, Req, Default).
 
 %%====================================================================
 %% URL-encoded form decoding

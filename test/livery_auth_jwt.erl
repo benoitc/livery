@@ -27,8 +27,8 @@ rsa_keypair(Kid) ->
         <<"kty">> => <<"RSA">>,
         <<"kid">> => Kid,
         <<"alg">> => <<"RS256">>,
-        <<"n">>   => b64url(binary:encode_unsigned(N)),
-        <<"e">>   => b64url(binary:encode_unsigned(E))
+        <<"n">> => b64url(binary:encode_unsigned(N)),
+        <<"e">> => b64url(binary:encode_unsigned(E))
     },
     {{rs256, Priv}, Jwk}.
 
@@ -42,8 +42,8 @@ ec_keypair(Kid) ->
         <<"kid">> => Kid,
         <<"alg">> => <<"ES256">>,
         <<"crv">> => <<"P-256">>,
-        <<"x">>   => b64url(X),
-        <<"y">>   => b64url(Y)
+        <<"x">> => b64url(X),
+        <<"y">> => b64url(Y)
     },
     {{es256, Priv}, Jwk}.
 
@@ -57,10 +57,13 @@ ec_keypair(Kid) ->
 %% `Claims' are maps that get merged with sensible defaults
 %% (`alg`, `typ`, and the key id).
 mint({Alg, _} = Key, HeaderExtra, Claims) ->
-    Header = maps:merge(#{
-        <<"alg">> => alg_name(Alg),
-        <<"typ">> => <<"JWT">>
-    }, HeaderExtra),
+    Header = maps:merge(
+        #{
+            <<"alg">> => alg_name(Alg),
+            <<"typ">> => <<"JWT">>
+        },
+        HeaderExtra
+    ),
     H64 = b64url(iolist_to_binary(json:encode(Header))),
     P64 = b64url(iolist_to_binary(json:encode(Claims))),
     SigningInput = <<H64/binary, ".", P64/binary>>,
@@ -78,8 +81,7 @@ sign({es256, Priv}, SigningInput) ->
     DerSig = public_key:sign(SigningInput, sha256, Priv),
     #'ECDSA-Sig-Value'{r = R, s = S} =
         public_key:der_decode('ECDSA-Sig-Value', DerSig),
-    <<(pad32(binary:encode_unsigned(R)))/binary,
-      (pad32(binary:encode_unsigned(S)))/binary>>.
+    <<(pad32(binary:encode_unsigned(R)))/binary, (pad32(binary:encode_unsigned(S)))/binary>>.
 
 alg_name(rs256) -> <<"RS256">>;
 alg_name(es256) -> <<"ES256">>.

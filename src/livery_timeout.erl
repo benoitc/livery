@@ -19,8 +19,11 @@ handlers do not stream input.
 -export([call/3]).
 
 -doc "Enforce the deadline. Crashes map to 500, timeouts to 504.".
--spec call(livery_req:req(), livery_middleware:next(),
-           #{after_ms := pos_integer()}) -> livery_resp:resp().
+-spec call(
+    livery_req:req(),
+    livery_middleware:next(),
+    #{after_ms := pos_integer()}
+) -> livery_resp:resp().
 call(Req, Next, #{after_ms := Ms}) when is_integer(Ms), Ms > 0 ->
     Self = self(),
     Ref = make_ref(),

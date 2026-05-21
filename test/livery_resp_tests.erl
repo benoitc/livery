@@ -7,16 +7,21 @@ text_sets_content_type_test() ->
     R = livery_resp:text(200, <<"hi">>),
     ?assertEqual(200, livery_resp:status(R)),
     ?assertEqual({full, <<"hi">>}, livery_resp:body(R)),
-    ?assertEqual(<<"text/plain; charset=utf-8">>,
-                 header(R, <<"content-type">>)).
+    ?assertEqual(
+        <<"text/plain; charset=utf-8">>,
+        header(R, <<"content-type">>)
+    ).
 
 json_sets_content_type_test() ->
     R = livery_resp:json(200, <<"{\"a\":1}">>),
     ?assertEqual(<<"application/json">>, header(R, <<"content-type">>)).
 
 user_content_type_wins_test() ->
-    R = livery_resp:text(200,
-        [{<<"Content-Type">>, <<"text/markdown">>}], <<"hi">>),
+    R = livery_resp:text(
+        200,
+        [{<<"Content-Type">>, <<"text/markdown">>}],
+        <<"hi">>
+    ),
     ?assertEqual(<<"text/markdown">>, header(R, <<"content-type">>)),
     %% And no duplicate.
     CT = [V || {N, V} <- livery_resp:headers(R), N =:= <<"content-type">>],
@@ -46,8 +51,11 @@ append_header_preserves_order_test() ->
     R0 = livery_resp:empty(204),
     R1 = livery_resp:append_header(<<"Set-Cookie">>, <<"a=1">>, R0),
     R2 = livery_resp:append_header(<<"Set-Cookie">>, <<"b=2">>, R1),
-    Cookies = [V || {N, V} <- livery_resp:headers(R2),
-                    N =:= <<"set-cookie">>],
+    Cookies = [
+        V
+     || {N, V} <- livery_resp:headers(R2),
+        N =:= <<"set-cookie">>
+    ],
     ?assertEqual([<<"a=1">>, <<"b=2">>], Cookies).
 
 upgrade_is_101_with_body_tag_test() ->
@@ -73,8 +81,10 @@ trailers_passthrough_test() ->
 
 ndjson_sets_content_type_test() ->
     R = livery_resp:ndjson(200, fun(_) -> ok end),
-    ?assertEqual(<<"application/x-ndjson">>,
-                 header(R, <<"content-type">>)),
+    ?assertEqual(
+        <<"application/x-ndjson">>,
+        header(R, <<"content-type">>)
+    ),
     ?assertMatch({chunked, _}, livery_resp:body(R)).
 
 ndjson_encodes_each_emitted_term_with_newline_test() ->
@@ -84,27 +94,42 @@ ndjson_encodes_each_emitted_term_with_newline_test() ->
         ok
     end,
     Cap = livery_test_adapter:run(
-        [], fun(_R) -> livery_resp:ndjson(200, Producer) end, #{}),
-    ?assertEqual(<<"{\"n\":1}\n{\"n\":2}\n">>,
-                 livery_test_adapter:body(Cap)),
-    ?assertEqual(<<"application/x-ndjson">>,
-                 livery_test_adapter:header(<<"content-type">>, Cap)).
+        [], fun(_R) -> livery_resp:ndjson(200, Producer) end, #{}
+    ),
+    ?assertEqual(
+        <<"{\"n\":1}\n{\"n\":2}\n">>,
+        livery_test_adapter:body(Cap)
+    ),
+    ?assertEqual(
+        <<"application/x-ndjson">>,
+        livery_test_adapter:header(<<"content-type">>, Cap)
+    ).
 
 ndjson_extra_headers_keep_default_content_type_test() ->
-    R = livery_resp:ndjson(200,
+    R = livery_resp:ndjson(
+        200,
         [{<<"cache-control">>, <<"no-cache">>}],
-        fun(_) -> ok end),
-    ?assertEqual(<<"application/x-ndjson">>,
-                 header(R, <<"content-type">>)),
-    ?assertEqual(<<"no-cache">>,
-                 header(R, <<"cache-control">>)).
+        fun(_) -> ok end
+    ),
+    ?assertEqual(
+        <<"application/x-ndjson">>,
+        header(R, <<"content-type">>)
+    ),
+    ?assertEqual(
+        <<"no-cache">>,
+        header(R, <<"cache-control">>)
+    ).
 
 ndjson_user_content_type_wins_test() ->
-    R = livery_resp:ndjson(200,
+    R = livery_resp:ndjson(
+        200,
         [{<<"Content-Type">>, <<"application/json-seq">>}],
-        fun(_) -> ok end),
-    ?assertEqual(<<"application/json-seq">>,
-                 header(R, <<"content-type">>)).
+        fun(_) -> ok end
+    ),
+    ?assertEqual(
+        <<"application/json-seq">>,
+        header(R, <<"content-type">>)
+    ).
 
 %%====================================================================
 %% Helpers
@@ -113,5 +138,5 @@ ndjson_user_content_type_wins_test() ->
 header(Resp, Name) ->
     case lists:keyfind(Name, 1, livery_resp:headers(Resp)) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.

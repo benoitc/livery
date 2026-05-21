@@ -87,7 +87,7 @@ query(Name, Req) ->
     Raw = livery_req:query(Req),
     case lists:keyfind(Name, 1, decode_form(Raw)) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.
 
 -doc "Look up a header by name. Names are matched case-insensitively.".
@@ -104,11 +104,12 @@ Accepts `Bearer `, `bearer `, and `BEARER ` prefixes (RFC 6750
 -spec bearer_token(livery_req:req()) -> binary() | undefined.
 bearer_token(Req) ->
     case livery_req:header(<<"authorization">>, Req) of
-        undefined -> undefined;
+        undefined ->
+            undefined;
         Value ->
             case parse_bearer(Value) of
                 {ok, Token} -> Token;
-                error       -> undefined
+                error -> undefined
             end
     end.
 
@@ -129,20 +130,24 @@ is absent.
 cookie(Name, Req) ->
     case livery_req:header(<<"cookie">>, Req) of
         undefined -> undefined;
-        Value     -> find_cookie(Name, Value)
+        Value -> find_cookie(Name, Value)
     end.
 
 -spec find_cookie(binary(), binary()) -> binary() | undefined.
 find_cookie(Name, Header) ->
     Pairs = binary:split(Header, <<";">>, [global]),
-    lists:foldl(fun
-        (_Pair, Found) when Found =/= undefined -> Found;
-        (Pair, undefined) ->
-            case binary:split(string:trim(Pair), <<"=">>) of
-                [Name, Value] -> Value;
-                _             -> undefined
-            end
-    end, undefined, Pairs).
+    lists:foldl(
+        fun
+            (_Pair, Found) when Found =/= undefined -> Found;
+            (Pair, undefined) ->
+                case binary:split(string:trim(Pair), <<"=">>) of
+                    [Name, Value] -> Value;
+                    _ -> undefined
+                end
+        end,
+        undefined,
+        Pairs
+    ).
 
 -doc """
 Return the authenticated principal stored on the request.
@@ -182,14 +187,13 @@ session(Req, Default) ->
 
 -spec decode_form(binary()) -> [{binary(), binary()}].
 decode_form(<<>>) -> [];
-decode_form(Bin) ->
-    [decode_pair(P) || P <- binary:split(Bin, <<"&">>, [global]), P =/= <<>>].
+decode_form(Bin) -> [decode_pair(P) || P <- binary:split(Bin, <<"&">>, [global]), P =/= <<>>].
 
 -spec decode_pair(binary()) -> {binary(), binary()}.
 decode_pair(P) ->
     case binary:split(P, <<"=">>) of
         [K, V] -> {url_decode(K), url_decode(V)};
-        [K]    -> {url_decode(K), <<>>}
+        [K] -> {url_decode(K), <<>>}
     end.
 
 -spec url_decode(binary()) -> binary().
@@ -203,7 +207,7 @@ url_decode(<<$+, R/binary>>, Acc) ->
 url_decode(<<$%, H1, H2, R/binary>>, Acc) ->
     case unhex(H1, H2) of
         {ok, C} -> url_decode(R, <<Acc/binary, C>>);
-        error   -> url_decode(R, <<Acc/binary, $%, H1, H2>>)
+        error -> url_decode(R, <<Acc/binary, $%, H1, H2>>)
     end;
 url_decode(<<C, R/binary>>, Acc) ->
     url_decode(R, <<Acc/binary, C>>).

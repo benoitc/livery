@@ -45,14 +45,16 @@ close({Conn, StreamId}) ->
 -spec controlling_process(handle(), pid()) -> ok | {error, term()}.
 controlling_process({Conn, StreamId}, Pid) ->
     case h2:set_stream_handler(Conn, StreamId, Pid, #{drain_buffer => false}) of
-        ok          -> ok;
-        {ok, _}     -> ok;
+        ok -> ok;
+        {ok, _} -> ok;
         {error, _} = E -> E
     end.
 
 -spec classify(term(), handle()) ->
-    {ws_data, handle(), binary()} | {ws_closed, handle()}
-  | {ws_error, handle(), term()} | ignore.
+    {ws_data, handle(), binary()}
+    | {ws_closed, handle()}
+    | {ws_error, handle(), term()}
+    | ignore.
 classify({h2, Conn, {data, StreamId, Bin, _Fin}}, {Conn, StreamId} = H) ->
     {ws_data, H, Bin};
 classify({h2, Conn, {stream_reset, StreamId, Reason}}, {Conn, StreamId} = H) ->

@@ -67,12 +67,12 @@ groups() ->
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
         %% hackney does not surface trailers; trailers stay test-only
         %% in the h1 group.
-        {h1,           [],         Shared},
+        {h1, [], Shared},
         %% h2's own client exposes trailers, so the h2 group includes
         %% them.
-        {h2,           [],         Shared ++ [response_with_trailers]},
+        {h2, [], Shared ++ [response_with_trailers]},
         %% h3 also exposes trailers.
-        {h3,           [],         Shared ++ [response_with_trailers]}
+        {h3, [], Shared ++ [response_with_trailers]}
     ].
 
 init_per_suite(Config) ->
@@ -100,9 +100,11 @@ init_per_group(h2, Config) ->
     [{driver, fun drive_h2/3} | Config];
 init_per_group(h3, Config) ->
     Cert = ?config(cert, Config),
-    Key  = ?config(key, Config),
-    [{driver, fun(S, H, Spec) -> drive_h3(Cert, Key, S, H, Spec) end}
-     | Config];
+    Key = ?config(key, Config),
+    [
+        {driver, fun(S, H, Spec) -> drive_h3(Cert, Key, S, H, Spec) end}
+        | Config
+    ];
 init_per_group(_, Config) ->
     Config.
 
@@ -120,28 +122,47 @@ end_per_testcase(_TC, _Config) ->
 %%====================================================================
 
 text_response(Config) ->
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:text(200, <<"hello">>)
-    end, #{}),
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:text(200, <<"hello">>)
+        end,
+        #{}
+    ),
     ?assertEqual(200, status(Resp)),
     ?assertEqual(<<"hello">>, body(Resp)),
-    ?assertEqual(<<"text/plain; charset=utf-8">>,
-                 header(<<"content-type">>, Resp)).
+    ?assertEqual(
+        <<"text/plain; charset=utf-8">>,
+        header(<<"content-type">>, Resp)
+    ).
 
 json_response(Config) ->
     Body = <<"{\"ok\":true}">>,
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:json(200, Body)
-    end, #{}),
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:json(200, Body)
+        end,
+        #{}
+    ),
     ?assertEqual(200, status(Resp)),
     ?assertEqual(Body, body(Resp)),
-    ?assertEqual(<<"application/json">>,
-                 header(<<"content-type">>, Resp)).
+    ?assertEqual(
+        <<"application/json">>,
+        header(<<"content-type">>, Resp)
+    ).
 
 empty_response(Config) ->
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:empty(204)
-    end, #{}),
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:empty(204)
+        end,
+        #{}
+    ),
     ?assertEqual(204, status(Resp)),
     ?assertEqual(<<>>, body(Resp)).
 
@@ -155,9 +176,15 @@ echo_buffered_body(Config) ->
                 livery_resp:text(200, Bytes)
         end
     end,
-    Resp = drive(Config, [], Handler,
-                 #{method => <<"POST">>,
-                   body => {buffered, <<"echo me">>}}),
+    Resp = drive(
+        Config,
+        [],
+        Handler,
+        #{
+            method => <<"POST">>,
+            body => {buffered, <<"echo me">>}
+        }
+    ),
     ?assertEqual(<<"echo me">>, body(Resp)).
 
 streaming_chunked_response(Config) ->
@@ -165,9 +192,14 @@ streaming_chunked_response(Config) ->
         [Emit(integer_to_binary(N)) || N <- lists:seq(1, 5)],
         ok
     end,
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:stream(200, [], Producer)
-    end, #{}),
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:stream(200, [], Producer)
+        end,
+        #{}
+    ),
     ?assertEqual(<<"12345">>, body(Resp)).
 
 sse_response(Config) ->
@@ -176,13 +208,22 @@ sse_response(Config) ->
         Emit(#{event => <<"tick">>, data => <<"2">>}),
         ok
     end,
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:sse(200, Producer)
-    end, #{}),
-    ?assertEqual(<<"text/event-stream">>,
-                 header(<<"content-type">>, Resp)),
-    ?assertEqual(<<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>,
-                 body(Resp)).
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:sse(200, Producer)
+        end,
+        #{}
+    ),
+    ?assertEqual(
+        <<"text/event-stream">>,
+        header(<<"content-type">>, Resp)
+    ),
+    ?assertEqual(
+        <<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>,
+        body(Resp)
+    ).
 
 ndjson_response(Config) ->
     Producer = fun(Emit) ->
@@ -191,11 +232,18 @@ ndjson_response(Config) ->
         Emit(#{<<"n">> => 3}),
         ok
     end,
-    Resp = drive(Config, [], fun(_R) ->
-        livery_resp:ndjson(200, Producer)
-    end, #{}),
-    ?assertEqual(<<"application/x-ndjson">>,
-                 header(<<"content-type">>, Resp)),
+    Resp = drive(
+        Config,
+        [],
+        fun(_R) ->
+            livery_resp:ndjson(200, Producer)
+        end,
+        #{}
+    ),
+    ?assertEqual(
+        <<"application/x-ndjson">>,
+        header(<<"content-type">>, Resp)
+    ),
     ?assertEqual(<<"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n">>, body(Resp)).
 
 file_response(Config) ->
@@ -203,16 +251,24 @@ file_response(Config) ->
     Path = filename:join(
         temp_dir(),
         "livery_parity_file_" ++
-        integer_to_list(erlang:unique_integer([positive])) ++ ".bin"),
+            integer_to_list(erlang:unique_integer([positive])) ++ ".bin"
+    ),
     ok = file:write_file(Path, Body),
     try
-        Resp = drive(Config, [], fun(_R) ->
-            livery_resp:file(200, Path)
-        end, #{}),
+        Resp = drive(
+            Config,
+            [],
+            fun(_R) ->
+                livery_resp:file(200, Path)
+            end,
+            #{}
+        ),
         ?assertEqual(200, status(Resp)),
         ?assertEqual(Body, body(Resp)),
-        ?assertEqual(integer_to_binary(byte_size(Body)),
-                     header(<<"content-length">>, Resp))
+        ?assertEqual(
+            integer_to_binary(byte_size(Body)),
+            header(<<"content-length">>, Resp)
+        )
     after
         file:delete(Path)
     end.
@@ -231,16 +287,27 @@ handler_crash_returns_500(Config) ->
 
 middleware_short_circuit(Config) ->
     Stack = [fun(_R, _N) -> livery_resp:text(401, <<"nope">>) end],
-    Resp = drive(Config, Stack,
-                 fun(_R) -> error(must_not_be_called) end, #{}),
+    Resp = drive(
+        Config,
+        Stack,
+        fun(_R) -> error(must_not_be_called) end,
+        #{}
+    ),
     ?assertEqual(401, status(Resp)),
     ?assertEqual(<<"nope">>, body(Resp)).
 
 middleware_after_response(Config) ->
-    Stack = [livery_middleware:after_response(
-                fun(R) -> livery_resp:with_header(<<"X-After">>, <<"1">>, R) end)],
-    Resp = drive(Config, Stack,
-                 fun(_R) -> livery_resp:text(200, <<"ok">>) end, #{}),
+    Stack = [
+        livery_middleware:after_response(
+            fun(R) -> livery_resp:with_header(<<"X-After">>, <<"1">>, R) end
+        )
+    ],
+    Resp = drive(
+        Config,
+        Stack,
+        fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        #{}
+    ),
     ?assertEqual(<<"1">>, header(<<"x-after">>, Resp)).
 
 full_pipeline_with_builtins(Config) ->
@@ -248,9 +315,12 @@ full_pipeline_with_builtins(Config) ->
         {livery_request_id, undefined},
         {livery_body_limit, #{max => 1024}}
     ],
-    Resp = drive(Config, Stack,
-                 fun(_R) -> livery_resp:text(200, <<"ok">>) end,
-                 #{body => {buffered, <<"small">>}}),
+    Resp = drive(
+        Config,
+        Stack,
+        fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        #{body => {buffered, <<"small">>}}
+    ),
     ?assertEqual(200, status(Resp)),
     Id = header(<<"x-request-id">>, Resp),
     ?assert(is_binary(Id)),
@@ -278,7 +348,7 @@ trailers(#response{trailers = T}) -> T.
 header(Name, #response{headers = Hs}) ->
     case lists:keyfind(Name, 1, Hs) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.
 
 %%====================================================================
@@ -309,8 +379,8 @@ drive_h1(Stack, Handler, Spec) ->
     Method = maps:get(method, Spec, <<"GET">>),
     Body = body_bytes(maps:get(body, Spec, empty)),
     {ok, Listener} = livery_h1:start(#{
-        port    => 0,
-        stack   => Stack,
+        port => 0,
+        stack => Stack,
         handler => Handler
     }),
     try
@@ -320,13 +390,19 @@ drive_h1(Stack, Handler, Spec) ->
             integer_to_binary(Port),
             <<"/">>
         ]),
-        Headers = case byte_size(Body) of
-            0 -> [];
-            _ -> [{<<"content-length">>, integer_to_binary(byte_size(Body))}]
-        end,
+        Headers =
+            case byte_size(Body) of
+                0 -> [];
+                _ -> [{<<"content-length">>, integer_to_binary(byte_size(Body))}]
+            end,
         {ok, Status, RespHeaders, RespBody} =
-            hackney:request(Method, Url, Headers, Body,
-                            [with_body, {recv_timeout, 5000}]),
+            hackney:request(
+                Method,
+                Url,
+                Headers,
+                Body,
+                [with_body, {recv_timeout, 5000}]
+            ),
         #response{
             status = Status,
             headers = normalize_headers(RespHeaders),
@@ -345,10 +421,10 @@ drive_h2(Stack, Handler, Spec) ->
     Method = maps:get(method, Spec, <<"GET">>),
     Body = body_bytes(maps:get(body, Spec, empty)),
     {ok, Listener} = livery_h2:start(#{
-        port      => 0,
+        port => 0,
         transport => tcp,
-        stack     => Stack,
-        handler   => Handler
+        stack => Stack,
+        handler => Handler
     }),
     try
         Port = h2:server_port(Listener),
@@ -356,13 +432,19 @@ drive_h2(Stack, Handler, Spec) ->
         try
             Headers = [{<<"host">>, <<"127.0.0.1">>}],
             HasBody = byte_size(Body) > 0,
-            {ok, StreamId} = case HasBody of
-                false -> h2:request(Conn, Method, <<"/">>, Headers);
-                true  -> h2:request(Conn, Method, <<"/">>,
-                                    Headers ++ [{<<"content-length">>,
-                                                 integer_to_binary(byte_size(Body))}],
-                                    Body)
-            end,
+            {ok, StreamId} =
+                case HasBody of
+                    false ->
+                        h2:request(Conn, Method, <<"/">>, Headers);
+                    true ->
+                        h2:request(
+                            Conn,
+                            Method,
+                            <<"/">>,
+                            Headers ++ [{<<"content-length">>, integer_to_binary(byte_size(Body))}],
+                            Body
+                        )
+                end,
             collect_h2(Conn, StreamId, undefined, [], [], undefined)
         after
             h2:close(Conn)
@@ -376,8 +458,14 @@ collect_h2(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->
         {h2, Conn, {response, StreamId, S, Hs}} ->
             collect_h2(Conn, StreamId, S, Hs, BodyAcc, Trailers);
         {h2, Conn, {data, StreamId, Chunk, false}} ->
-            collect_h2(Conn, StreamId, Status, Headers,
-                       [Chunk | BodyAcc], Trailers);
+            collect_h2(
+                Conn,
+                StreamId,
+                Status,
+                Headers,
+                [Chunk | BodyAcc],
+                Trailers
+            );
         {h2, Conn, {data, StreamId, Chunk, true}} ->
             #response{
                 status = Status,
@@ -406,16 +494,19 @@ drive_h3(Cert, Key, Stack, Handler, Spec) ->
     Method = maps:get(method, Spec, <<"GET">>),
     Body = body_bytes(maps:get(body, Spec, empty)),
     {ok, Listener} = livery_h3:start(#{
-        port    => 0,
-        cert    => Cert,
-        key     => Key,
-        stack   => Stack,
+        port => 0,
+        cert => Cert,
+        key => Key,
+        stack => Stack,
         handler => Handler
     }),
     try
         {ok, Port} = quic:get_server_port(Listener),
-        {ok, Conn} = quic_h3:connect(<<"localhost">>, Port,
-                                      #{verify => verify_none, sync => true}),
+        {ok, Conn} = quic_h3:connect(
+            <<"localhost">>,
+            Port,
+            #{verify => verify_none, sync => true}
+        ),
         try
             Headers = [
                 {<<":method">>, Method},
@@ -424,19 +515,26 @@ drive_h3(Cert, Key, Stack, Handler, Spec) ->
                 {<<":authority">>, <<"localhost">>}
             ],
             HasBody = byte_size(Body) > 0,
-            StreamId = case HasBody of
-                false ->
-                    {ok, SId} = quic_h3:request(Conn, Headers,
-                                                 #{end_stream => true}),
-                    SId;
-                true ->
-                    Hs = Headers ++ [{<<"content-length">>,
-                                       integer_to_binary(byte_size(Body))}],
-                    {ok, SId} = quic_h3:request(Conn, Hs,
-                                                 #{end_stream => false}),
-                    ok = quic_h3:send_data(Conn, SId, Body, true),
-                    SId
-            end,
+            StreamId =
+                case HasBody of
+                    false ->
+                        {ok, SId} = quic_h3:request(
+                            Conn,
+                            Headers,
+                            #{end_stream => true}
+                        ),
+                        SId;
+                    true ->
+                        Hs =
+                            Headers ++ [{<<"content-length">>, integer_to_binary(byte_size(Body))}],
+                        {ok, SId} = quic_h3:request(
+                            Conn,
+                            Hs,
+                            #{end_stream => false}
+                        ),
+                        ok = quic_h3:send_data(Conn, SId, Body, true),
+                        SId
+                end,
             collect_h3(Conn, StreamId, undefined, [], [], undefined)
         after
             catch quic_h3:close(Conn)
@@ -450,8 +548,14 @@ collect_h3(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->
         {quic_h3, Conn, {response, StreamId, S, Hs}} ->
             collect_h3(Conn, StreamId, S, Hs, BodyAcc, Trailers);
         {quic_h3, Conn, {data, StreamId, Chunk, false}} ->
-            collect_h3(Conn, StreamId, Status, Headers,
-                       [Chunk | BodyAcc], Trailers);
+            collect_h3(
+                Conn,
+                StreamId,
+                Status,
+                Headers,
+                [Chunk | BodyAcc],
+                Trailers
+            );
         {quic_h3, Conn, {data, StreamId, Chunk, true}} ->
             #response{
                 status = Status,
@@ -484,20 +588,20 @@ collect_h3(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->
 %%====================================================================
 
 body_bytes({buffered, IoData}) -> iolist_to_binary(IoData);
-body_bytes(empty)              -> <<>>;
-body_bytes(_)                  -> <<>>.
+body_bytes(empty) -> <<>>;
+body_bytes(_) -> <<>>.
 
 temp_dir() ->
     case os:getenv("TMPDIR") of
         false -> "/tmp";
-        Dir   -> Dir
+        Dir -> Dir
     end.
 
 normalize_headers(Hs) ->
     [{normalize_header_name(N), to_binary(V)} || {N, V} <- Hs].
 
 normalize_header_name(N) when is_binary(N) -> string:lowercase(N);
-normalize_header_name(N) when is_list(N)   -> string:lowercase(list_to_binary(N)).
+normalize_header_name(N) when is_list(N) -> string:lowercase(list_to_binary(N)).
 
 to_binary(B) when is_binary(B) -> B;
-to_binary(L) when is_list(L)   -> list_to_binary(L).
+to_binary(L) when is_list(L) -> list_to_binary(L).

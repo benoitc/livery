@@ -32,14 +32,16 @@
 %%====================================================================
 
 all() ->
-    [one_call_serves_all_three,
-     alt_svc_advertised_on_h1_and_h2_only,
-     which_listeners_reports_all_three,
-     router_service_dispatches_routes,
-     service_without_handler_or_router_fails,
-     stop_accepting_refuses_new_connections,
-     drain_lets_inflight_finish,
-     drain_times_out_on_stuck_request].
+    [
+        one_call_serves_all_three,
+        alt_svc_advertised_on_h1_and_h2_only,
+        which_listeners_reports_all_three,
+        router_service_dispatches_routes,
+        service_without_handler_or_router_fails,
+        stop_accepting_refuses_new_connections,
+        drain_lets_inflight_finish,
+        drain_times_out_on_stuck_request
+    ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -49,8 +51,13 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(hackney),
     {ok, CertDer, KeyDer} = livery_test_certs:load(),
     {CertFile, KeyFile} = livery_test_certs:paths(),
-    [{cert_der, CertDer}, {key_der, KeyDer},
-     {cert_file, CertFile}, {key_file, KeyFile} | Config].
+    [
+        {cert_der, CertDer},
+        {key_der, KeyDer},
+        {cert_file, CertFile},
+        {key_file, KeyFile}
+        | Config
+    ].
 
 end_per_suite(_Config) ->
     _ = application:stop(hackney),
@@ -81,13 +88,17 @@ alt_svc_advertised_on_h1_and_h2_only(Config) ->
     try
         Ports = livery:which_listeners(Pid),
         H3Port = maps:get(h3, Ports),
-        Expected = iolist_to_binary([<<"h3=\":">>,
-                                     integer_to_binary(H3Port),
-                                     <<"\"; ma=86400">>]),
+        Expected = iolist_to_binary([
+            <<"h3=\":">>,
+            integer_to_binary(H3Port),
+            <<"\"; ma=86400">>
+        ]),
         ?assertEqual(Expected, h1_header(maps:get(h1, Ports), <<"alt-svc">>)),
         ?assertEqual(Expected, h2_header(maps:get(h2, Ports), <<"alt-svc">>)),
-        ?assertEqual(undefined,
-                     h3_header(maps:get(h3, Ports), Config, <<"alt-svc">>))
+        ?assertEqual(
+            undefined,
+            h3_header(maps:get(h3, Ports), Config, <<"alt-svc">>)
+        )
     after
         livery:stop_service(Pid)
     end.
@@ -97,25 +108,29 @@ which_listeners_reports_all_three(Config) ->
     try
         Ports = livery:which_listeners(Pid),
         ?assertEqual(3, map_size(Ports)),
-        lists:foreach(fun(K) ->
-            ?assert(is_integer(maps:get(K, Ports)))
-        end, [h1, h2, h3])
+        lists:foreach(
+            fun(K) ->
+                ?assert(is_integer(maps:get(K, Ports)))
+            end,
+            [h1, h2, h3]
+        )
     after
         livery:stop_service(Pid)
     end.
 
 router_service_dispatches_routes(_Config) ->
     Router = livery_router:compile([
-        {<<"GET">>,  <<"/">>,        fun(_R) -> livery_resp:text(200, <<"root">>) end},
-        {<<"GET">>,  <<"/hi/:name">>,
-         fun(R) -> livery_resp:text(200, livery_req:binding(<<"name">>, R)) end},
-        {<<"POST">>, <<"/">>,        fun(_R) -> livery_resp:text(201, <<"made">>) end}
+        {<<"GET">>, <<"/">>, fun(_R) -> livery_resp:text(200, <<"root">>) end},
+        {<<"GET">>, <<"/hi/:name">>, fun(R) ->
+            livery_resp:text(200, livery_req:binding(<<"name">>, R))
+        end},
+        {<<"POST">>, <<"/">>, fun(_R) -> livery_resp:text(201, <<"made">>) end}
     ]),
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, router => Router}),
     try
         Port = maps:get(h1, livery:which_listeners(Pid)),
         ?assertEqual({200, <<"root">>}, http_get(Port, <<"/">>)),
-        ?assertEqual({200, <<"ada">>},  http_get(Port, <<"/hi/ada">>)),
+        ?assertEqual({200, <<"ada">>}, http_get(Port, <<"/hi/ada">>)),
         %% unknown path -> 404
         {404, _} = http_get(Port, <<"/missing">>),
         %% wrong method on a known path -> 405
@@ -132,7 +147,8 @@ service_without_handler_or_router_fails(_Config) ->
 stop_accepting_refuses_new_connections(_Config) ->
     {ok, Pid} = livery:start_service(#{
         http => #{port => 0},
-        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end}),
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
+    }),
     Port = maps:get(h1, livery:which_listeners(Pid)),
     ?assertMatch({ok, 200, _, <<"ok">>}, http_try(Port, <<"/">>)),
     ok = livery_service:stop_accepting(Pid),
@@ -144,22 +160,38 @@ drain_lets_inflight_finish(_Config) ->
     Ref = make_ref(),
     Handler = fun(_R) ->
         Self ! {ready, Ref, self()},
-        receive {release, Ref} -> ok end,
+        receive
+            {release, Ref} -> ok
+        end,
         livery_resp:text(200, <<"done">>)
     end,
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
     Port = maps:get(h1, livery:which_listeners(Pid)),
     spawn(fun() -> Self ! {client_done, http_get(Port, <<"/">>)} end),
-    WPid = receive {ready, Ref, P} -> P after 5000 -> ct:fail(no_request) end,
+    WPid =
+        receive
+            {ready, Ref, P} -> P
+        after 5000 -> ct:fail(no_request)
+        end,
     ?assertEqual(1, livery_drain:in_flight()),
     %% Drain in the background; release the in-flight request so it
     %% can finish during the drain window.
     spawn(fun() -> Self ! {drain_done, livery:drain(Pid, #{timeout => 5000})} end),
     WPid ! {release, Ref},
-    ?assertEqual({200, <<"done">>},
-                 receive {client_done, R} -> R after 5000 -> ct:fail(no_client) end),
-    ?assertEqual(ok,
-                 receive {drain_done, D} -> D after 6000 -> ct:fail(no_drain) end),
+    ?assertEqual(
+        {200, <<"done">>},
+        receive
+            {client_done, R} -> R
+        after 5000 -> ct:fail(no_client)
+        end
+    ),
+    ?assertEqual(
+        ok,
+        receive
+            {drain_done, D} -> D
+        after 6000 -> ct:fail(no_drain)
+        end
+    ),
     ?assertNot(is_process_alive(Pid)).
 
 drain_times_out_on_stuck_request(_Config) ->
@@ -167,14 +199,22 @@ drain_times_out_on_stuck_request(_Config) ->
     Ref = make_ref(),
     Handler = fun(_R) ->
         Self ! {ready, Ref, self()},
-        receive after infinity -> ok end
+        receive
+        after infinity -> ok
+        end
     end,
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
     Port = maps:get(h1, livery:which_listeners(Pid)),
     spawn(fun() -> catch http_get(Port, <<"/">>) end),
-    WPid = receive {ready, Ref, P} -> P after 5000 -> ct:fail(no_request) end,
-    ?assertEqual({error, timeout},
-                 livery:drain(Pid, #{timeout => 300, poll_interval => 50})),
+    WPid =
+        receive
+            {ready, Ref, P} -> P
+        after 5000 -> ct:fail(no_request)
+        end,
+    ?assertEqual(
+        {error, timeout},
+        livery:drain(Pid, #{timeout => 300, poll_interval => 50})
+    ),
     ?assertNot(is_process_alive(Pid)),
     %% Clean up the stuck worker so it does not pollute later tests.
     exit(WPid, kill).
@@ -184,19 +224,22 @@ drain_times_out_on_stuck_request(_Config) ->
 %%====================================================================
 
 start_full_service(Config) ->
-    CertDer  = ?config(cert_der, Config),
-    KeyDer   = ?config(key_der, Config),
+    CertDer = ?config(cert_der, Config),
+    KeyDer = ?config(key_der, Config),
     CertFile = ?config(cert_file, Config),
-    KeyFile  = ?config(key_file, Config),
+    KeyFile = ?config(key_file, Config),
     livery:start_service(#{
-        host       => <<"localhost">>,
-        http       => #{port => 0},
-        https      => #{port => 0,
-                        cert => CertFile, key => KeyFile,
-                        transport => ssl},
-        http3      => #{port => 0, cert => CertDer, key => KeyDer},
-        handler    => fun(_R) -> livery_resp:text(200, <<"hello">>) end,
-        alt_svc    => advertise
+        host => <<"localhost">>,
+        http => #{port => 0},
+        https => #{
+            port => 0,
+            cert => CertFile,
+            key => KeyFile,
+            transport => ssl
+        },
+        http3 => #{port => 0, cert => CertDer, key => KeyDer},
+        handler => fun(_R) -> livery_resp:text(200, <<"hello">>) end,
+        alt_svc => advertise
     }).
 
 %%====================================================================
@@ -210,11 +253,19 @@ http_delete(Port, Path) ->
     http_req(<<"DELETE">>, Port, Path).
 
 http_req(Method, Port, Path) ->
-    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
-                            integer_to_binary(Port), Path]),
+    Url = iolist_to_binary([
+        <<"http://127.0.0.1:">>,
+        integer_to_binary(Port),
+        Path
+    ]),
     {ok, Status, _Hs, Body} =
-        hackney:request(Method, Url, [], <<>>,
-                        [with_body, {recv_timeout, 5000}]),
+        hackney:request(
+            Method,
+            Url,
+            [],
+            <<>>,
+            [with_body, {recv_timeout, 5000}]
+        ),
     {Status, Body}.
 
 %% Like http_get but returns the raw hackney result (no match) and
@@ -222,41 +273,76 @@ http_req(Method, Port, Path) ->
 %% surfaces as {error, _}. `stop_accepting' keeps existing pooled
 %% keep-alive connections alive, so the test must dial anew.
 http_try(Port, Path) ->
-    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
-                            integer_to_binary(Port), Path]),
-    hackney:request(<<"GET">>, Url, [], <<>>,
-                    [with_body, {pool, false},
-                     {connect_timeout, 1000}, {recv_timeout, 1000}]).
+    Url = iolist_to_binary([
+        <<"http://127.0.0.1:">>,
+        integer_to_binary(Port),
+        Path
+    ]),
+    hackney:request(
+        <<"GET">>,
+        Url,
+        [],
+        <<>>,
+        [
+            with_body,
+            {pool, false},
+            {connect_timeout, 1000},
+            {recv_timeout, 1000}
+        ]
+    ).
 
 body_via_h1(Port) ->
     Url = url(<<"http">>, Port),
-    {ok, 200, _, Body} = hackney:request(<<"GET">>, Url, [], <<>>,
-                                          [with_body, {recv_timeout, 5000}]),
+    {ok, 200, _, Body} = hackney:request(
+        <<"GET">>,
+        Url,
+        [],
+        <<>>,
+        [with_body, {recv_timeout, 5000}]
+    ),
     Body.
 
 body_via_h2(Port) ->
-    {ok, Conn} = h2:connect("127.0.0.1", Port,
-                            #{transport => ssl,
-                              ssl_opts => [{verify, verify_none},
-                                           {server_name_indication, "localhost"}]}),
+    {ok, Conn} = h2:connect(
+        "127.0.0.1",
+        Port,
+        #{
+            transport => ssl,
+            ssl_opts => [
+                {verify, verify_none},
+                {server_name_indication, "localhost"}
+            ]
+        }
+    ),
     try
-        {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>,
-                                    [{<<"host">>, <<"localhost">>}]),
+        {ok, StreamId} = h2:request(
+            Conn,
+            <<"GET">>,
+            <<"/">>,
+            [{<<"host">>, <<"localhost">>}]
+        ),
         collect_h2(Conn, StreamId, undefined, [], [])
     after
         h2:close(Conn)
     end.
 
 body_via_h3(Port, _Config) ->
-    {ok, Conn} = quic_h3:connect(<<"localhost">>, Port,
-                                  #{verify => verify_none, sync => true}),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>,
+        Port,
+        #{verify => verify_none, sync => true}
+    ),
     try
-        {ok, StreamId} = quic_h3:request(Conn, [
-            {<<":method">>, <<"GET">>},
-            {<<":path">>, <<"/">>},
-            {<<":scheme">>, <<"https">>},
-            {<<":authority">>, <<"localhost">>}
-        ], #{end_stream => true}),
+        {ok, StreamId} = quic_h3:request(
+            Conn,
+            [
+                {<<":method">>, <<"GET">>},
+                {<<":path">>, <<"/">>},
+                {<<":scheme">>, <<"https">>},
+                {<<":authority">>, <<"localhost">>}
+            ],
+            #{end_stream => true}
+        ),
         collect_h3(Conn, StreamId, undefined, [], [])
     after
         catch quic_h3:close(Conn)
@@ -264,37 +350,61 @@ body_via_h3(Port, _Config) ->
 
 h1_header(Port, Name) ->
     Url = url(<<"http">>, Port),
-    {ok, 200, Headers, _} = hackney:request(<<"GET">>, Url, [], <<>>,
-                                             [with_body, {recv_timeout, 5000}]),
+    {ok, 200, Headers, _} = hackney:request(
+        <<"GET">>,
+        Url,
+        [],
+        <<>>,
+        [with_body, {recv_timeout, 5000}]
+    ),
     header(Name, Headers).
 
 h2_header(Port, Name) ->
-    {ok, Conn} = h2:connect("127.0.0.1", Port,
-                            #{transport => ssl,
-                              ssl_opts => [{verify, verify_none},
-                                           {server_name_indication, "localhost"}]}),
+    {ok, Conn} = h2:connect(
+        "127.0.0.1",
+        Port,
+        #{
+            transport => ssl,
+            ssl_opts => [
+                {verify, verify_none},
+                {server_name_indication, "localhost"}
+            ]
+        }
+    ),
     try
-        {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>,
-                                    [{<<"host">>, <<"localhost">>}]),
+        {ok, StreamId} = h2:request(
+            Conn,
+            <<"GET">>,
+            <<"/">>,
+            [{<<"host">>, <<"localhost">>}]
+        ),
         case wait_h2_response(Conn, StreamId) of
             {Status, Headers} when Status =/= undefined ->
                 header(Name, Headers);
-            _ -> undefined
+            _ ->
+                undefined
         end
     after
         h2:close(Conn)
     end.
 
 h3_header(Port, _Config, Name) ->
-    {ok, Conn} = quic_h3:connect(<<"localhost">>, Port,
-                                  #{verify => verify_none, sync => true}),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>,
+        Port,
+        #{verify => verify_none, sync => true}
+    ),
     try
-        {ok, StreamId} = quic_h3:request(Conn, [
-            {<<":method">>, <<"GET">>},
-            {<<":path">>, <<"/">>},
-            {<<":scheme">>, <<"https">>},
-            {<<":authority">>, <<"localhost">>}
-        ], #{end_stream => true}),
+        {ok, StreamId} = quic_h3:request(
+            Conn,
+            [
+                {<<":method">>, <<"GET">>},
+                {<<":path">>, <<"/">>},
+                {<<":scheme">>, <<"https">>},
+                {<<":authority">>, <<"localhost">>}
+            ],
+            #{end_stream => true}
+        ),
         case wait_h3_response(Conn, StreamId) of
             {_Status, Headers} -> header(Name, Headers);
             _ -> undefined
@@ -308,8 +418,12 @@ h3_header(Port, _Config, Name) ->
 %%====================================================================
 
 url(Scheme, Port) ->
-    iolist_to_binary([Scheme, <<"://127.0.0.1:">>,
-                      integer_to_binary(Port), <<"/">>]).
+    iolist_to_binary([
+        Scheme,
+        <<"://127.0.0.1:">>,
+        integer_to_binary(Port),
+        <<"/">>
+    ]).
 
 collect_h2(Conn, StreamId, _Status, _Headers, BodyAcc) ->
     receive
@@ -380,9 +494,13 @@ drain_h3(Conn, StreamId) ->
 
 header(Name, Headers) ->
     LName = string:lowercase(Name),
-    case lists:keyfind(LName, 1, [{string:lowercase(N), V}
-                                  || {N, V} <- Headers]) of
+    case
+        lists:keyfind(LName, 1, [
+            {string:lowercase(N), V}
+         || {N, V} <- Headers
+        ])
+    of
         {_, V} when is_binary(V) -> V;
-        {_, V} when is_list(V)   -> list_to_binary(V);
-        false                    -> undefined
+        {_, V} when is_list(V) -> list_to_binary(V);
+        false -> undefined
     end.

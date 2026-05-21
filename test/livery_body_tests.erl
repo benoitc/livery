@@ -44,8 +44,10 @@ read_reset_test() ->
     self() ! {livery_body, Ref, {reset, peer_gone}},
     {error, {client_reset, peer_gone}, R1} = livery_body:read(R, 0),
     %% subsequent reads stay in error state
-    ?assertEqual({error, {client_reset, peer_gone}, R1},
-                 livery_body:read(R1, 0)).
+    ?assertEqual(
+        {error, {client_reset, peer_gone}, R1},
+        livery_body:read(R1, 0)
+    ).
 
 read_all_concats_chunks_test() ->
     Ref = make_ref(),
@@ -63,8 +65,10 @@ read_all_propagates_reset_test() ->
     R = livery_body:new(Ref),
     self() ! {livery_body, Ref, {data, <<"abc">>}},
     self() ! {livery_body, Ref, {reset, gone}},
-    ?assertMatch({error, {client_reset, gone}, _},
-                 livery_body:read_all(R, 50)).
+    ?assertMatch(
+        {error, {client_reset, gone}, _},
+        livery_body:read_all(R, 50)
+    ).
 
 discard_drains_until_eof_test() ->
     Ref = make_ref(),
@@ -106,8 +110,12 @@ interleaved_with_unrelated_messages_test() ->
     ?assertEqual(<<"x">>, Body),
     ?assert(livery_body:ended(R1)),
     %% unrelated messages remain in the mailbox
-    receive {unrelated, 1} -> ok end,
-    receive {unrelated, 2} -> ok end.
+    receive
+        {unrelated, 1} -> ok
+    end,
+    receive
+        {unrelated, 2} -> ok
+    end.
 
 ignores_other_refs_test() ->
     Mine = make_ref(),
@@ -119,7 +127,9 @@ ignores_other_refs_test() ->
     {ok, Body, _} = livery_body:read_all(R, 50),
     ?assertEqual(<<"mine">>, Body),
     %% leftover for Other is still in the mailbox
-    receive {livery_body, Other, {data, <<"not mine">>}} -> ok end.
+    receive
+        {livery_body, Other, {data, <<"not mine">>}} -> ok
+    end.
 
 read_all_after_done_test() ->
     Ref = make_ref(),

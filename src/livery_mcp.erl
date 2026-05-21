@@ -76,15 +76,18 @@ handler(Opts) ->
 -spec engine_config(opts()) -> barrel_mcp_http_engine:config().
 engine_config(Opts) ->
     SessionEnabled = maps:get(session_enabled, Opts, true),
-    _ = case SessionEnabled of
-            true  -> barrel_mcp_http_engine:ensure_session_manager();
+    _ =
+        case SessionEnabled of
+            true -> barrel_mcp_http_engine:ensure_session_manager();
             false -> ok
         end,
     ResourceMetadata = barrel_mcp_http_engine:normalize_resource_metadata(
-                         maps:get(resource_metadata, Opts, undefined)),
+        maps:get(resource_metadata, Opts, undefined)
+    ),
     AuthConfig0 = barrel_mcp_http_engine:init_auth(maps:get(auth, Opts, #{})),
     AuthConfig = barrel_mcp_http_engine:inject_resource_metadata_url(
-                   AuthConfig0, ResourceMetadata),
+        AuthConfig0, ResourceMetadata
+    ),
     #{
         mode => stream,
         auth_config => AuthConfig,
@@ -102,12 +105,13 @@ serve(Req, EngineConfig) ->
     Stream = livery_req:stream(Req),
     Responder = responder(Adapter, Stream),
     ok = barrel_mcp_http_engine:handle(
-           livery_req:method(Req),
-           livery_req:path(Req),
-           livery_req:headers(Req),
-           read_body(Req),
-           Responder,
-           EngineConfig),
+        livery_req:method(Req),
+        livery_req:path(Req),
+        livery_req:headers(Req),
+        read_body(Req),
+        Responder,
+        EngineConfig
+    ),
     #livery_resp{status = 200, body = taken_over}.
 
 -spec read_body(livery_req:req()) -> binary().
@@ -120,7 +124,7 @@ read_body(Req) ->
         {stream, Reader} ->
             case livery_body:read_all(Reader, ?BODY_TIMEOUT) of
                 {ok, Bytes, _} -> Bytes;
-                _              -> <<>>
+                _ -> <<>>
             end
     end.
 
@@ -130,19 +134,30 @@ responder(Adapter, Stream) ->
         reply => fun(Status, Headers, Body) ->
             Bin = iolist_to_binary(Body),
             Hdrs = ensure_content_length(Headers, byte_size(Bin)),
-            _ = Adapter:send_headers(Stream, Status, Hdrs,
-                                     #{end_stream => false}),
+            _ = Adapter:send_headers(
+                Stream,
+                Status,
+                Hdrs,
+                #{end_stream => false}
+            ),
             _ = Adapter:send_data(Stream, Bin, #{end_stream => true}),
             ok
         end,
         stream_start => fun(Status, Headers) ->
-            _ = Adapter:send_headers(Stream, Status, Headers,
-                                     #{end_stream => false}),
+            _ = Adapter:send_headers(
+                Stream,
+                Status,
+                Headers,
+                #{end_stream => false}
+            ),
             ok
         end,
         stream_chunk => fun(Data) ->
-            Adapter:send_data(Stream, iolist_to_binary(Data),
-                              #{end_stream => false})
+            Adapter:send_data(
+                Stream,
+                iolist_to_binary(Data),
+                #{end_stream => false}
+            )
         end,
         stream_end => fun() ->
             _ = Adapter:send_data(Stream, <<>>, #{end_stream => true}),
@@ -157,8 +172,10 @@ ensure_content_length(Headers, Len) ->
         fun({K, _}) ->
             L = string:lowercase(K),
             L =:= <<"content-length">> orelse L =:= <<"transfer-encoding">>
-        end, Headers),
+        end,
+        Headers
+    ),
     case HasFraming of
-        true  -> Headers;
+        true -> Headers;
         false -> [{<<"content-length">>, integer_to_binary(Len)} | Headers]
     end.

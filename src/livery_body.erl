@@ -51,12 +51,12 @@ signaling lands with the H1 adapter; this module exposes
 
 -type error_reason() ::
     timeout
-  | {client_reset, term()}.
+    | {client_reset, term()}.
 
 -type read_result() ::
     {ok, iodata(), reader()}
-  | {done, reader()}
-  | {error, error_reason(), reader()}.
+    | {done, reader()}
+    | {error, error_reason(), reader()}.
 
 %%====================================================================
 %% Construction
@@ -149,8 +149,8 @@ discard(R) -> discard(R, 1000).
 -spec discard(reader(), timeout()) -> {ok, reader()}.
 discard(R, Timeout) ->
     case read(R, Timeout) of
-        {ok, _, R1}   -> discard(R1, Timeout);
-        {done, R1}    -> {ok, R1};
+        {ok, _, R1} -> discard(R1, Timeout);
+        {done, R1} -> {ok, R1};
         {error, _, R1} -> {ok, R1}
     end.
 
@@ -168,7 +168,8 @@ control, h3 receive credit).
 -spec signal_demand(reader(), non_neg_integer()) -> ok.
 signal_demand(#reader{source = undefined}, _N) ->
     ok;
-signal_demand(#reader{source = Pid, ref = Ref}, N)
-        when is_pid(Pid), is_integer(N), N >= 0 ->
+signal_demand(#reader{source = Pid, ref = Ref}, N) when
+    is_pid(Pid), is_integer(N), N >= 0
+->
     Pid ! {livery_body_demand, Ref, N},
     ok.

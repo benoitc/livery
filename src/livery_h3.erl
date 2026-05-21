@@ -41,17 +41,17 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
 -export_type([listen_opts/0, listener/0, stream/0]).
 
 -type listener() :: atom().
--type stream()   :: {pid(), non_neg_integer()}.
+-type stream() :: {pid(), non_neg_integer()}.
 
 -type listen_opts() :: #{
-    name      => atom(),
-    port      => inet:port_number(),
-    cert      := binary(),
-    key       := term(),
-    settings  => map(),
+    name => atom(),
+    port => inet:port_number(),
+    cert := binary(),
+    key := term(),
+    settings => map(),
     quic_opts => map(),
-    stack     := livery_middleware:stack(),
-    handler   := livery_middleware:handler()
+    stack := livery_middleware:stack(),
+    handler := livery_middleware:handler()
 }.
 
 %%====================================================================
@@ -71,7 +71,7 @@ start(Opts) when is_map(Opts) ->
     Name = maps:get(name, Opts, fresh_name()),
     case start(Name, Opts, #{}) of
         {ok, _Pid} -> {ok, Name};
-        Other      -> Other
+        Other -> Other
     end.
 
 %%====================================================================
@@ -80,9 +80,9 @@ start(Opts) when is_map(Opts) ->
 
 -spec start(atom() | undefined, listen_opts(), map()) ->
     {ok, pid()} | {error, term()}.
-start(undefined, Opts, _StartOpts) ->
+start(undefined, Opts, StartOpts) ->
     Name = fresh_name(),
-    start(Name, Opts, _StartOpts);
+    start(Name, Opts, StartOpts);
 start(Name, Opts, _StartOpts) when is_atom(Name) ->
     Stack = maps:get(stack, Opts),
     Handler = maps:get(handler, Opts),
@@ -95,15 +95,18 @@ stop(Name) when is_atom(Name) ->
     _ = quic_h3:stop_server(Name),
     ok.
 
--spec send_headers(stream(), 100..599,
-                   [{binary(), binary()}],
-                   livery_adapter:send_opts()) ->
+-spec send_headers(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    livery_adapter:send_opts()
+) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
     case quic_h3:send_response(Conn, StreamId, Status, Headers) of
         ok ->
             case maps:get(end_stream, Opts, false) of
-                true  -> quic_h3:send_data(Conn, StreamId, <<>>, true);
+                true -> quic_h3:send_data(Conn, StreamId, <<>>, true);
                 false -> ok
             end;
         Other ->
@@ -132,10 +135,12 @@ peer_info({_Conn, _StreamId}) ->
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
-    #{trailers         => true,
-      extended_connect => true,
-      datagrams        => true,
-      capsules         => true}.
+    #{
+        trailers => true,
+        extended_connect => true,
+        datagrams => true,
+        capsules => true
+    }.
 
 %%====================================================================
 %% WebSocket handoff (RFC 9220 extended CONNECT)
@@ -156,11 +161,18 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
             RespHeaders = drop_status(ws_h3_upgrade:response_headers(Info)),
             case quic_h3:send_response(Conn, StreamId, 200, RespHeaders) of
                 ok ->
-                    WsReq = #{method  => <<"CONNECT">>,
-                              path    => livery_req:path(Req),
-                              headers => livery_req:headers(Req)},
-                    ws:accept(livery_ws_h3, {Conn, StreamId}, WsReq,
-                              HandlerMod, Opts);
+                    WsReq = #{
+                        method => <<"CONNECT">>,
+                        path => livery_req:path(Req),
+                        headers => livery_req:headers(Req)
+                    },
+                    ws:accept(
+                        livery_ws_h3,
+                        {Conn, StreamId},
+                        WsReq,
+                        HandlerMod,
+                        Opts
+                    );
                 Err ->
                     {error, {send_response_failed, Err}}
             end;
@@ -185,24 +197,27 @@ accept_wt(h3, Req, HandlerMod, Opts) ->
     {Conn, StreamId} = livery_req:stream(Req),
     Headers = connect_pseudo_headers(Req, <<"webtransport">>),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
-        transport    => h3,
-        handler      => HandlerMod,
+        transport => h3,
+        handler => HandlerMod,
         handler_opts => maps:get(handler_opts, Opts, #{})
     }).
 
 -spec connect_pseudo_headers(livery_req:req(), binary()) ->
     [{binary(), binary()}].
 connect_pseudo_headers(Req, Protocol) ->
-    Path = case livery_req:query(Req) of
-        <<>>  -> livery_req:path(Req);
-        Query -> <<(livery_req:path(Req))/binary, "?", Query/binary>>
-    end,
-    [{<<":method">>, livery_req:method(Req)},
-     {<<":protocol">>, Protocol},
-     {<<":scheme">>, livery_req:scheme(Req)},
-     {<<":authority">>, livery_req:authority(Req)},
-     {<<":path">>, Path}
-     | livery_req:headers(Req)].
+    Path =
+        case livery_req:query(Req) of
+            <<>> -> livery_req:path(Req);
+            Query -> <<(livery_req:path(Req))/binary, "?", Query/binary>>
+        end,
+    [
+        {<<":method">>, livery_req:method(Req)},
+        {<<":protocol">>, Protocol},
+        {<<":scheme">>, livery_req:scheme(Req)},
+        {<<":authority">>, livery_req:authority(Req)},
+        {<<":path">>, Path}
+        | livery_req:headers(Req)
+    ].
 
 %%====================================================================
 %% Internals: per-request dispatch
@@ -210,45 +225,78 @@ connect_pseudo_headers(Req, Protocol) ->
 
 -spec fresh_name() -> atom().
 fresh_name() ->
-    list_to_atom("livery_h3_" ++
-                 integer_to_list(erlang:unique_integer([positive, monotonic]))).
+    list_to_atom(
+        "livery_h3_" ++
+            integer_to_list(erlang:unique_integer([positive, monotonic]))
+    ).
 
--spec build_h3_opts(listen_opts(), livery_middleware:stack(),
-                    livery_middleware:handler()) -> map().
+-spec build_h3_opts(
+    listen_opts(),
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) -> map().
 build_h3_opts(Opts, Stack, Handler) ->
     Base = #{
-        cert    => maps:get(cert, Opts),
-        key     => maps:get(key, Opts),
+        cert => maps:get(cert, Opts),
+        key => maps:get(key, Opts),
         handler => make_handler_fun(Stack, Handler)
     },
-    copy_keys([settings, quic_opts, stream_type_handler,
-               h3_datagram_enabled, connection_handler],
-              Opts, Base).
+    copy_keys(
+        [
+            settings,
+            quic_opts,
+            stream_type_handler,
+            h3_datagram_enabled,
+            connection_handler
+        ],
+        Opts,
+        Base
+    ).
 
 -spec copy_keys([atom()], map(), map()) -> map().
-copy_keys([], _Src, Dst) -> Dst;
+copy_keys([], _Src, Dst) ->
+    Dst;
 copy_keys([K | Rest], Src, Dst) ->
     case maps:find(K, Src) of
         {ok, V} -> copy_keys(Rest, Src, maps:put(K, V, Dst));
-        error   -> copy_keys(Rest, Src, Dst)
+        error -> copy_keys(Rest, Src, Dst)
     end.
 
--spec make_handler_fun(livery_middleware:stack(),
-                       livery_middleware:handler()) ->
-    fun((pid(), non_neg_integer(),
-         binary(), binary(),
-         [{binary(), binary()}]) -> ok).
+-spec make_handler_fun(
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) ->
+    fun(
+        (
+            pid(),
+            non_neg_integer(),
+            binary(),
+            binary(),
+            [{binary(), binary()}]
+        ) -> ok
+    ).
 make_handler_fun(Stack, Handler) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
-        dispatch_request(Conn, StreamId, Method, Path, Headers,
-                         Stack, Handler)
+        dispatch_request(
+            Conn,
+            StreamId,
+            Method,
+            Path,
+            Headers,
+            Stack,
+            Handler
+        )
     end.
 
--spec dispatch_request(pid(), non_neg_integer(),
-                       binary(), binary(),
-                       [{binary(), binary()}],
-                       livery_middleware:stack(),
-                       livery_middleware:handler()) -> ok.
+-spec dispatch_request(
+    pid(),
+    non_neg_integer(),
+    binary(),
+    binary(),
+    [{binary(), binary()}],
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) -> ok.
 dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     BodyRef = make_ref(),
     Reader = livery_body:new(BodyRef),
@@ -257,32 +305,40 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     Req1 = Req#livery_req{raw_query = RawQuery},
     {ok, WorkerPid} = livery_req_sup:start_request(#{
         adapter => ?MODULE,
-        stream  => {Conn, StreamId},
-        req     => Req1,
-        stack   => Stack,
+        stream => {Conn, StreamId},
+        req => Req1,
+        stack => Stack,
         handler => Handler
     }),
     Translator = spawn(fun() ->
         MRef = erlang:monitor(process, WorkerPid),
         translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef)
     end),
-    _ = quic_h3:set_stream_handler(Conn, StreamId, Translator,
-                                   #{drain_buffer => false}),
+    _ = quic_h3:set_stream_handler(
+        Conn,
+        StreamId,
+        Translator,
+        #{drain_buffer => false}
+    ),
     ok.
 
--spec build_req(pid(), non_neg_integer(),
-                binary(), binary(),
-                [{binary(), binary()}],
-                livery_body:reader()) -> livery_req:req().
+-spec build_req(
+    pid(),
+    non_neg_integer(),
+    binary(),
+    binary(),
+    [{binary(), binary()}],
+    livery_body:reader()
+) -> livery_req:req().
 build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
     livery_req:new(#{
-        protocol   => h3,
-        method     => Method,
-        path       => Path,
-        headers    => Headers,
-        body       => {stream, Reader},
-        adapter    => ?MODULE,
-        stream     => {Conn, StreamId},
+        protocol => h3,
+        method => Method,
+        path => Path,
+        headers => Headers,
+        body => {stream, Reader},
+        adapter => ?MODULE,
+        stream => {Conn, StreamId},
         engine_pid => Conn
     }).
 
@@ -290,15 +346,20 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
 split_query(Path) ->
     case binary:split(Path, <<"?">>) of
         [P, Q] -> {P, Q};
-        [P]    -> {P, <<>>}
+        [P] -> {P, <<>>}
     end.
 
 %%====================================================================
 %% Translator: quic_h3 messages -> livery_body protocol
 %%====================================================================
 
--spec translate_loop(pid(), non_neg_integer(),
-                     reference(), pid(), reference()) -> ok.
+-spec translate_loop(
+    pid(),
+    non_neg_integer(),
+    reference(),
+    pid(),
+    reference()
+) -> ok.
 translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef) ->
     receive
         {quic_h3, Conn, {data, StreamId, <<>>, true}} ->

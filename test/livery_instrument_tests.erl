@@ -32,7 +32,8 @@ trace_passes_response_through() ->
     Cap = livery_test_adapter:run(
         Stack,
         fun(_R) -> livery_resp:text(200, <<"ok">>) end,
-        #{method => <<"GET">>, path => <<"/foo">>}),
+        #{method => <<"GET">>, path => <<"/foo">>}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"ok">>, livery_test_adapter:body(Cap)).
 
@@ -43,7 +44,8 @@ trace_extracts_traceparent_header() ->
     Cap = livery_test_adapter:run(
         Stack,
         fun(_R) -> livery_resp:text(200, <<>>) end,
-        #{headers => [{<<"traceparent">>, TraceParent}]}),
+        #{headers => [{<<"traceparent">>, TraceParent}]}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)).
 
 %%====================================================================
@@ -55,7 +57,8 @@ metrics_passes_response_through() ->
     Cap = livery_test_adapter:run(
         Stack,
         fun(_R) -> livery_resp:text(200, <<"ok">>) end,
-        #{}),
+        #{}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"ok">>, livery_test_adapter:body(Cap)).
 
@@ -67,9 +70,10 @@ metrics_creates_instruments_once() ->
     %% second call should not crash on duplicate-instrument errors.
     _ = livery_test_adapter:run(Stack, Handler, #{}),
     _ = livery_test_adapter:run(Stack, Handler, #{}),
-    ?assertMatch({_, _},
-                 persistent_term:get({livery_instrument_metrics,
-                                      <<"livery_test">>})).
+    ?assertMatch(
+        {_, _},
+        persistent_term:get({livery_instrument_metrics, <<"livery_test">>})
+    ).
 
 %%====================================================================
 %% Composition
@@ -83,7 +87,8 @@ stacked_trace_and_metrics_compose() ->
     Cap = livery_test_adapter:run(
         Stack,
         fun(_R) -> livery_resp:text(201, <<"made">>) end,
-        #{method => <<"POST">>, path => <<"/items">>}),
+        #{method => <<"POST">>, path => <<"/items">>}
+    ),
     ?assertEqual(201, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"made">>, livery_test_adapter:body(Cap)).
 
@@ -98,8 +103,11 @@ logs_carry_trace_context_test() ->
     Primary = logger:get_primary_config(),
     ok = logger:set_primary_config(level, all),
     ok = livery_instrument_trace:install_logger(),
-    ok = logger:add_handler(HandlerId, ?MODULE,
-        #{config => Self, level => all, formatter => {logger_formatter, #{}}}),
+    ok = logger:add_handler(
+        HandlerId,
+        ?MODULE,
+        #{config => Self, level => all, formatter => {logger_formatter, #{}}}
+    ),
     try
         Handler = fun(_R) ->
             logger:log(info, #{marker => livery_trace_test}, #{}),
@@ -117,8 +125,10 @@ logs_carry_trace_context_test() ->
 
 wait_trace_meta(Timeout) ->
     receive
-        {log_event, #{msg := {report, #{marker := livery_trace_test}},
-                      meta := Meta}} ->
+        {log_event, #{
+            msg := {report, #{marker := livery_trace_test}},
+            meta := Meta
+        }} ->
             Meta;
         {log_event, _Other} ->
             wait_trace_meta(Timeout)

@@ -27,13 +27,16 @@ still rejected.
 
 -export([call/3]).
 
--spec call(livery_req:req(), livery_middleware:next(),
-           map()) -> livery_resp:resp().
+-spec call(
+    livery_req:req(),
+    livery_middleware:next(),
+    map()
+) -> livery_resp:resp().
 call(Req, Next, State) ->
     case livery_ext:bearer_token(Req) of
         undefined ->
             case maps:get(required, State, true) of
-                true  -> unauthorized(<<"missing token">>);
+                true -> unauthorized(<<"missing token">>);
                 false -> Next(Req)
             end;
         Token ->
@@ -95,12 +98,12 @@ unauthorized(Detail) ->
     livery_resp:with_header(<<"www-authenticate">>, <<"Bearer">>, Resp).
 
 -spec reason_text(livery_auth:error_reason()) -> binary().
-reason_text(expired)             -> <<"token expired">>;
-reason_text(not_yet_valid)       -> <<"token not yet valid">>;
-reason_text(bad_signature)       -> <<"bad token signature">>;
-reason_text(no_matching_key)     -> <<"no matching key">>;
-reason_text(malformed)           -> <<"malformed token">>;
-reason_text(invalid_json)        -> <<"malformed token">>;
-reason_text(audience_mismatch)   -> <<"audience mismatch">>;
+reason_text(expired) -> <<"token expired">>;
+reason_text(not_yet_valid) -> <<"token not yet valid">>;
+reason_text(bad_signature) -> <<"bad token signature">>;
+reason_text(no_matching_key) -> <<"no matching key">>;
+reason_text(malformed) -> <<"malformed token">>;
+reason_text(invalid_json) -> <<"malformed token">>;
+reason_text(audience_mismatch) -> <<"audience mismatch">>;
 reason_text({issuer_mismatch, _}) -> <<"issuer mismatch">>;
 reason_text({unsupported_alg, _}) -> <<"unsupported algorithm">>.

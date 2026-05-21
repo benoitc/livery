@@ -61,8 +61,10 @@ upgrade(Req, HandlerMod, Opts) ->
     Adapter = livery_req:adapter(Req),
     case adapter_transport(Adapter) of
         undefined ->
-            livery_resp:text(501,
-                <<"WebTransport not supported on this protocol">>);
+            livery_resp:text(
+                501,
+                <<"WebTransport not supported on this protocol">>
+            );
         Transport ->
             case Adapter:accept_wt(Transport, Req, HandlerMod, Opts) of
                 {ok, _Session} ->
@@ -72,18 +74,22 @@ upgrade(Req, HandlerMod, Opts) ->
                 {error, {rejected, Status}} ->
                     livery_resp:text(Status, <<"webtransport rejected">>);
                 {error, Reason} ->
-                    livery_resp:text(500,
-                        iolist_to_binary([<<"webtransport upgrade failed: ">>,
-                                          format_reason(Reason)]))
+                    livery_resp:text(
+                        500,
+                        iolist_to_binary([
+                            <<"webtransport upgrade failed: ">>,
+                            format_reason(Reason)
+                        ])
+                    )
             end
     end.
 
 -spec adapter_transport(module()) -> h2 | h3 | undefined.
 adapter_transport(livery_h2) -> h2;
 adapter_transport(livery_h3) -> h3;
-adapter_transport(_)         -> undefined.
+adapter_transport(_) -> undefined.
 
 -spec format_reason(term()) -> iodata().
 format_reason(B) when is_binary(B) -> B;
-format_reason(A) when is_atom(A)   -> atom_to_binary(A);
-format_reason(Other)               -> io_lib:format("~p", [Other]).
+format_reason(A) when is_atom(A) -> atom_to_binary(A);
+format_reason(Other) -> io_lib:format("~p", [Other]).

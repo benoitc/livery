@@ -10,27 +10,39 @@
 %%====================================================================
 
 well_known_url_test() ->
-    ?assertEqual(<<"https://i.example/.well-known/openid-configuration">>,
-                 livery_auth_oidc:well_known_url(<<"https://i.example">>)),
+    ?assertEqual(
+        <<"https://i.example/.well-known/openid-configuration">>,
+        livery_auth_oidc:well_known_url(<<"https://i.example">>)
+    ),
     %% trailing slash trimmed
-    ?assertEqual(<<"https://i.example/.well-known/openid-configuration">>,
-                 livery_auth_oidc:well_known_url(<<"https://i.example/">>)).
+    ?assertEqual(
+        <<"https://i.example/.well-known/openid-configuration">>,
+        livery_auth_oidc:well_known_url(<<"https://i.example/">>)
+    ).
 
 discover_parses_config_test() ->
-    Doc = #{<<"issuer">> => <<"https://i.example">>,
-            <<"jwks_uri">> => <<"https://i.example/jwks">>},
+    Doc = #{
+        <<"issuer">> => <<"https://i.example">>,
+        <<"jwks_uri">> => <<"https://i.example/jwks">>
+    },
     Fetch = fun(<<"https://i.example/.well-known/openid-configuration">>) ->
         {ok, iolist_to_binary(json:encode(Doc))}
     end,
-    {ok, Cfg} = livery_auth_oidc:discover(<<"https://i.example">>,
-                                          #{fetch => Fetch}),
+    {ok, Cfg} = livery_auth_oidc:discover(
+        <<"https://i.example">>,
+        #{fetch => Fetch}
+    ),
     ?assertEqual(<<"https://i.example/jwks">>, maps:get(<<"jwks_uri">>, Cfg)).
 
 discover_propagates_fetch_error_test() ->
     Fetch = fun(_) -> {error, nxdomain} end,
-    ?assertEqual({error, nxdomain},
-                 livery_auth_oidc:discover(<<"https://i.example">>,
-                                           #{fetch => Fetch})).
+    ?assertEqual(
+        {error, nxdomain},
+        livery_auth_oidc:discover(
+            <<"https://i.example">>,
+            #{fetch => Fetch}
+        )
+    ).
 
 %%====================================================================
 %% JWKS fetch + cache + rotation
@@ -80,15 +92,20 @@ bearer_resolves_keys_from_jwks_uri_test() ->
     Fetch = fun(_) ->
         {ok, iolist_to_binary(json:encode(#{<<"keys">> => [Jwk]}))}
     end,
-    Token = livery_auth_jwt:mint(Key, #{<<"kid">> => <<"ju1">>},
-        #{<<"sub">> => <<"x">>, <<"exp">> => future()}),
+    Token = livery_auth_jwt:mint(
+        Key,
+        #{<<"kid">> => <<"ju1">>},
+        #{<<"sub">> => <<"x">>, <<"exp">> => future()}
+    ),
     Stack = [{livery_auth_bearer, #{jwks_uri => Uri, fetch => Fetch}}],
-    Cap = livery_test_adapter:run(Stack,
+    Cap = livery_test_adapter:run(
+        Stack,
         fun(R) ->
             #{<<"sub">> := S} = livery_ext:user(R),
             livery_resp:text(200, S)
         end,
-        #{headers => [{<<"authorization">>, <<"Bearer ", Token/binary>>}]}),
+        #{headers => [{<<"authorization">>, <<"Bearer ", Token/binary>>}]}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"x">>, livery_test_adapter:body(Cap)).
 
@@ -107,12 +124,17 @@ bearer_refreshes_jwks_on_rotation_test() ->
     {ok, [OldJwk]} = livery_auth_jwks:keys(Uri, #{fetch => Fetch}),
     %% issuer rotates keys
     put({rotate_set, Ref}, [NewJwk]),
-    Token = livery_auth_jwt:mint(Key, #{<<"kid">> => <<"rotated">>},
-        #{<<"sub">> => <<"y">>, <<"exp">> => future()}),
+    Token = livery_auth_jwt:mint(
+        Key,
+        #{<<"kid">> => <<"rotated">>},
+        #{<<"sub">> => <<"y">>, <<"exp">> => future()}
+    ),
     Stack = [{livery_auth_bearer, #{jwks_uri => Uri, fetch => Fetch}}],
-    Cap = livery_test_adapter:run(Stack,
+    Cap = livery_test_adapter:run(
+        Stack,
         fun(_R) -> livery_resp:text(200, <<"ok">>) end,
-        #{headers => [{<<"authorization">>, <<"Bearer ", Token/binary>>}]}),
+        #{headers => [{<<"authorization">>, <<"Bearer ", Token/binary>>}]}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)).
 
 %%====================================================================

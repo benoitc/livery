@@ -31,10 +31,11 @@ started lazily; no extra dependency.
 
 -type opts() :: #{
     fetch => fun((binary()) -> {ok, binary()} | {error, term()}),
-    ttl   => non_neg_integer()
+    ttl => non_neg_integer()
 }.
 
--define(DEFAULT_TTL_MS, 300000).  %% 5 minutes
+%% 5 minutes
+-define(DEFAULT_TTL_MS, 300000).
 
 %%====================================================================
 %% Cache API
@@ -109,8 +110,14 @@ default_fetch(Url) ->
     _ = application:ensure_all_started(inets),
     _ = application:ensure_all_started(ssl),
     Request = {binary_to_list(Url), []},
-    case httpc:request(get, Request, [{timeout, 5000}],
-                       [{body_format, binary}]) of
+    case
+        httpc:request(
+            get,
+            Request,
+            [{timeout, 5000}],
+            [{body_format, binary}]
+        )
+    of
         {ok, {{_Vsn, 200, _}, _Headers, Body}} ->
             {ok, Body};
         {ok, {{_Vsn, Code, _}, _Headers, _Body}} ->

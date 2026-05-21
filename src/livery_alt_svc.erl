@@ -15,11 +15,14 @@ configured.
 
 -export([call/3]).
 
--spec call(livery_req:req(), livery_middleware:next(),
-           #{value := binary()}) -> livery_resp:resp().
+-spec call(
+    livery_req:req(),
+    livery_middleware:next(),
+    #{value := binary()}
+) -> livery_resp:resp().
 call(Req, Next, #{value := Value}) when is_binary(Value) ->
     Resp = Next(Req),
     case livery_req:protocol(Req) of
         h3 -> Resp;
-        _  -> livery_resp:with_header(<<"alt-svc">>, Value, Resp)
+        _ -> livery_resp:with_header(<<"alt-svc">>, Value, Resp)
     end.

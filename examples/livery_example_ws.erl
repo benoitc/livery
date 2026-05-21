@@ -20,7 +20,7 @@ start() -> start(8081).
 
 start(Port) ->
     livery:start_service(#{
-        http    => #{port => Port},
+        http => #{port => Port},
         handler => fun ?MODULE:handler/1
     }).
 

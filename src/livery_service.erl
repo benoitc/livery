@@ -53,25 +53,25 @@ in-flight requests finish, use `livery:drain/1,2`.
 -export_type([service_opts/0]).
 
 -type service_opts() :: #{
-    host       => binary(),
-    http       => listener_opts(),
-    https      => listener_opts(),
-    http3      => listener_opts(),
+    host => binary(),
+    http => listener_opts(),
+    https => listener_opts(),
+    http3 => listener_opts(),
     %% Supply exactly one of `handler' (a catch-all) or `router' (a
     %% compiled livery_router that the service dispatches through).
-    handler    => livery_middleware:handler(),
-    router     => livery_router:router(),
+    handler => livery_middleware:handler(),
+    router => livery_router:router(),
     middleware => livery_middleware:stack(),
-    alt_svc    => advertise | none
+    alt_svc => advertise | none
 }.
 
 -type listener_opts() :: #{
-    port      => inet:port_number(),
-    cert      => binary() | string(),
-    key       => binary() | string() | term(),
-    cacerts   => [binary()],
+    port => inet:port_number(),
+    cert => binary() | string(),
+    key => binary() | string() | term(),
+    cacerts => [binary()],
     acceptors => pos_integer(),
-    settings  => map(),
+    settings => map(),
     quic_opts => map()
 }.
 
@@ -176,38 +176,44 @@ code_change(_, State, _) -> {ok, State}.
 resolve_handler(Opts) ->
     case {maps:find(router, Opts), maps:find(handler, Opts)} of
         {{ok, _}, {ok, _}} -> throw(both_router_and_handler);
-        {{ok, Router}, _}  -> livery:router_handler(Router);
-        {_, {ok, H}}       -> H;
-        {error, error}     -> throw(no_handler_or_router)
+        {{ok, Router}, _} -> livery:router_handler(Router);
+        {_, {ok, H}} -> H;
+        {error, error} -> throw(no_handler_or_router)
     end.
 
 -spec base_stack(service_opts()) -> livery_middleware:stack().
 base_stack(Opts) ->
     maps:get(middleware, Opts, []).
 
--spec build_stack(service_opts(),
-                  {atom(), inet:port_number()} | undefined) ->
+-spec build_stack(
+    service_opts(),
+    {atom(), inet:port_number()} | undefined
+) ->
     livery_middleware:stack().
 build_stack(Opts, H3) ->
     User = base_stack(Opts),
     case {maps:get(alt_svc, Opts, none), H3} of
         {advertise, {_Name, Port}} ->
-            [{livery_alt_svc,
-              #{value => alt_svc_header(Port)}} | User];
+            [{livery_alt_svc, #{value => alt_svc_header(Port)}} | User];
         _ ->
             User
     end.
 
 -spec alt_svc_header(inet:port_number()) -> binary().
 alt_svc_header(Port) ->
-    iolist_to_binary([<<"h3=\":">>, integer_to_binary(Port),
-                      <<"\"; ma=86400">>]).
+    iolist_to_binary([
+        <<"h3=\":">>,
+        integer_to_binary(Port),
+        <<"\"; ma=86400">>
+    ]).
 
 maybe_start_h1(Opts, Stack, Handler) ->
     case maps:find(http, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(ListenOpts,
-                                     #{stack => Stack, handler => Handler}),
+            ListenOpts1 = maps:merge(
+                ListenOpts,
+                #{stack => Stack, handler => Handler}
+            ),
             {ok, Ref} = livery_h1:start(ListenOpts1),
             {Ref, h1:server_port(Ref)};
         error ->
@@ -217,10 +223,18 @@ maybe_start_h1(Opts, Stack, Handler) ->
 maybe_start_h2(Opts, Stack, Handler) ->
     case maps:find(https, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(ListenOpts,
-                                     #{stack => Stack, handler => Handler,
-                                       transport => maps:get(transport,
-                                                             ListenOpts, ssl)}),
+            ListenOpts1 = maps:merge(
+                ListenOpts,
+                #{
+                    stack => Stack,
+                    handler => Handler,
+                    transport => maps:get(
+                        transport,
+                        ListenOpts,
+                        ssl
+                    )
+                }
+            ),
             {ok, Ref} = livery_h2:start(ListenOpts1),
             {Ref, h2:server_port(Ref)};
         error ->
@@ -230,8 +244,10 @@ maybe_start_h2(Opts, Stack, Handler) ->
 maybe_start_h3(Opts, Stack, Handler) ->
     case maps:find(http3, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(ListenOpts,
-                                     #{stack => Stack, handler => Handler}),
+            ListenOpts1 = maps:merge(
+                ListenOpts,
+                #{stack => Stack, handler => Handler}
+            ),
             {ok, Name} = livery_h3:start(ListenOpts1),
             {ok, Port} = quic:get_server_port(Name),
             {Name, Port};
@@ -250,15 +266,17 @@ stop_h3({Name, _Port}) -> livery_h3:stop(Name).
 
 listeners_map(State) ->
     Acc0 = #{},
-    Acc1 = case State#state.h1 of
-        undefined -> Acc0;
-        {_, P1}   -> Acc0#{h1 => P1}
-    end,
-    Acc2 = case State#state.h2 of
-        undefined -> Acc1;
-        {_, P2}   -> Acc1#{h2 => P2}
-    end,
+    Acc1 =
+        case State#state.h1 of
+            undefined -> Acc0;
+            {_, P1} -> Acc0#{h1 => P1}
+        end,
+    Acc2 =
+        case State#state.h2 of
+            undefined -> Acc1;
+            {_, P2} -> Acc1#{h2 => P2}
+        end,
     case State#state.h3 of
         undefined -> Acc2;
-        {_, P3}   -> Acc2#{h3 => P3}
+        {_, P3} -> Acc2#{h3 => P3}
     end.

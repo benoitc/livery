@@ -51,14 +51,22 @@ get_instruments(Meter) ->
     case persistent_term:get(Key, undefined) of
         undefined ->
             M = instrument_meter:get_meter(Meter),
-            Active = instrument_meter:create_up_down_counter(M,
+            Active = instrument_meter:create_up_down_counter(
+                M,
                 <<"http.server.active_requests">>,
-                #{description => <<"Number of active HTTP server requests">>,
-                  unit => <<"{request}">>}),
-            Duration = instrument_meter:create_histogram(M,
+                #{
+                    description => <<"Number of active HTTP server requests">>,
+                    unit => <<"{request}">>
+                }
+            ),
+            Duration = instrument_meter:create_histogram(
+                M,
                 <<"http.server.request.duration">>,
-                #{description => <<"Duration of HTTP server requests">>,
-                  unit => <<"s">>}),
+                #{
+                    description => <<"Duration of HTTP server requests">>,
+                    unit => <<"s">>
+                }
+            ),
             Pair = {Active, Duration},
             ok = persistent_term:put(Key, Pair),
             Pair;
@@ -69,8 +77,8 @@ get_instruments(Meter) ->
 -spec active_attrs(livery_req:req()) -> map().
 active_attrs(Req) ->
     #{
-        <<"http.request.method">>   => livery_req:method(Req),
-        <<"url.scheme">>            => livery_req:scheme(Req),
+        <<"http.request.method">> => livery_req:method(Req),
+        <<"url.scheme">> => livery_req:scheme(Req),
         <<"network.protocol.name">> => livery_instrument_trace_protocol(livery_req:protocol(Req))
     }.
 

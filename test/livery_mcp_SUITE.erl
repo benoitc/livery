@@ -10,8 +10,13 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
--export([all/0, init_per_suite/1, end_per_suite/1,
-         init_per_testcase/2, end_per_testcase/2]).
+-export([
+    all/0,
+    init_per_suite/1,
+    end_per_suite/1,
+    init_per_testcase/2,
+    end_per_testcase/2
+]).
 -export([
     initialize_returns_session/1,
     tools_list_returns_registered_tool/1,
@@ -22,9 +27,11 @@
 -export([echo_tool/1]).
 
 all() ->
-    [initialize_returns_session,
-     tools_list_returns_registered_tool,
-     tools_call_runs_tool].
+    [
+        initialize_returns_session,
+        tools_list_returns_registered_tool,
+        tools_call_runs_tool
+    ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -51,13 +58,16 @@ end_per_suite(_Config) ->
 %% process that drives the requests.
 init_per_testcase(_TC, Config) ->
     {ok, Listener} = livery_h1:start(#{
-        port    => 0,
-        stack   => [],
+        port => 0,
+        stack => [],
         handler => livery_mcp:handler(#{session_enabled => true})
     }),
     Port = h1:server_port(Listener),
-    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
-                            integer_to_binary(Port), <<"/mcp">>]),
+    Url = iolist_to_binary([
+        <<"http://127.0.0.1:">>,
+        integer_to_binary(Port),
+        <<"/mcp">>
+    ]),
     [{listener, Listener}, {url, Url} | Config].
 
 end_per_testcase(_TC, Config) ->
@@ -116,8 +126,11 @@ tools_call_runs_tool(Config) ->
     ?assertEqual(3, maps:get(<<"id">>, Resp)),
     ?assert(not maps:is_key(<<"error">>, Resp)),
     Content = maps:get(<<"content">>, maps:get(<<"result">>, Resp)),
-    Texts = [maps:get(<<"text">>, C) || C <- Content,
-                                        maps:get(<<"type">>, C) =:= <<"text">>],
+    Texts = [
+        maps:get(<<"text">>, C)
+     || C <- Content,
+        maps:get(<<"type">>, C) =:= <<"text">>
+    ],
     Joined = iolist_to_binary(Texts),
     ?assertNotEqual(nomatch, binary:match(Joined, <<"echo: hi">>)).
 
@@ -133,12 +146,19 @@ initialize(Url) ->
         <<"params">> => #{
             <<"protocolVersion">> => <<"2025-11-25">>,
             <<"capabilities">> => #{},
-            <<"clientInfo">> => #{<<"name">> => <<"livery-test">>,
-                                  <<"version">> => <<"1.0">>}
+            <<"clientInfo">> => #{
+                <<"name">> => <<"livery-test">>,
+                <<"version">> => <<"1.0">>
+            }
         }
     }),
-    {ok, Status, Headers, RespBody} = hackney:request(post, Url,
-        json_headers(), Body, [with_body, {recv_timeout, 5000}]),
+    {ok, Status, Headers, RespBody} = hackney:request(
+        post,
+        Url,
+        json_headers(),
+        Body,
+        [with_body, {recv_timeout, 5000}]
+    ),
     {Status, Headers, RespBody}.
 
 initialized(Url, Sid) ->
@@ -146,21 +166,31 @@ initialized(Url, Sid) ->
         <<"jsonrpc">> => <<"2.0">>,
         <<"method">> => <<"notifications/initialized">>
     }),
-    {ok, _Status, _H, _B} = hackney:request(post, Url,
-        with_session(json_headers(), Sid), Note,
-        [with_body, {recv_timeout, 5000}]),
+    {ok, _Status, _H, _B} = hackney:request(
+        post,
+        Url,
+        with_session(json_headers(), Sid),
+        Note,
+        [with_body, {recv_timeout, 5000}]
+    ),
     ok.
 
 post(Url, Sid, Map) ->
     Body = json:encode(Map),
-    {ok, 200, _Headers, RespBody} = hackney:request(post, Url,
-        with_session(json_headers(), Sid), Body,
-        [with_body, {recv_timeout, 5000}]),
+    {ok, 200, _Headers, RespBody} = hackney:request(
+        post,
+        Url,
+        with_session(json_headers(), Sid),
+        Body,
+        [with_body, {recv_timeout, 5000}]
+    ),
     RespBody.
 
 json_headers() ->
-    [{<<"content-type">>, <<"application/json">>},
-     {<<"accept">>, <<"application/json, text/event-stream">>}].
+    [
+        {<<"content-type">>, <<"application/json">>},
+        {<<"accept">>, <<"application/json, text/event-stream">>}
+    ].
 
 with_session(Headers, undefined) -> Headers;
 with_session(Headers, Sid) -> [{<<"mcp-session-id">>, Sid} | Headers].

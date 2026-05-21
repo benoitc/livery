@@ -30,7 +30,7 @@ ok = livery:drain(Pid, #{timeout => 30000}).
 -export_type([opts/0]).
 
 -type opts() :: #{
-    timeout       => timeout(),
+    timeout => timeout(),
     poll_interval => non_neg_integer()
 }.
 

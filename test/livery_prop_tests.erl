@@ -15,9 +15,10 @@ proper_test_() ->
         prop_url_decode_plain_identity(),
         prop_middleware_threads_request()
     ],
-    {timeout, 120,
-     [?_assert(proper:quickcheck(P, [{numtests, 200}, {to_file, user}]))
-      || P <- Props]}.
+    {timeout, 120, [
+        ?_assert(proper:quickcheck(P, [{numtests, 200}, {to_file, user}]))
+     || P <- Props
+    ]}.
 
 %%====================================================================
 %% Router properties
@@ -25,7 +26,9 @@ proper_test_() ->
 
 %% A compiled static route matches its own path and returns its handler.
 prop_static_route_roundtrip() ->
-    ?FORALL({Segments, Handler}, {non_empty(list(seg())), term()},
+    ?FORALL(
+        {Segments, Handler},
+        {non_empty(list(seg())), term()},
         begin
             Path = <<"/", (join(Segments))/binary>>,
             Router = livery_router:compile([{<<"GET">>, Path, Handler}]),
@@ -33,11 +36,14 @@ prop_static_route_roundtrip() ->
                 {ok, H, _Bindings, _Meta} -> H =:= Handler;
                 _ -> false
             end
-        end).
+        end
+    ).
 
 %% A `:param' route captures the supplied segment under the param name.
 prop_param_route_captures_segment() ->
-    ?FORALL({Name, Value}, {seg(), seg()},
+    ?FORALL(
+        {Name, Value},
+        {seg(), seg()},
         begin
             Pattern = <<"/users/:", Name/binary>>,
             Path = <<"/users/", Value/binary>>,
@@ -45,22 +51,28 @@ prop_param_route_captures_segment() ->
             case livery_router:match(<<"GET">>, Path, Router) of
                 {ok, h, Bindings, _} ->
                     maps:get(Name, Bindings, undefined) =:= Value;
-                _ -> false
+                _ ->
+                    false
             end
-        end).
+        end
+    ).
 
 %% A path that exists but for a different method yields method_not_allowed.
 prop_unknown_method_not_allowed() ->
-    ?FORALL(Segments, non_empty(list(seg())),
+    ?FORALL(
+        Segments,
+        non_empty(list(seg())),
         begin
             Path = <<"/", (join(Segments))/binary>>,
             Router = livery_router:compile([{<<"GET">>, Path, h}]),
             case livery_router:match(<<"DELETE">>, Path, Router) of
                 {error, {method_not_allowed, Methods}} ->
                     lists:member(<<"GET">>, Methods);
-                _ -> false
+                _ ->
+                    false
             end
-        end).
+        end
+    ).
 
 %%====================================================================
 %% Extractor properties
@@ -68,12 +80,15 @@ prop_unknown_method_not_allowed() ->
 
 %% A query value with no percent/plus encoding round-trips unchanged.
 prop_url_decode_plain_identity() ->
-    ?FORALL({K, V}, {seg(), plain_value()},
+    ?FORALL(
+        {K, V},
+        {seg(), plain_value()},
         begin
             Raw = <<K/binary, "=", V/binary>>,
             Req = livery_req:new(#{raw_query => Raw}),
             livery_ext:query(K, Req) =:= V
-        end).
+        end
+    ).
 
 %%====================================================================
 %% Middleware property
@@ -82,7 +97,9 @@ prop_url_decode_plain_identity() ->
 %% A stack of N request-tagging middlewares all run before the handler,
 %% in order, regardless of N.
 prop_middleware_threads_request() ->
-    ?FORALL(N, range(0, 12),
+    ?FORALL(
+        N,
+        range(0, 12),
         begin
             Stack = [tag_mw(I) || I <- lists:seq(1, N)],
             Handler = fun(R) ->
@@ -94,7 +111,8 @@ prop_middleware_threads_request() ->
             Got = iolist_to_binary(Body),
             Want = iolist_to_binary(io_lib:format("~w", [lists:seq(1, N)])),
             Got =:= Want
-        end).
+        end
+    ).
 
 tag_mw(I) ->
     fun(Req, Next) ->
@@ -111,8 +129,10 @@ seg() ->
     ?LET(Cs, non_empty(list(seg_char())), list_to_binary(Cs)).
 
 seg_char() ->
-    oneof(lists:seq($a, $z) ++ lists:seq($A, $Z) ++ lists:seq($0, $9)
-          ++ [$-, $_, $.]).
+    oneof(
+        lists:seq($a, $z) ++ lists:seq($A, $Z) ++ lists:seq($0, $9) ++
+            [$-, $_, $.]
+    ).
 
 %% A query value that contains no `%', `+', `&', or `=' (so decoding
 %% is the identity).

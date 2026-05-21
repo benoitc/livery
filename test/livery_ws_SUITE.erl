@@ -33,11 +33,13 @@
 %%====================================================================
 
 all() ->
-    [h1_echo_text_frame,
-     h1_rejects_request_without_upgrade_headers,
-     h2_echo_text_frame,
-     h2_rejects_plain_get,
-     h3_echo_text_frame].
+    [
+        h1_echo_text_frame,
+        h1_rejects_request_without_upgrade_headers,
+        h2_echo_text_frame,
+        h2_rejects_plain_get,
+        h3_echo_text_frame
+    ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -58,36 +60,46 @@ end_per_suite(_Config) ->
     _ = application:stop(livery),
     ok.
 
-init_per_testcase(TC, Config) when TC =:= h2_echo_text_frame;
-                                   TC =:= h2_rejects_plain_get ->
+init_per_testcase(TC, Config) when
+    TC =:= h2_echo_text_frame;
+    TC =:= h2_rejects_plain_get
+->
     {ok, Listener} = livery_h2:start(#{
-        port                    => 0,
-        transport               => tcp,
+        port => 0,
+        transport => tcp,
         enable_connect_protocol => true,
-        stack                   => [],
-        handler                 => fun ws_handler/1
+        stack => [],
+        handler => fun ws_handler/1
     }),
-    [{adapter, h2}, {listener, Listener},
-     {port, h2:server_port(Listener)} | Config];
+    [
+        {adapter, h2},
+        {listener, Listener},
+        {port, h2:server_port(Listener)}
+        | Config
+    ];
 init_per_testcase(h3_echo_text_frame, Config) ->
     {ok, Listener} = livery_h3:start(#{
-        port     => 0,
-        cert     => ?config(cert, Config),
-        key      => ?config(key, Config),
+        port => 0,
+        cert => ?config(cert, Config),
+        key => ?config(key, Config),
         settings => #{enable_connect_protocol => 1},
-        stack    => [],
-        handler  => fun ws_handler/1
+        stack => [],
+        handler => fun ws_handler/1
     }),
     {ok, Port} = quic:get_server_port(Listener),
     [{adapter, h3}, {listener, Listener}, {port, Port} | Config];
 init_per_testcase(_TC, Config) ->
     {ok, Listener} = livery_h1:start(#{
-        port    => 0,
-        stack   => [],
+        port => 0,
+        stack => [],
         handler => fun ws_handler/1
     }),
-    [{adapter, h1}, {listener, Listener},
-     {port, h1:server_port(Listener)} | Config].
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
+        | Config
+    ].
 
 end_per_testcase(_TC, Config) ->
     case ?config(adapter, Config) of
@@ -107,11 +119,14 @@ ws_handler(R) ->
 
 h1_echo_text_frame(Config) ->
     Port = ?config(port, Config),
-    Url = iolist_to_binary([<<"ws://127.0.0.1:">>,
-                            integer_to_binary(Port), <<"/">>]),
+    Url = iolist_to_binary([
+        <<"ws://127.0.0.1:">>,
+        integer_to_binary(Port),
+        <<"/">>
+    ]),
     Self = self(),
     {ok, Sess} = ws_client:connect(Url, #{
-        handler      => livery_ws_client_capture,
+        handler => livery_ws_client_capture,
         handler_opts => #{parent => Self}
     }),
     try
@@ -127,11 +142,19 @@ h1_echo_text_frame(Config) ->
 
 h1_rejects_request_without_upgrade_headers(Config) ->
     Port = ?config(port, Config),
-    Url = iolist_to_binary([<<"http://127.0.0.1:">>,
-                            integer_to_binary(Port), <<"/">>]),
+    Url = iolist_to_binary([
+        <<"http://127.0.0.1:">>,
+        integer_to_binary(Port),
+        <<"/">>
+    ]),
     {ok, Status, _Headers, Body} =
-        hackney:request(<<"GET">>, Url, [], <<>>,
-                        [with_body, {recv_timeout, 5000}]),
+        hackney:request(
+            <<"GET">>,
+            Url,
+            [],
+            <<>>,
+            [with_body, {recv_timeout, 5000}]
+        ),
     ?assertEqual(400, Status),
     ?assertMatch(<<"bad ws upgrade:", _/binary>>, Body).
 
@@ -143,13 +166,17 @@ h2_echo_text_frame(Config) ->
     Port = ?config(port, Config),
     {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
     try
-        {ok, StreamId} = h2:request(Conn, [
-            {<<":method">>, <<"CONNECT">>},
-            {<<":scheme">>, <<"http">>},
-            {<<":authority">>, <<"localhost">>},
-            {<<":path">>, <<"/ws">>},
-            {<<"sec-websocket-version">>, <<"13">>}
-        ], #{protocol => <<"websocket">>}),
+        {ok, StreamId} = h2:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":scheme">>, <<"http">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{protocol => <<"websocket">>}
+        ),
         %% Extended CONNECT succeeds with a 200 response.
         200 = wait_h2_status(Conn, StreamId),
         %% Send a masked client text frame as h2 DATA.
@@ -166,8 +193,12 @@ h2_rejects_plain_get(Config) ->
     Port = ?config(port, Config),
     {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
     try
-        {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>,
-                                    [{<<"host">>, <<"localhost">>}]),
+        {ok, StreamId} = h2:request(
+            Conn,
+            <<"GET">>,
+            <<"/">>,
+            [{<<"host">>, <<"localhost">>}]
+        ),
         %% A plain GET hits the upgrade handler, which can't find WS
         %% upgrade headers and returns 400.
         ?assertEqual(400, wait_h2_status(Conn, StreamId))
@@ -181,23 +212,36 @@ h2_rejects_plain_get(Config) ->
 
 h3_echo_text_frame(Config) ->
     Port = ?config(port, Config),
-    {ok, Conn} = quic_h3:connect(<<"localhost">>, Port,
-                                  #{verify => verify_none, sync => true,
-                                    settings => #{enable_connect_protocol => 1}}),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>,
+        Port,
+        #{
+            verify => verify_none,
+            sync => true,
+            settings => #{enable_connect_protocol => 1}
+        }
+    ),
     try
-        {ok, StreamId} = quic_h3:request(Conn, [
-            {<<":method">>, <<"CONNECT">>},
-            {<<":protocol">>, <<"websocket">>},
-            {<<":scheme">>, <<"https">>},
-            {<<":authority">>, <<"localhost">>},
-            {<<":path">>, <<"/ws">>},
-            {<<"sec-websocket-version">>, <<"13">>}
-        ], #{end_stream => false}),
+        {ok, StreamId} = quic_h3:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":protocol">>, <<"websocket">>},
+                {<<":scheme">>, <<"https">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{end_stream => false}
+        ),
         200 = wait_h3_status(Conn, StreamId),
         Frame = iolist_to_binary(ws_frame:encode({text, <<"over-h3">>}, client)),
         ok = quic_h3:send_data(Conn, StreamId, Frame, false),
-        Echo = recv_ws_frame_h3(Conn, StreamId,
-                                ws_frame:init_parser(#{role => client})),
+        Echo = recv_ws_frame_h3(
+            Conn,
+            StreamId,
+            ws_frame:init_parser(#{role => client})
+        ),
         ?assertEqual({text, <<"over-h3">>}, Echo)
     after
         catch quic_h3:close(Conn)
@@ -215,7 +259,7 @@ recv_ws_frame_h3(Conn, StreamId, Parser) ->
         {quic_h3, Conn, {data, StreamId, Bin, _Fin}} ->
             case ws_frame:parse(Parser, Bin) of
                 {ok, [Frame | _], _P} -> Frame;
-                {ok, [], P}           -> recv_ws_frame_h3(Conn, StreamId, P)
+                {ok, [], P} -> recv_ws_frame_h3(Conn, StreamId, P)
             end;
         {quic_h3, Conn, _Other} ->
             recv_ws_frame_h3(Conn, StreamId, Parser)
@@ -239,7 +283,7 @@ recv_ws_frame(Conn, StreamId, Parser) ->
         {h2, Conn, {data, StreamId, Bin, _Fin}} ->
             case ws_frame:parse(Parser, Bin) of
                 {ok, [Frame | _], _P} -> Frame;
-                {ok, [], P}           -> recv_ws_frame(Conn, StreamId, P)
+                {ok, [], P} -> recv_ws_frame(Conn, StreamId, P)
             end;
         {h2, Conn, _Other} ->
             recv_ws_frame(Conn, StreamId, Parser)

@@ -19,30 +19,40 @@ tampered_payload_is_rejected_test() ->
     %% decode, but the HMAC no longer matches.
     C1 = livery_auth_session:sign(#{<<"uid">> => 1}, #{secret => ?SECRET}),
     C2 = livery_auth_session:sign(#{<<"uid">> => 2}, #{secret => ?SECRET}),
-    [P1, _]  = binary:split(C1, <<".">>),
+    [P1, _] = binary:split(C1, <<".">>),
     [_, Sig2] = binary:split(C2, <<".">>),
     Forged = <<P1/binary, ".", Sig2/binary>>,
-    ?assertEqual({error, bad_signature},
-                 livery_auth_session:verify(Forged, #{secret => ?SECRET})).
+    ?assertEqual(
+        {error, bad_signature},
+        livery_auth_session:verify(Forged, #{secret => ?SECRET})
+    ).
 
 wrong_secret_is_rejected_test() ->
     Cookie = livery_auth_session:sign(#{<<"uid">> => 1}, #{secret => ?SECRET}),
-    ?assertEqual({error, bad_signature},
-                 livery_auth_session:verify(Cookie, #{secret => <<"other">>})).
+    ?assertEqual(
+        {error, bad_signature},
+        livery_auth_session:verify(Cookie, #{secret => <<"other">>})
+    ).
 
 malformed_cookie_is_rejected_test() ->
-    ?assertEqual({error, malformed},
-                 livery_auth_session:verify(<<"no-dot-here">>, #{secret => ?SECRET})).
+    ?assertEqual(
+        {error, malformed},
+        livery_auth_session:verify(<<"no-dot-here">>, #{secret => ?SECRET})
+    ).
 
 expired_cookie_is_rejected_test() ->
     Past = erlang:system_time(second) - 10,
     Cookie = livery_auth_session:sign(#{<<"exp">> => Past}, #{secret => ?SECRET}),
-    ?assertEqual({error, expired},
-                 livery_auth_session:verify(Cookie, #{secret => ?SECRET})).
+    ?assertEqual(
+        {error, expired},
+        livery_auth_session:verify(Cookie, #{secret => ?SECRET})
+    ).
 
 max_age_embeds_future_exp_test() ->
-    Cookie = livery_auth_session:sign(#{<<"uid">> => 1},
-                                      #{secret => ?SECRET, max_age => 3600}),
+    Cookie = livery_auth_session:sign(
+        #{<<"uid">> => 1},
+        #{secret => ?SECRET, max_age => 3600}
+    ),
     {ok, Map} = livery_auth_session:verify(Cookie, #{secret => ?SECRET}),
     ?assert(maps:is_key(<<"exp">>, Map)),
     ?assert(map_get(<<"exp">>, Map) > erlang:system_time(second)).
@@ -58,10 +68,17 @@ set_cookie_header_defaults_test() ->
 
 set_cookie_header_with_attrs_test() ->
     {<<"set-cookie">>, V} = livery_auth_session:set_cookie_header(
-        <<"abc">>, #{name => <<"sid">>, max_age => 60, secure => false,
-                     http_only => true, same_site => <<"Strict">>}),
+        <<"abc">>, #{
+            name => <<"sid">>,
+            max_age => 60,
+            secure => false,
+            http_only => true,
+            same_site => <<"Strict">>
+        }
+    ),
     ?assertEqual(
-        <<"sid=abc; Path=/; Max-Age=60; SameSite=Strict; HttpOnly">>, V).
+        <<"sid=abc; Path=/; Max-Age=60; SameSite=Strict; HttpOnly">>, V
+    ).
 
 clear_cookie_header_test() ->
     {<<"set-cookie">>, V} = livery_auth_session:clear_cookie_header(#{}),
@@ -88,7 +105,7 @@ cookie_extractor_no_header_test() ->
 handler() ->
     fun(R) ->
         case livery_ext:session(R) of
-            undefined           -> livery_resp:text(200, <<"anon">>);
+            undefined -> livery_resp:text(200, <<"anon">>);
             #{<<"uid">> := Uid} -> livery_resp:text(200, integer_to_binary(Uid))
         end
     end.
@@ -96,8 +113,11 @@ handler() ->
 valid_cookie_sets_session_meta_test() ->
     Cookie = livery_auth_session:sign(#{<<"uid">> => 7}, #{secret => ?SECRET}),
     Stack = [{livery_auth_session, #{secret => ?SECRET}}],
-    Cap = livery_test_adapter:run(Stack, handler(),
-        #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}),
+    Cap = livery_test_adapter:run(
+        Stack,
+        handler(),
+        #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}
+    ),
     ?assertEqual(200, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"7">>, livery_test_adapter:body(Cap)).
 
@@ -114,8 +134,11 @@ missing_cookie_required_rejected_test() ->
 
 invalid_cookie_rejected_test() ->
     Stack = [{livery_auth_session, #{secret => ?SECRET}}],
-    Cap = livery_test_adapter:run(Stack, handler(),
-        #{headers => [{<<"cookie">>, <<"session=garbage.sig">>}]}),
+    Cap = livery_test_adapter:run(
+        Stack,
+        handler(),
+        #{headers => [{<<"cookie">>, <<"session=garbage.sig">>}]}
+    ),
     ?assertEqual(401, livery_test_adapter:status(Cap)).
 
 custom_meta_key_test() ->
@@ -125,8 +148,11 @@ custom_meta_key_test() ->
         livery_resp:text(200, integer_to_binary(Uid))
     end,
     Stack = [{livery_auth_session, #{secret => ?SECRET, meta_key => sess}}],
-    Cap = livery_test_adapter:run(Stack, H,
-        #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}),
+    Cap = livery_test_adapter:run(
+        Stack,
+        H,
+        #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}
+    ),
     ?assertEqual(<<"9">>, livery_test_adapter:body(Cap)).
 
 %%====================================================================
@@ -134,5 +160,8 @@ custom_meta_key_test() ->
 %%====================================================================
 
 req_with_cookie(Value) ->
-    livery_req:new(#{method => <<"GET">>, path => <<"/">>,
-                     headers => [{<<"cookie">>, Value}]}).
+    livery_req:new(#{
+        method => <<"GET">>,
+        path => <<"/">>,
+        headers => [{<<"cookie">>, Value}]
+    }).

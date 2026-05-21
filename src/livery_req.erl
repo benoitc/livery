@@ -69,23 +69,23 @@ new(Fields) when is_map(Fields) ->
     maps:fold(fun set_field/3, #livery_req{}, Fields).
 
 -spec set_field(atom(), term(), req()) -> req().
-set_field(protocol,    V, R) -> R#livery_req{protocol = V};
-set_field(method,      V, R) -> R#livery_req{method = V};
-set_field(scheme,      V, R) -> R#livery_req{scheme = V};
-set_field(authority,   V, R) -> R#livery_req{authority = V};
-set_field(path,        V, R) -> R#livery_req{path = V};
-set_field(raw_query,   V, R) -> R#livery_req{raw_query = V};
-set_field(bindings,    V, R) -> R#livery_req{bindings = V};
-set_field(headers,     V, R) -> R#livery_req{headers = normalize_headers(V)};
-set_field(peer,        V, R) -> R#livery_req{peer = V};
-set_field(tls,         V, R) -> R#livery_req{tls = V};
-set_field(body,        V, R) -> R#livery_req{body = V};
-set_field(adapter,     V, R) -> R#livery_req{adapter = V};
-set_field(stream,      V, R) -> R#livery_req{stream = V};
-set_field(engine_pid,  V, R) -> R#livery_req{engine_pid = V};
-set_field(req_id,      V, R) -> R#livery_req{req_id = V};
-set_field(started_at,  V, R) -> R#livery_req{started_at = V};
-set_field(meta,        V, R) -> R#livery_req{meta = V};
+set_field(protocol, V, R) -> R#livery_req{protocol = V};
+set_field(method, V, R) -> R#livery_req{method = V};
+set_field(scheme, V, R) -> R#livery_req{scheme = V};
+set_field(authority, V, R) -> R#livery_req{authority = V};
+set_field(path, V, R) -> R#livery_req{path = V};
+set_field(raw_query, V, R) -> R#livery_req{raw_query = V};
+set_field(bindings, V, R) -> R#livery_req{bindings = V};
+set_field(headers, V, R) -> R#livery_req{headers = normalize_headers(V)};
+set_field(peer, V, R) -> R#livery_req{peer = V};
+set_field(tls, V, R) -> R#livery_req{tls = V};
+set_field(body, V, R) -> R#livery_req{body = V};
+set_field(adapter, V, R) -> R#livery_req{adapter = V};
+set_field(stream, V, R) -> R#livery_req{stream = V};
+set_field(engine_pid, V, R) -> R#livery_req{engine_pid = V};
+set_field(req_id, V, R) -> R#livery_req{req_id = V};
+set_field(started_at, V, R) -> R#livery_req{started_at = V};
+set_field(meta, V, R) -> R#livery_req{meta = V};
 set_field(Key, _V, _R) -> error({badarg, Key}).
 
 %%====================================================================
@@ -162,7 +162,7 @@ header(Name, #livery_req{headers = Hs}, Default) ->
     LName = lowercase(Name),
     case lists:keyfind(LName, 1, Hs) of
         {_, V} -> V;
-        false  -> Default
+        false -> Default
     end.
 
 -doc """
@@ -279,7 +279,7 @@ lowercase(Bin) when is_binary(Bin) ->
     %% Fast path: ASCII-only header names. Fall back to string:lowercase
     %% for the rare cases where a header name carries non-ASCII bytes.
     case is_lower_ascii(Bin) of
-        true  -> Bin;
+        true -> Bin;
         false -> iolist_to_binary(string:lowercase(Bin))
     end.
 

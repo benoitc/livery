@@ -13,8 +13,11 @@ reader lands once the H1 adapter exposes incremental byte counts.
 -export([call/3]).
 
 -doc "Reject buffered bodies whose `iolist_size/1` exceeds `max`.".
--spec call(livery_req:req(), livery_middleware:next(),
-           #{max := non_neg_integer()}) -> livery_resp:resp().
+-spec call(
+    livery_req:req(),
+    livery_middleware:next(),
+    #{max := non_neg_integer()}
+) -> livery_resp:resp().
 call(Req, Next, #{max := Max}) when is_integer(Max), Max >= 0 ->
     case livery_req:body(Req) of
         {buffered, IoData} ->

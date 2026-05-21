@@ -43,8 +43,10 @@ handler_crash_emits_500_test() ->
         wait_for_exit(Pid, 1000),
         Cap = livery_test_adapter:capture(Stream),
         ?assertEqual(500, livery_test_adapter:status(Cap)),
-        ?assertEqual(<<"internal server error">>,
-                     livery_test_adapter:body(Cap))
+        ?assertEqual(
+            <<"internal server error">>,
+            livery_test_adapter:body(Cap)
+        )
     after
         livery_test_adapter:stop(Tab),
         process_flag(trap_exit, false)

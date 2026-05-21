@@ -89,11 +89,14 @@ new_stream(Tab, _Meta) ->
 Push a body chunk (or terminal marker) into the per-request
 process mailbox in the `livery_body` protocol.
 """.
--spec feed_body(reference(), pid(),
-                {data, iodata()}
-              | {trailers, [{binary(), binary()}]}
-              | eof
-              | {reset, term()}) -> ok.
+-spec feed_body(
+    reference(),
+    pid(),
+    {data, iodata()}
+    | {trailers, [{binary(), binary()}]}
+    | eof
+    | {reset, term()}
+) -> ok.
 feed_body(Ref, Pid, Event) ->
     Pid ! {livery_body, Ref, Event},
     ok.
@@ -102,7 +105,7 @@ feed_body(Ref, Pid, Event) ->
 capture({Tab, Ref}) ->
     case ets:lookup(Tab, Ref) of
         [{_, C}] -> C;
-        []       -> undefined
+        [] -> undefined
     end.
 
 -spec status(capture()) -> undefined | 100..599.
@@ -115,7 +118,7 @@ headers(#captured{headers = H}) -> H.
 header(Name, #captured{headers = H}) ->
     case lists:keyfind(Name, 1, H) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.
 
 -spec body(capture()) -> binary().
@@ -141,24 +144,32 @@ Drive a request through a middleware stack and handler.
 `Spec` is a map of `#livery_req{}` fields. Returns the captured
 response. Listener lifecycle is managed for the caller.
 """.
--spec run(livery_middleware:stack(), livery_middleware:handler(),
-          map()) -> capture().
+-spec run(
+    livery_middleware:stack(),
+    livery_middleware:handler(),
+    map()
+) -> capture().
 run(Stack, Handler, Spec) ->
     run(Stack, Handler, Spec, #{}).
 
--spec run(livery_middleware:stack(), livery_middleware:handler(),
-          map(), map()) -> capture().
+-spec run(
+    livery_middleware:stack(),
+    livery_middleware:handler(),
+    map(),
+    map()
+) -> capture().
 run(Stack, Handler, Spec, Opts) ->
     Tab = start(),
     try
         Stream = new_stream(Tab),
         Req = build_req(Spec, Stream, Opts),
-        Resp = try
-            livery:dispatch(Stack, Handler, Req)
-        catch
-            _Class:_Reason:_St ->
-                livery_resp:text(500, <<"internal server error">>)
-        end,
+        Resp =
+            try
+                livery:dispatch(Stack, Handler, Req)
+            catch
+                _Class:_Reason:_St ->
+                    livery_resp:text(500, <<"internal server error">>)
+            end,
         _ = livery:emit(?MODULE, Stream, Resp),
         capture(Stream)
     after
@@ -173,9 +184,12 @@ run(Stack, Handler, Spec, Opts) ->
 start(_Name, _Spec, _Opts) ->
     {ok, start()}.
 
--spec send_headers(stream(), 100..599,
-                   [{binary(), binary()}],
-                   livery_adapter:send_opts()) -> ok.
+-spec send_headers(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    livery_adapter:send_opts()
+) -> ok.
 send_headers({Tab, Ref}, Status, Headers, Opts) ->
     update(Tab, Ref, fun(C) ->
         C#captured{
@@ -210,10 +224,12 @@ peer_info(_Stream) ->
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_) ->
-    #{trailers => true,
-      extended_connect => true,
-      datagrams => false,
-      capsules => false}.
+    #{
+        trailers => true,
+        extended_connect => true,
+        datagrams => false,
+        capsules => false
+    }.
 
 %%====================================================================
 %% Internals

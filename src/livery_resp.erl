@@ -57,12 +57,12 @@ Response builders here are pure: they never touch sockets.
 -type header_value() :: binary().
 -type body() ::
     {full, iodata()}
-  | {chunked, fun((term()) -> ok)}
-  | {sse, fun((term()) -> ok)}
-  | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
-  | {upgrade, ws | wt, term()}
-  | empty
-  | taken_over.
+    | {chunked, fun((term()) -> ok)}
+    | {sse, fun((term()) -> ok)}
+    | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
+    | {upgrade, ws | wt, term()}
+    | empty
+    | taken_over.
 
 %%====================================================================
 %% Construction
@@ -95,9 +95,10 @@ headers(#livery_resp{headers = H}) -> H.
 -spec body(resp()) -> body().
 body(#livery_resp{body = B}) -> B.
 
--spec trailers(resp()) -> undefined
-                        | [{header_name(), header_value()}]
-                        | fun(() -> [{header_name(), header_value()}]).
+-spec trailers(resp()) ->
+    undefined
+    | [{header_name(), header_value()}]
+    | fun(() -> [{header_name(), header_value()}]).
 trailers(#livery_resp{trailers = T}) -> T.
 
 -spec with_status(100..599, resp()) -> resp().
@@ -127,10 +128,12 @@ Pass a list of `{Name, Value}` pairs computed up front, or a fun
 `fun() -> [{Name, Value}]` evaluated lazily after the body has
 been emitted.
 """.
--spec with_trailers(undefined
-                  | [{header_name(), header_value()}]
-                  | fun(() -> [{header_name(), header_value()}]),
-                    resp()) -> resp().
+-spec with_trailers(
+    undefined
+    | [{header_name(), header_value()}]
+    | fun(() -> [{header_name(), header_value()}]),
+    resp()
+) -> resp().
 with_trailers(Trailers, Resp) ->
     Resp#livery_resp{trailers = Trailers}.
 
@@ -145,10 +148,15 @@ text(Status, Body) -> text(Status, [], Body).
 -doc "`text/2` with extra headers.".
 -spec text(100..599, [{header_name(), header_value()}], iodata()) -> resp().
 text(Status, ExtraHeaders, Body) ->
-    new(Status,
-        with_default(<<"content-type">>, <<"text/plain; charset=utf-8">>,
-                     ExtraHeaders),
-        {full, Body}).
+    new(
+        Status,
+        with_default(
+            <<"content-type">>,
+            <<"text/plain; charset=utf-8">>,
+            ExtraHeaders
+        ),
+        {full, Body}
+    ).
 
 -doc "`text/html; charset=utf-8` response.".
 -spec html(100..599, iodata()) -> resp().
@@ -157,10 +165,15 @@ html(Status, Body) -> html(Status, [], Body).
 -doc "`html/2` with extra headers.".
 -spec html(100..599, [{header_name(), header_value()}], iodata()) -> resp().
 html(Status, ExtraHeaders, Body) ->
-    new(Status,
-        with_default(<<"content-type">>, <<"text/html; charset=utf-8">>,
-                     ExtraHeaders),
-        {full, Body}).
+    new(
+        Status,
+        with_default(
+            <<"content-type">>,
+            <<"text/html; charset=utf-8">>,
+            ExtraHeaders
+        ),
+        {full, Body}
+    ).
 
 -doc """
 Wrap pre-encoded JSON bytes as a response.
@@ -175,10 +188,15 @@ json(Status, Body) -> json(Status, [], Body).
 -doc "`json/2` with extra headers.".
 -spec json(100..599, [{header_name(), header_value()}], iodata()) -> resp().
 json(Status, ExtraHeaders, Body) ->
-    new(Status,
-        with_default(<<"content-type">>, <<"application/json">>,
-                     ExtraHeaders),
-        {full, Body}).
+    new(
+        Status,
+        with_default(
+            <<"content-type">>,
+            <<"application/json">>,
+            ExtraHeaders
+        ),
+        {full, Body}
+    ).
 
 -doc "Headers-only response.".
 -spec empty(100..599) -> resp().
@@ -191,8 +209,11 @@ Streaming chunked response.
 The producer is called with a `SendFun` and drives body chunks
 until it returns.
 """.
--spec stream(100..599, [{header_name(), header_value()}],
-             fun((term()) -> ok)) -> resp().
+-spec stream(
+    100..599,
+    [{header_name(), header_value()}],
+    fun((term()) -> ok)
+) -> resp().
 stream(Status, Headers, Producer) when is_function(Producer, 1) ->
     new(Status, Headers, {chunked, Producer}).
 
@@ -201,8 +222,11 @@ stream(Status, Headers, Producer) when is_function(Producer, 1) ->
 sse(Status, Producer) -> sse(Status, [], Producer).
 
 -doc "`sse/2` with extra headers.".
--spec sse(100..599, [{header_name(), header_value()}],
-          fun((term()) -> ok)) -> resp().
+-spec sse(
+    100..599,
+    [{header_name(), header_value()}],
+    fun((term()) -> ok)
+) -> resp().
 sse(Status, ExtraHeaders, Producer) when is_function(Producer, 1) ->
     Hs0 = with_default(<<"content-type">>, <<"text/event-stream">>, ExtraHeaders),
     Hs1 = with_default(<<"cache-control">>, <<"no-cache">>, Hs0),
@@ -229,11 +253,17 @@ For pre-encoded bytes, use `stream/3` directly.
 ndjson(Status, Producer) -> ndjson(Status, [], Producer).
 
 -doc "`ndjson/2` with extra headers.".
--spec ndjson(100..599, [{header_name(), header_value()}],
-             fun((term()) -> ok)) -> resp().
+-spec ndjson(
+    100..599,
+    [{header_name(), header_value()}],
+    fun((term()) -> ok)
+) -> resp().
 ndjson(Status, ExtraHeaders, Producer) when is_function(Producer, 1) ->
-    Hs = with_default(<<"content-type">>, <<"application/x-ndjson">>,
-                      ExtraHeaders),
+    Hs = with_default(
+        <<"content-type">>,
+        <<"application/x-ndjson">>,
+        ExtraHeaders
+    ),
     Wrapped = fun(Emit) ->
         Encode = fun(Term) ->
             Emit([json:encode(Term), <<"\n">>])
@@ -253,8 +283,11 @@ where `Length` may be `eof`.
 file(Status, Path) -> file(Status, Path, undefined).
 
 -doc "`file/2` with an explicit byte range.".
--spec file(100..599, file:name_all(),
-           undefined | {non_neg_integer(), non_neg_integer() | eof}) -> resp().
+-spec file(
+    100..599,
+    file:name_all(),
+    undefined | {non_neg_integer(), non_neg_integer() | eof}
+) -> resp().
 file(Status, Path, Range) ->
     new(Status, [], {file, Path, Range}).
 
@@ -263,12 +296,17 @@ file(Status, Path, Range) ->
 redirect(Status, Location) -> redirect(Status, Location, []).
 
 -doc "`redirect/2` with extra headers.".
--spec redirect(301 | 302 | 303 | 307 | 308, iodata(),
-               [{header_name(), header_value()}]) -> resp().
+-spec redirect(
+    301 | 302 | 303 | 307 | 308,
+    iodata(),
+    [{header_name(), header_value()}]
+) -> resp().
 redirect(Status, Location, ExtraHeaders) ->
-    new(Status,
+    new(
+        Status,
         [{<<"location">>, iolist_to_binary(Location)} | ExtraHeaders],
-        empty).
+        empty
+    ).
 
 -doc "Protocol upgrade response (WebSocket / WebTransport).".
 -spec upgrade(ws | wt, term()) -> resp().
@@ -283,15 +321,18 @@ upgrade(Kind, State) when Kind =:= ws; Kind =:= wt ->
 %% Helpers
 %%====================================================================
 
--spec with_default(header_name(), header_value(),
-                   [{header_name(), header_value()}]) ->
+-spec with_default(
+    header_name(),
+    header_value(),
+    [{header_name(), header_value()}]
+) ->
     [{header_name(), header_value()}].
 with_default(Name, Default, Headers) ->
     LName = lowercase(Name),
     Normalized = normalize_headers(Headers),
     case lists:keyfind(LName, 1, Normalized) of
         {_, _} -> Normalized;
-        false  -> [{LName, Default} | Normalized]
+        false -> [{LName, Default} | Normalized]
     end.
 
 -spec normalize_headers([{header_name(), header_value()}]) ->
@@ -302,7 +343,7 @@ normalize_headers(Hs) ->
 -spec lowercase(binary()) -> binary().
 lowercase(Bin) when is_binary(Bin) ->
     case is_lower_ascii(Bin) of
-        true  -> Bin;
+        true -> Bin;
         false -> iolist_to_binary(string:lowercase(Bin))
     end.
 

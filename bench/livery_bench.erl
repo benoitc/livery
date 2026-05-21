@@ -43,7 +43,8 @@ run(Opts) ->
     {ok, Listener} = start_listener(Protocol, Opts),
     try
         Port = listener_port(Protocol, Listener),
-        _ = drive(Protocol, Port, Conns, Warmup),   %% warmup, discarded
+        %% warmup, discarded
+        _ = drive(Protocol, Port, Conns, Warmup),
         {Lats, Count, Reconns} = drive(Protocol, Port, Conns, Duration),
         Metrics = metrics(Protocol, Lats, Count, Reconns, Duration, Conns),
         report(Metrics),
@@ -66,9 +67,14 @@ compare(Baseline, Current) ->
     C = maps:get(p99_us, Current),
     Threshold = B * 1.10,
     case C =< Threshold of
-        true  -> {ok, #{baseline_p99_us => B, current_p99_us => C}};
-        false -> {regressed, #{baseline_p99_us => B, current_p99_us => C,
-                               threshold_us => round(Threshold)}}
+        true ->
+            {ok, #{baseline_p99_us => B, current_p99_us => C}};
+        false ->
+            {regressed, #{
+                baseline_p99_us => B,
+                current_p99_us => C,
+                threshold_us => round(Threshold)
+            }}
     end.
 
 %% @doc Print a metrics map.
@@ -83,12 +89,19 @@ report(M) ->
         "latency p90 : ~.3f ms~n"
         "latency p99 : ~.3f ms~n"
         "latency max : ~.3f ms~n~n",
-        [maps:get(protocol, M),
-         maps:get(connections, M), maps:get(duration_ms, M),
-         maps:get(requests, M), maps:get(reconnects, M),
-         maps:get(throughput_rps, M),
-         maps:get(p50_us, M) / 1000, maps:get(p90_us, M) / 1000,
-         maps:get(p99_us, M) / 1000, maps:get(max_us, M) / 1000]).
+        [
+            maps:get(protocol, M),
+            maps:get(connections, M),
+            maps:get(duration_ms, M),
+            maps:get(requests, M),
+            maps:get(reconnects, M),
+            maps:get(throughput_rps, M),
+            maps:get(p50_us, M) / 1000,
+            maps:get(p90_us, M) / 1000,
+            maps:get(p99_us, M) / 1000,
+            maps:get(max_us, M) / 1000
+        ]
+    ).
 
 %%====================================================================
 %% Listener lifecycle per protocol
@@ -102,20 +115,35 @@ ref_handler() ->
     fun(_Req) -> livery_resp:json(200, <<"{\"ok\":true}">>) end.
 
 start_listener(h1, Opts) ->
-    livery_h1:start(#{port => maps:get(port, Opts, 0),
-                      stack => [], handler => ref_handler()});
+    livery_h1:start(#{
+        port => maps:get(port, Opts, 0),
+        stack => [],
+        handler => ref_handler()
+    });
 start_listener(h2, Opts) ->
-    livery_h2:start(#{port => maps:get(port, Opts, 0), transport => tcp,
-                      stack => [], handler => ref_handler()});
+    livery_h2:start(#{
+        port => maps:get(port, Opts, 0),
+        transport => tcp,
+        stack => [],
+        handler => ref_handler()
+    });
 start_listener(h3, Opts) ->
     {Cert, Key} = load_certs(),
-    livery_h3:start(#{port => maps:get(port, Opts, 0),
-                      cert => Cert, key => Key,
-                      stack => [], handler => ref_handler()}).
+    livery_h3:start(#{
+        port => maps:get(port, Opts, 0),
+        cert => Cert,
+        key => Key,
+        stack => [],
+        handler => ref_handler()
+    }).
 
-listener_port(h1, L) -> h1:server_port(L);
-listener_port(h2, L) -> h2:server_port(L);
-listener_port(h3, L) -> {ok, P} = quic:get_server_port(L), P.
+listener_port(h1, L) ->
+    h1:server_port(L);
+listener_port(h2, L) ->
+    h2:server_port(L);
+listener_port(h3, L) ->
+    {ok, P} = quic:get_server_port(L),
+    P.
 
 stop_listener(h1, L) -> livery_h1:stop(L);
 stop_listener(h2, L) -> livery_h2:stop(L);
@@ -138,8 +166,10 @@ load_certs() ->
 drive(Protocol, Port, Conns, Duration) ->
     Parent = self(),
     Deadline = erlang:monotonic_time(millisecond) + Duration,
-    Pids = [spawn_link(fun() -> worker(Parent, Protocol, Port, Deadline) end)
-            || _ <- lists:seq(1, Conns)],
+    Pids = [
+        spawn_link(fun() -> worker(Parent, Protocol, Port, Deadline) end)
+     || _ <- lists:seq(1, Conns)
+    ],
     collect(Pids, [], 0, 0).
 
 collect([], Lats, Count, Reconns) ->
@@ -147,20 +177,27 @@ collect([], Lats, Count, Reconns) ->
 collect([Pid | Rest], Lats, Count, Reconns) ->
     receive
         {done, Pid, Acc} ->
-            collect(Rest, maps:get(lats, Acc) ++ Lats,
-                    Count + maps:get(count, Acc),
-                    Reconns + maps:get(reconns, Acc))
+            collect(
+                Rest,
+                maps:get(lats, Acc) ++ Lats,
+                Count + maps:get(count, Acc),
+                Reconns + maps:get(reconns, Acc)
+            )
     end.
 
 worker(Parent, Protocol, Port, Deadline) ->
     case connect(Protocol, Port) of
         {ok, Handle} ->
-            Acc = loop(Protocol, Port, Handle, Deadline,
-                       #{lats => [], count => 0, reconns => 0}),
+            Acc = loop(
+                Protocol,
+                Port,
+                Handle,
+                Deadline,
+                #{lats => [], count => 0, reconns => 0}
+            ),
             Parent ! {done, self(), Acc};
         {error, _} ->
-            Parent ! {done, self(),
-                      #{lats => [], count => 0, reconns => 1}}
+            Parent ! {done, self(), #{lats => [], count => 0, reconns => 1}}
     end.
 
 %% On a request error (e.g. an HTTP/2 connection hitting its
@@ -178,7 +215,8 @@ loop(Protocol, Port, Handle, Deadline, Acc) ->
                     Lat = erlang:monotonic_time(microsecond) - Start,
                     loop(Protocol, Port, Handle, Deadline, Acc#{
                         lats := [Lat | maps:get(lats, Acc)],
-                        count := maps:get(count, Acc) + 1});
+                        count := maps:get(count, Acc) + 1
+                    });
                 {error, _} ->
                     close(Protocol, Handle),
                     Acc1 = Acc#{reconns := maps:get(reconns, Acc) + 1},
@@ -196,16 +234,22 @@ loop(Protocol, Port, Handle, Deadline, Acc) ->
 %%====================================================================
 
 connect(h1, Port) ->
-    gen_tcp:connect("127.0.0.1", Port,
-                    [binary, {active, false}, {packet, raw}, {nodelay, true}],
-                    5000);
+    gen_tcp:connect(
+        "127.0.0.1",
+        Port,
+        [binary, {active, false}, {packet, raw}, {nodelay, true}],
+        5000
+    );
 connect(h2, Port) ->
     case h2:connect("127.0.0.1", Port, #{transport => tcp}) of
         {ok, Conn} ->
             %% h2:connect returns before the preface/SETTINGS exchange
             %% finishes; wait for the readiness signal so the first
             %% request is not raced under concurrent connects.
-            receive {h2, Conn, connected} -> ok after 5000 -> ok end,
+            receive
+                {h2, Conn, connected} -> ok
+            after 5000 -> ok
+            end,
             {ok, Conn};
         Error ->
             Error
@@ -213,47 +257,55 @@ connect(h2, Port) ->
 connect(h3, Port) ->
     quic_h3:connect(<<"localhost">>, Port, #{verify => verify_none, sync => true}).
 
-close(h1, Sock) -> gen_tcp:close(Sock);
-close(h2, Conn) -> h2:close(Conn);
-close(h3, Conn) -> catch quic_h3:close(Conn), ok.
+close(h1, Sock) ->
+    gen_tcp:close(Sock);
+close(h2, Conn) ->
+    h2:close(Conn);
+close(h3, Conn) ->
+    catch quic_h3:close(Conn),
+    ok.
 
 do_request(h1, Sock) ->
     case gen_tcp:send(Sock, ?RAW_REQUEST) of
-        ok    -> read_response(Sock, <<>>);
+        ok -> read_response(Sock, <<>>);
         Error -> Error
     end;
 do_request(h2, Conn) ->
     case h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"bench">>}]) of
         {ok, StreamId} -> await_h2(Conn, StreamId);
-        Error          -> Error
+        Error -> Error
     end;
 do_request(h3, Conn) ->
-    Headers = [{<<":method">>, <<"GET">>}, {<<":path">>, <<"/">>},
-               {<<":scheme">>, <<"https">>}, {<<":authority">>, <<"localhost">>}],
+    Headers = [
+        {<<":method">>, <<"GET">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"https">>},
+        {<<":authority">>, <<"localhost">>}
+    ],
     case quic_h3:request(Conn, Headers, #{end_stream => true}) of
         {ok, StreamId} -> await_h3(Conn, StreamId);
-        Error          -> Error
+        Error -> Error
     end.
 
 await_h2(Conn, StreamId) ->
     receive
-        {h2, Conn, {data, StreamId, _, true}}   -> ok;
-        {h2, Conn, {trailers, StreamId, _}}     -> ok;
-        {h2, Conn, {data, StreamId, _, false}}  -> await_h2(Conn, StreamId);
-        {h2, Conn, {response, StreamId, _, _}}  -> await_h2(Conn, StreamId);
-        {h2, Conn, _Other}                      -> await_h2(Conn, StreamId)
+        {h2, Conn, {data, StreamId, _, true}} -> ok;
+        {h2, Conn, {trailers, StreamId, _}} -> ok;
+        {h2, Conn, {data, StreamId, _, false}} -> await_h2(Conn, StreamId);
+        {h2, Conn, {response, StreamId, _, _}} -> await_h2(Conn, StreamId);
+        {h2, Conn, _Other} -> await_h2(Conn, StreamId)
     after 5000 ->
         {error, timeout}
     end.
 
 await_h3(Conn, StreamId) ->
     receive
-        {quic_h3, Conn, {data, StreamId, _, true}}  -> ok;
-        {quic_h3, Conn, {stream_end, StreamId}}     -> ok;
-        {quic_h3, Conn, {trailers, StreamId, _}}    -> ok;
+        {quic_h3, Conn, {data, StreamId, _, true}} -> ok;
+        {quic_h3, Conn, {stream_end, StreamId}} -> ok;
+        {quic_h3, Conn, {trailers, StreamId, _}} -> ok;
         {quic_h3, Conn, {data, StreamId, _, false}} -> await_h3(Conn, StreamId);
         {quic_h3, Conn, {response, StreamId, _, _}} -> await_h3(Conn, StreamId);
-        {quic_h3, Conn, _Other}                     -> await_h3(Conn, StreamId)
+        {quic_h3, Conn, _Other} -> await_h3(Conn, StreamId)
     after 5000 ->
         {error, timeout}
     end.
@@ -265,7 +317,7 @@ read_response(Sock, Buf) ->
             read_body(Sock, Rest, content_length(Headers));
         [_] ->
             case gen_tcp:recv(Sock, 0, 5000) of
-                {ok, Data}     -> read_response(Sock, <<Buf/binary, Data/binary>>);
+                {ok, Data} -> read_response(Sock, <<Buf/binary, Data/binary>>);
                 {error, _} = E -> E
             end
     end.
@@ -274,7 +326,7 @@ read_body(_Sock, Body, Len) when byte_size(Body) >= Len ->
     ok;
 read_body(Sock, Body, Len) ->
     case gen_tcp:recv(Sock, 0, 5000) of
-        {ok, Data}     -> read_body(Sock, <<Body/binary, Data/binary>>, Len);
+        {ok, Data} -> read_body(Sock, <<Body/binary, Data/binary>>, Len);
         {error, _} = E -> E
     end.
 
@@ -284,8 +336,11 @@ content_length(Headers) ->
         nomatch ->
             0;
         {Start, MLen} ->
-            Tail = binary:part(Lower, Start + MLen,
-                               byte_size(Lower) - Start - MLen),
+            Tail = binary:part(
+                Lower,
+                Start + MLen,
+                byte_size(Lower) - Start - MLen
+            ),
             [Val | _] = binary:split(Tail, <<"\r\n">>),
             binary_to_integer(string:trim(Val))
     end.
@@ -297,16 +352,20 @@ content_length(Headers) ->
 metrics(Protocol, Lats, Count, Reconns, Duration, Conns) ->
     Sorted = lists:sort(Lats),
     #{
-        protocol       => Protocol,
-        connections    => Conns,
-        duration_ms    => Duration,
-        requests       => Count,
-        reconnects     => Reconns,
+        protocol => Protocol,
+        connections => Conns,
+        duration_ms => Duration,
+        requests => Count,
+        reconnects => Reconns,
         throughput_rps => Count * 1000 / Duration,
-        p50_us         => percentile(Sorted, 50),
-        p90_us         => percentile(Sorted, 90),
-        p99_us         => percentile(Sorted, 99),
-        max_us         => case Sorted of [] -> 0; _ -> lists:last(Sorted) end
+        p50_us => percentile(Sorted, 50),
+        p90_us => percentile(Sorted, 90),
+        p99_us => percentile(Sorted, 99),
+        max_us =>
+            case Sorted of
+                [] -> 0;
+                _ -> lists:last(Sorted)
+            end
     }.
 
 percentile([], _P) ->

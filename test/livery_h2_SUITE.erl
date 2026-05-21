@@ -32,14 +32,16 @@
 %%====================================================================
 
 all() ->
-    [text_response,
-     json_response,
-     empty_response,
-     streaming_chunked_response,
-     sse_response,
-     echo_buffered_body,
-     error_500_on_crash,
-     response_with_trailers].
+    [
+        text_response,
+        json_response,
+        empty_response,
+        streaming_chunked_response,
+        sse_response,
+        echo_buffered_body,
+        error_500_on_crash,
+        response_with_trailers
+    ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -53,10 +55,10 @@ end_per_suite(_Config) ->
 
 init_per_testcase(TC, Config) ->
     {ok, Listener} = livery_h2:start(#{
-        port      => 0,
+        port => 0,
         transport => tcp,
-        stack     => stack_for(TC),
-        handler   => handler_for(TC)
+        stack => stack_for(TC),
+        handler => handler_for(TC)
     }),
     Port = h2:server_port(Listener),
     [{listener, Listener}, {port, Port} | Config].
@@ -74,15 +76,19 @@ text_response(Config) ->
     {Status, Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"hello">>, Body),
-    ?assertEqual(<<"text/plain; charset=utf-8">>,
-                 header(<<"content-type">>, Headers)).
+    ?assertEqual(
+        <<"text/plain; charset=utf-8">>,
+        header(<<"content-type">>, Headers)
+    ).
 
 json_response(Config) ->
     {Status, Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"{\"ok\":true}">>, Body),
-    ?assertEqual(<<"application/json">>,
-                 header(<<"content-type">>, Headers)).
+    ?assertEqual(
+        <<"application/json">>,
+        header(<<"content-type">>, Headers)
+    ).
 
 empty_response(Config) ->
     {Status, _Headers, Body, _} = get(Config, <<"/">>),
@@ -95,8 +101,10 @@ streaming_chunked_response(Config) ->
 
 sse_response(Config) ->
     {200, Headers, Body, _} = get(Config, <<"/">>),
-    ?assertEqual(<<"text/event-stream">>,
-                 header(<<"content-type">>, Headers)),
+    ?assertEqual(
+        <<"text/event-stream">>,
+        header(<<"content-type">>, Headers)
+    ),
     ?assertEqual(<<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>, Body).
 
 echo_buffered_body(Config) ->
@@ -168,13 +176,19 @@ request(Method, Config, Path, Body) ->
     Port = ?config(port, Config),
     {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
     Headers = base_headers(Method, Path),
-    {ok, StreamId} = case byte_size(Body) of
-        0 -> h2:request(Conn, Method, Path, Headers);
-        _ -> h2:request(Conn, Method, Path,
-                        Headers ++ [{<<"content-length">>,
-                                     integer_to_binary(byte_size(Body))}],
-                        Body)
-    end,
+    {ok, StreamId} =
+        case byte_size(Body) of
+            0 ->
+                h2:request(Conn, Method, Path, Headers);
+            _ ->
+                h2:request(
+                    Conn,
+                    Method,
+                    Path,
+                    Headers ++ [{<<"content-length">>, integer_to_binary(byte_size(Body))}],
+                    Body
+                )
+        end,
     Result = collect_response(Conn, StreamId, undefined, [], [], undefined),
     h2:close(Conn),
     Result.
@@ -189,15 +203,18 @@ collect_response(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->
         {h2, Conn, {response, StreamId, S, Hs}} ->
             collect_response(Conn, StreamId, S, Hs, BodyAcc, Trailers);
         {h2, Conn, {data, StreamId, Chunk, false}} ->
-            collect_response(Conn, StreamId, Status, Headers,
-                             [Chunk | BodyAcc], Trailers);
+            collect_response(
+                Conn,
+                StreamId,
+                Status,
+                Headers,
+                [Chunk | BodyAcc],
+                Trailers
+            );
         {h2, Conn, {data, StreamId, Chunk, true}} ->
-            {Status, Headers,
-             iolist_to_binary(lists:reverse([Chunk | BodyAcc])),
-             Trailers};
+            {Status, Headers, iolist_to_binary(lists:reverse([Chunk | BodyAcc])), Trailers};
         {h2, Conn, {trailers, StreamId, T}} ->
-            {Status, Headers,
-             iolist_to_binary(lists:reverse(BodyAcc)), T};
+            {Status, Headers, iolist_to_binary(lists:reverse(BodyAcc)), T};
         {h2, Conn, {stream_reset, StreamId, R}} ->
             {error, R};
         {h2, Conn, _Other} ->
@@ -210,7 +227,7 @@ header(Name, Headers) ->
     LName = string:lowercase(Name),
     case lists:keyfind(LName, 1, normalize(Headers)) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.
 
 normalize(Hs) ->

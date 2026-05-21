@@ -10,15 +10,19 @@
 
 json_buffered_object_test() ->
     Req = with_body(<<"{\"a\":1,\"b\":\"x\"}">>),
-    ?assertEqual({ok, #{<<"a">> => 1, <<"b">> => <<"x">>}},
-                 livery_ext:json(Req)).
+    ?assertEqual(
+        {ok, #{<<"a">> => 1, <<"b">> => <<"x">>}},
+        livery_ext:json(Req)
+    ).
 
 json_empty_body_test() ->
     ?assertEqual({error, no_body}, livery_ext:json(req())).
 
 json_invalid_test() ->
-    ?assertEqual({error, invalid_json},
-                 livery_ext:json(with_body(<<"not json">>))).
+    ?assertEqual(
+        {error, invalid_json},
+        livery_ext:json(with_body(<<"not json">>))
+    ).
 
 json_stream_body_not_buffered_test() ->
     Req = livery_req:set_body({stream, fake_reader}, req()),
@@ -30,15 +34,21 @@ json_stream_body_not_buffered_test() ->
 
 form_basic_test() ->
     Req = with_body(<<"a=1&b=two&c=">>),
-    ?assertEqual({ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"two">>}, {<<"c">>, <<>>}]},
-                 livery_ext:form(Req)).
+    ?assertEqual(
+        {ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"two">>}, {<<"c">>, <<>>}]},
+        livery_ext:form(Req)
+    ).
 
 form_url_decoding_test() ->
     Req = with_body(<<"name=hello%20world&plus=a+b&pct=100%25">>),
-    ?assertEqual({ok, [{<<"name">>, <<"hello world">>},
-                       {<<"plus">>, <<"a b">>},
-                       {<<"pct">>, <<"100%">>}]},
-                 livery_ext:form(Req)).
+    ?assertEqual(
+        {ok, [
+            {<<"name">>, <<"hello world">>},
+            {<<"plus">>, <<"a b">>},
+            {<<"pct">>, <<"100%">>}
+        ]},
+        livery_ext:form(Req)
+    ).
 
 form_empty_body_test() ->
     ?assertEqual({error, no_body}, livery_ext:form(req())).
@@ -75,7 +85,9 @@ query_empty_test() ->
 
 header_case_insensitive_test() ->
     Req = livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         headers => [{<<"X-Custom">>, <<"v">>}]
     }),
     ?assertEqual(<<"v">>, livery_ext:header(<<"x-custom">>, Req)),
@@ -91,35 +103,45 @@ bearer_token_present_test() ->
     ?assertEqual(<<"abc.def.ghi">>, livery_ext:bearer_token(Req)).
 
 bearer_token_lowercase_scheme_test() ->
-    ?assertEqual(<<"tok">>,
-                 livery_ext:bearer_token(req_with_auth(<<"bearer tok">>))),
-    ?assertEqual(<<"tok">>,
-                 livery_ext:bearer_token(req_with_auth(<<"BEARER tok">>))).
+    ?assertEqual(
+        <<"tok">>,
+        livery_ext:bearer_token(req_with_auth(<<"bearer tok">>))
+    ),
+    ?assertEqual(
+        <<"tok">>,
+        livery_ext:bearer_token(req_with_auth(<<"BEARER tok">>))
+    ).
 
 bearer_token_missing_test() ->
     ?assertEqual(undefined, livery_ext:bearer_token(req())).
 
 bearer_token_wrong_scheme_test() ->
-    ?assertEqual(undefined,
-                 livery_ext:bearer_token(req_with_auth(<<"Basic dXNlcjpwYXNz">>))).
+    ?assertEqual(
+        undefined,
+        livery_ext:bearer_token(req_with_auth(<<"Basic dXNlcjpwYXNz">>))
+    ).
 
 %%====================================================================
 %% JSON edge cases
 %%====================================================================
 
 json_array_test() ->
-    ?assertEqual({ok, [1, 2, 3]},
-                 livery_ext:json(with_body(<<"[1,2,3]">>))).
+    ?assertEqual(
+        {ok, [1, 2, 3]},
+        livery_ext:json(with_body(<<"[1,2,3]">>))
+    ).
 
 json_primitive_string_test() ->
-    ?assertEqual({ok, <<"plain">>},
-                 livery_ext:json(with_body(<<"\"plain\"">>))).
+    ?assertEqual(
+        {ok, <<"plain">>},
+        livery_ext:json(with_body(<<"\"plain\"">>))
+    ).
 
 json_primitive_null_test() ->
     ?assertEqual({ok, null}, livery_ext:json(with_body(<<"null">>))).
 
 json_bool_test() ->
-    ?assertEqual({ok, true},  livery_ext:json(with_body(<<"true">>))),
+    ?assertEqual({ok, true}, livery_ext:json(with_body(<<"true">>))),
     ?assertEqual({ok, false}, livery_ext:json(with_body(<<"false">>))).
 
 %%====================================================================
@@ -128,8 +150,10 @@ json_bool_test() ->
 
 form_strips_empty_pairs_test() ->
     Req = with_body(<<"a=1&&b=2&">>),
-    ?assertEqual({ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"2">>}]},
-                 livery_ext:form(Req)).
+    ?assertEqual(
+        {ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"2">>}]},
+        livery_ext:form(Req)
+    ).
 
 form_key_without_value_test() ->
     Req = with_body(<<"flag">>),
@@ -152,12 +176,16 @@ with_body(Bin) ->
 
 req_with_query(RawQuery) ->
     livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         raw_query => RawQuery
     }).
 
 req_with_auth(Value) ->
     livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         headers => [{<<"authorization">>, Value}]
     }).

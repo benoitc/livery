@@ -80,8 +80,12 @@ here.
 
 -callback stop(listener()) -> ok.
 
--callback send_headers(stream(), 100..599,
-                       [{binary(), binary()}], send_opts()) ->
+-callback send_headers(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    send_opts()
+) ->
     send_result().
 
 -callback send_data(stream(), iodata(), send_opts()) -> send_result().

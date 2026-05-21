@@ -10,8 +10,10 @@ new_normalizes_header_names_test() ->
         path => <<"/a">>,
         headers => [{<<"Host">>, <<"x">>}, {<<"Accept-Encoding">>, <<"gzip">>}]
     }),
-    ?assertEqual([{<<"host">>, <<"x">>}, {<<"accept-encoding">>, <<"gzip">>}],
-                 livery_req:headers(Req)).
+    ?assertEqual(
+        [{<<"host">>, <<"x">>}, {<<"accept-encoding">>, <<"gzip">>}],
+        livery_req:headers(Req)
+    ).
 
 header_lookup_is_case_insensitive_test() ->
     Req = livery_req:new(#{
@@ -37,12 +39,16 @@ headers_all_returns_wire_order_test() ->
             {<<"host">>, <<"x">>}
         ]
     }),
-    ?assertEqual([<<"a=1">>, <<"b=2">>],
-                 livery_req:headers_all(<<"set-cookie">>, Req)).
+    ?assertEqual(
+        [<<"a=1">>, <<"b=2">>],
+        livery_req:headers_all(<<"set-cookie">>, Req)
+    ).
 
 set_header_replaces_all_test() ->
     Req0 = livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         headers => [{<<"x-a">>, <<"1">>}, {<<"x-a">>, <<"2">>}]
     }),
     Req1 = livery_req:set_header(<<"X-A">>, <<"9">>, Req0),
@@ -50,7 +56,9 @@ set_header_replaces_all_test() ->
 
 append_header_keeps_order_test() ->
     Req0 = livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         headers => [{<<"x-a">>, <<"1">>}]
     }),
     Req1 = livery_req:append_header(<<"X-A">>, <<"2">>, Req0),
@@ -58,7 +66,9 @@ append_header_keeps_order_test() ->
 
 delete_header_removes_every_occurrence_test() ->
     Req0 = livery_req:new(#{
-        protocol => h1, method => <<"GET">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"GET">>,
+        path => <<"/">>,
         headers => [{<<"x-a">>, <<"1">>}, {<<"x-a">>, <<"2">>}, {<<"x-b">>, <<"3">>}]
     }),
     Req1 = livery_req:delete_header(<<"X-A">>, Req0),
@@ -85,7 +95,9 @@ meta_is_namespaced_by_module_test() ->
 
 body_is_opaque_to_req_test() ->
     Req0 = livery_req:new(#{
-        protocol => h1, method => <<"POST">>, path => <<"/">>,
+        protocol => h1,
+        method => <<"POST">>,
+        path => <<"/">>,
         body => {buffered, <<"hi">>}
     }),
     ?assertEqual({buffered, <<"hi">>}, livery_req:body(Req0)),

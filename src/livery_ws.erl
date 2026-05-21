@@ -60,26 +60,36 @@ upgrade(Req, HandlerMod, Opts) ->
                 {ok, _SessionPid} ->
                     #livery_resp{status = 101, body = taken_over};
                 {error, {bad_request, Why}} ->
-                    livery_resp:text(400,
-                        iolist_to_binary([<<"bad ws upgrade: ">>,
-                                          format_reason(Why)]));
+                    livery_resp:text(
+                        400,
+                        iolist_to_binary([
+                            <<"bad ws upgrade: ">>,
+                            format_reason(Why)
+                        ])
+                    );
                 {error, Reason} ->
-                    livery_resp:text(500,
-                        iolist_to_binary([<<"ws upgrade failed: ">>,
-                                          format_reason(Reason)]))
+                    livery_resp:text(
+                        500,
+                        iolist_to_binary([
+                            <<"ws upgrade failed: ">>,
+                            format_reason(Reason)
+                        ])
+                    )
             end;
         false ->
-            livery_resp:text(501,
-                <<"WebSocket upgrade not supported on this protocol">>)
+            livery_resp:text(
+                501,
+                <<"WebSocket upgrade not supported on this protocol">>
+            )
     end.
 
 -spec adapter_supports_ws(module()) -> boolean().
 adapter_supports_ws(livery_h1) -> true;
 adapter_supports_ws(livery_h2) -> true;
 adapter_supports_ws(livery_h3) -> true;
-adapter_supports_ws(_)         -> false.
+adapter_supports_ws(_) -> false.
 
 -spec format_reason(term()) -> iodata().
 format_reason(B) when is_binary(B) -> B;
-format_reason(A) when is_atom(A)   -> atom_to_binary(A);
-format_reason(Other)               -> io_lib:format("~p", [Other]).
+format_reason(A) when is_atom(A) -> atom_to_binary(A);
+format_reason(Other) -> io_lib:format("~p", [Other]).

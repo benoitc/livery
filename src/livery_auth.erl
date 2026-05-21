@@ -37,23 +37,23 @@ and for EC P-256:
 -type claims() :: #{binary() => term()}.
 
 -type verify_opts() :: #{
-    keys     := [jwk()],
-    issuer   => binary() | undefined,
+    keys := [jwk()],
+    issuer => binary() | undefined,
     audience => binary() | [binary()] | undefined,
-    now      => non_neg_integer(),
-    leeway   => non_neg_integer()
+    now => non_neg_integer(),
+    leeway => non_neg_integer()
 }.
 
 -type error_reason() ::
     malformed
-  | invalid_json
-  | {unsupported_alg, binary()}
-  | no_matching_key
-  | bad_signature
-  | expired
-  | not_yet_valid
-  | {issuer_mismatch, binary()}
-  | audience_mismatch.
+    | invalid_json
+    | {unsupported_alg, binary()}
+    | no_matching_key
+    | bad_signature
+    | expired
+    | not_yet_valid
+    | {issuer_mismatch, binary()}
+    | audience_mismatch.
 
 %%====================================================================
 %% Public API
@@ -91,8 +91,7 @@ split(Token) ->
     end.
 
 with_decoded(HeaderB64, PayloadB64, SigB64, SigningInput, Opts) ->
-    case {decode_json(HeaderB64), decode_json(PayloadB64),
-          b64url(SigB64)} of
+    case {decode_json(HeaderB64), decode_json(PayloadB64), b64url(SigB64)} of
         {{ok, Header}, {ok, Claims}, {ok, Sig}} ->
             verify_decoded(Header, Claims, Sig, SigningInput, Opts);
         _ ->
@@ -105,7 +104,7 @@ verify_decoded(Header, Claims, Sig, SigningInput, Opts) ->
     case find_key(Alg, Kid, maps:get(keys, Opts, [])) of
         {ok, Jwk} ->
             case verify_signature(Alg, SigningInput, Sig, Jwk) of
-                true  -> validate_claims(Claims, Opts);
+                true -> validate_claims(Claims, Opts);
                 false -> {error, bad_signature}
             end;
         {error, unsupported} ->
@@ -124,13 +123,13 @@ find_key(_Alg, Kid, Keys) ->
     Matching = [K || K <- Keys, key_matches(K, Kid)],
     case Matching of
         [K | _] -> {ok, K};
-        []      -> {error, not_found}
+        [] -> {error, not_found}
     end.
 
 %% When the token carries a kid, require it to match; otherwise fall
 %% back to any key (single-key deployments routinely omit kid).
 key_matches(_Jwk, undefined) -> true;
-key_matches(Jwk, Kid)        -> maps:get(<<"kid">>, Jwk, undefined) =:= Kid.
+key_matches(Jwk, Kid) -> maps:get(<<"kid">>, Jwk, undefined) =:= Kid.
 
 %%====================================================================
 %% Signature verification
@@ -190,8 +189,11 @@ ec_public_key(_) ->
 raw_to_der_sig(<<R:32/binary, S:32/binary>>) ->
     RInt = binary:decode_unsigned(R),
     SInt = binary:decode_unsigned(S),
-    {ok, public_key:der_encode('ECDSA-Sig-Value',
-                               #'ECDSA-Sig-Value'{r = RInt, s = SInt})};
+    {ok,
+        public_key:der_encode(
+            'ECDSA-Sig-Value',
+            #'ECDSA-Sig-Value'{r = RInt, s = SInt}
+        )};
 raw_to_der_sig(_) ->
     error.
 
@@ -214,7 +216,7 @@ run_checks([], Claims) ->
     {ok, Claims};
 run_checks([Check | Rest], Claims) ->
     case Check() of
-        ok            -> run_checks(Rest, Claims);
+        ok -> run_checks(Rest, Claims);
         {error, _} = E -> E
     end.
 
@@ -237,7 +239,7 @@ check_iss(_Claims, undefined) ->
 check_iss(Claims, Expected) ->
     case maps:get(<<"iss">>, Claims, undefined) of
         Expected -> ok;
-        _        -> {error, {issuer_mismatch, Expected}}
+        _ -> {error, {issuer_mismatch, Expected}}
     end.
 
 check_aud(_Claims, undefined) ->
@@ -245,7 +247,7 @@ check_aud(_Claims, undefined) ->
 check_aud(Claims, Expected) ->
     Aud = maps:get(<<"aud">>, Claims, undefined),
     case audience_ok(Aud, Expected) of
-        true  -> ok;
+        true -> ok;
         false -> {error, audience_mismatch}
     end.
 

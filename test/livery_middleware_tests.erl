@@ -6,9 +6,11 @@
 
 handler_only_test() ->
     Req = req(),
-    Resp = livery_middleware:run([],
+    Resp = livery_middleware:run(
+        [],
         fun(_R) -> livery_resp:text(200, <<"ok">>) end,
-        Req),
+        Req
+    ),
     ?assertEqual(200, livery_resp:status(Resp)).
 
 mfa_handler_test() ->
@@ -28,7 +30,7 @@ before_transforms_request_test() ->
     Handler = fun(R) ->
         case livery_req:meta(marker, R) of
             yes -> livery_resp:text(200, <<"tagged">>);
-            _   -> livery_resp:text(500, <<"missing">>)
+            _ -> livery_resp:text(500, <<"missing">>)
         end
     end,
     Resp = livery_middleware:run(Stack, Handler, req()),
@@ -70,9 +72,11 @@ short_circuit_test() ->
         fun(_Req, _Next) -> livery_resp:text(401, <<"nope">>) end,
         fun(_, _) -> error(must_not_be_called) end
     ],
-    Resp = livery_middleware:run(Stack,
+    Resp = livery_middleware:run(
+        Stack,
         fun(_) -> error(must_not_be_called) end,
-        req()),
+        req()
+    ),
     ?assertEqual(401, livery_resp:status(Resp)).
 
 module_entry_test() ->
@@ -87,8 +91,10 @@ module_entry_test() ->
 wrap_maps_exception_to_response_test() ->
     Stack = [
         livery_middleware:wrap(fun(Class, _R, _S) ->
-            livery_resp:text(500,
-                iolist_to_binary(io_lib:format("caught-~s", [Class])))
+            livery_resp:text(
+                500,
+                iolist_to_binary(io_lib:format("caught-~s", [Class]))
+            )
         end)
     ],
     Handler = fun(_) -> error(boom) end,
@@ -108,11 +114,11 @@ req() ->
 header(Resp, Name) ->
     case lists:keyfind(Name, 1, livery_resp:headers(Resp)) of
         {_, V} -> V;
-        false  -> undefined
+        false -> undefined
     end.
 
 body(Resp) ->
     case livery_resp:body(Resp) of
         {full, B} -> B;
-        Other     -> Other
+        Other -> Other
     end.

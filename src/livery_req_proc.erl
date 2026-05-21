@@ -38,11 +38,13 @@ start_link(Args) ->
 
 -doc false.
 -spec init(pid(), args()) -> no_return().
-init(Parent, #{adapter := Adapter,
-               stream := Stream,
-               req := Req0,
-               stack := Stack,
-               handler := Handler}) ->
+init(Parent, #{
+    adapter := Adapter,
+    stream := Stream,
+    req := Req0,
+    stack := Stack,
+    handler := Handler
+}) ->
     proc_lib:init_ack(Parent, {ok, self()}),
     Req = ensure_started_at(Req0),
     try
@@ -60,8 +62,13 @@ ensure_started_at(#livery_req{started_at = undefined} = Req) ->
 ensure_started_at(Req) ->
     Req.
 
--spec handle_crash(module(), livery_adapter:stream(),
-                   throw | error | exit, term(), list()) -> ok.
+-spec handle_crash(
+    module(),
+    livery_adapter:stream(),
+    throw | error | exit,
+    term(),
+    list()
+) -> ok.
 handle_crash(Adapter, Stream, _Class, _Reason, _Stack) ->
     Resp = livery_resp:text(500, <<"internal server error">>),
     _ = livery:emit(Adapter, Stream, Resp),

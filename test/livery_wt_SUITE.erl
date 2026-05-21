@@ -10,8 +10,13 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
--export([all/0, init_per_suite/1, end_per_suite/1,
-         init_per_testcase/2, end_per_testcase/2]).
+-export([
+    all/0,
+    init_per_suite/1,
+    end_per_suite/1,
+    init_per_testcase/2,
+    end_per_testcase/2
+]).
 -export([bidi_stream_echo/1, datagram_echo/1]).
 
 all() ->
@@ -29,21 +34,25 @@ end_per_suite(_Config) ->
 
 init_per_testcase(_TC, Config) ->
     Cert = ?config(cert, Config),
-    Key  = ?config(key, Config),
+    Key = ?config(key, Config),
     Handler = fun(Req) ->
         livery_wt:upgrade(Req, livery_wt_echo_handler, #{})
     end,
     Opts = maps:merge(webtransport:h3_settings(), #{
-        port    => 0,
-        cert    => Cert,
-        key     => Key,
-        stack   => [],
+        port => 0,
+        cert => Cert,
+        key => Key,
+        stack => [],
         handler => Handler
     }),
     {ok, Listener} = livery_h3:start(Opts),
     {ok, Port} = quic:get_server_port(Listener),
-    {ok, Session} = webtransport:connect("localhost", Port, <<"/wt">>,
-        #{transport => h3, verify => verify_none}),
+    {ok, Session} = webtransport:connect(
+        "localhost",
+        Port,
+        <<"/wt">>,
+        #{transport => h3, verify => verify_none}
+    ),
     [{listener, Listener}, {session, Session} | Config].
 
 end_per_testcase(_TC, Config) ->

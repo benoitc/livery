@@ -37,12 +37,14 @@ transform the response after, or both.
 -type resp() :: #livery_resp{}.
 -type next() :: fun((req()) -> resp()).
 
--type entry() :: {module(), term()}
-               | fun((req(), next()) -> resp()).
+-type entry() ::
+    {module(), term()}
+    | fun((req(), next()) -> resp()).
 -type stack() :: [entry()].
 
--type handler() :: {module(), atom()}
-                 | fun((req()) -> resp()).
+-type handler() ::
+    {module(), atom()}
+    | fun((req()) -> resp()).
 
 -callback call(req(), next(), term()) -> resp().
 
@@ -83,7 +85,8 @@ recovery. `Class` is `throw | error | exit`.
 -spec wrap(fun((throw | error | exit, term(), list()) -> resp())) -> entry().
 wrap(Fun) when is_function(Fun, 3) ->
     fun(Req, Next) ->
-        try Next(Req)
+        try
+            Next(Req)
         catch
             Class:Reason:Stack -> Fun(Class, Reason, Stack)
         end

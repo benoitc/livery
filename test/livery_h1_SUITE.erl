@@ -32,14 +32,16 @@
 %%====================================================================
 
 all() ->
-    [text_response,
-     json_response,
-     empty_response,
-     binding_via_routed_handler,
-     streaming_chunked_response,
-     sse_response,
-     echo_buffered_body,
-     error_500_on_crash].
+    [
+        text_response,
+        json_response,
+        empty_response,
+        binding_via_routed_handler,
+        streaming_chunked_response,
+        sse_response,
+        echo_buffered_body,
+        error_500_on_crash
+    ].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(livery),
@@ -54,11 +56,11 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(TC, Config) ->
-    Stack   = stack_for(TC),
+    Stack = stack_for(TC),
     Handler = handler_for(TC),
     {ok, Listener} = livery_h1:start(#{
-        port    => 0,
-        stack   => Stack,
+        port => 0,
+        stack => Stack,
         handler => Handler
     }),
     Port = h1:server_port(Listener),
@@ -77,15 +79,19 @@ text_response(Config) ->
     {ok, Status, Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"hello">>, Body),
-    ?assertEqual(<<"text/plain; charset=utf-8">>,
-                 header(<<"content-type">>, Headers)).
+    ?assertEqual(
+        <<"text/plain; charset=utf-8">>,
+        header(<<"content-type">>, Headers)
+    ).
 
 json_response(Config) ->
     {ok, Status, Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"{\"ok\":true}">>, Body),
-    ?assertEqual(<<"application/json">>,
-                 header(<<"content-type">>, Headers)).
+    ?assertEqual(
+        <<"application/json">>,
+        header(<<"content-type">>, Headers)
+    ).
 
 empty_response(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
@@ -103,10 +109,14 @@ streaming_chunked_response(Config) ->
 
 sse_response(Config) ->
     {ok, 200, Headers, Body} = get(Config, <<"/">>),
-    ?assertEqual(<<"text/event-stream">>,
-                 header(<<"content-type">>, Headers)),
-    ?assertEqual(<<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>,
-                 Body).
+    ?assertEqual(
+        <<"text/event-stream">>,
+        header(<<"content-type">>, Headers)
+    ),
+    ?assertEqual(
+        <<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>,
+        Body
+    ).
 
 echo_buffered_body(Config) ->
     {ok, 200, _, Body} = post(Config, <<"/">>, <<"echo me">>),
@@ -175,13 +185,19 @@ post(Config, Path, Body) ->
 request(Method, Config, Path, Body) ->
     Port = ?config(port, Config),
     Url = iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port), Path]),
-    Headers = case byte_size(Body) of
-        0 -> [];
-        _ -> [{<<"Content-Length">>, integer_to_binary(byte_size(Body))}]
-    end,
+    Headers =
+        case byte_size(Body) of
+            0 -> [];
+            _ -> [{<<"Content-Length">>, integer_to_binary(byte_size(Body))}]
+        end,
     {ok, Status, RespHeaders, RespBody} =
-        hackney:request(Method, Url, Headers, Body,
-                        [with_body, {recv_timeout, ?REQUEST_TIMEOUT}]),
+        hackney:request(
+            Method,
+            Url,
+            Headers,
+            Body,
+            [with_body, {recv_timeout, ?REQUEST_TIMEOUT}]
+        ),
     {ok, Status, normalize(RespHeaders), RespBody}.
 
 normalize(Headers) ->
@@ -191,6 +207,6 @@ header(Name, Headers) ->
     LName = string:lowercase(Name),
     case lists:keyfind(LName, 1, Headers) of
         {_, V} when is_binary(V) -> V;
-        {_, V} when is_list(V)   -> list_to_binary(V);
-        false                    -> undefined
+        {_, V} when is_list(V) -> list_to_binary(V);
+        false -> undefined
     end.

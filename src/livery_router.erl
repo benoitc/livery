@@ -32,10 +32,10 @@ method, or `{error, not_found}` otherwise.
 -type bindings() :: #{binary() => binary()}.
 
 -record(node, {
-    static   = #{}       :: #{binary() => #node{}},
-    param    = undefined :: undefined | {binary(), #node{}},
+    static = #{} :: #{binary() => #node{}},
+    param = undefined :: undefined | {binary(), #node{}},
     wildcard = undefined :: undefined | {binary(), handlers()},
-    handlers = #{}       :: handlers()
+    handlers = #{} :: handlers()
 }).
 
 -type handlers() :: #{method() => {handler(), meta()}}.
@@ -62,8 +62,10 @@ add(Method, Pattern, Handler, Meta, Router) ->
     insert(Segments, Method, Handler, Meta, Router).
 
 -doc "Build a router from a list of routes in one shot.".
--spec compile([{method(), pattern(), handler()} |
-               {method(), pattern(), handler(), meta()}]) -> router().
+-spec compile([
+    {method(), pattern(), handler()}
+    | {method(), pattern(), handler(), meta()}
+]) -> router().
 compile(Routes) ->
     lists:foldl(
         fun
@@ -79,8 +81,8 @@ compile(Routes) ->
 -doc "Look up a route by method and path.".
 -spec match(method(), binary(), router()) ->
     {ok, handler(), bindings(), meta()}
-  | {error, not_found}
-  | {error, {method_not_allowed, [method()]}}.
+    | {error, not_found}
+    | {error, {method_not_allowed, [method()]}}.
 match(Method, Path, Router) ->
     Segments = split(Path),
     case walk(Segments, Router, #{}) of
@@ -105,24 +107,29 @@ insert([Segment | Rest], Method, Handler, Meta, Node) ->
             Child1 = insert(Rest, Method, Handler, Meta, Child),
             Node#node{static = maps:put(S, Child1, Children)};
         {param, Name} ->
-            Existing = case Node#node.param of
-                undefined -> {Name, #node{}};
-                {PrevName, _} when PrevName =/= Name ->
-                    error({conflicting_param, PrevName, Name});
-                Other ->
-                    Other
-            end,
+            Existing =
+                case Node#node.param of
+                    undefined ->
+                        {Name, #node{}};
+                    {PrevName, _} when PrevName =/= Name ->
+                        error({conflicting_param, PrevName, Name});
+                    Other ->
+                        Other
+                end,
             {N, ChildNode} = Existing,
             ChildNode1 = insert(Rest, Method, Handler, Meta, ChildNode),
             Node#node{param = {N, ChildNode1}};
         {wildcard, Name} ->
             [] =:= Rest orelse error({wildcard_must_be_last, Segment}),
-            Hs0 = case Node#node.wildcard of
-                undefined -> #{};
-                {PrevName, _} when PrevName =/= Name ->
-                    error({conflicting_wildcard, PrevName, Name});
-                {_, M} -> M
-            end,
+            Hs0 =
+                case Node#node.wildcard of
+                    undefined ->
+                        #{};
+                    {PrevName, _} when PrevName =/= Name ->
+                        error({conflicting_wildcard, PrevName, Name});
+                    {_, M} ->
+                        M
+                end,
             Node#node{wildcard = {Name, maps:put(Method, {Handler, Meta}, Hs0)}}
     end.
 
@@ -140,7 +147,8 @@ walk([], _Node, _Bindings) ->
     nomatch;
 walk(Segments = [Seg | Rest], Node, Bindings) ->
     case try_static(Seg, Rest, Node, Bindings) of
-        {match, _, _} = M -> M;
+        {match, _, _} = M ->
+            M;
         nomatch ->
             case try_param(Seg, Rest, Node, Bindings) of
                 {match, _, _} = M -> M;
@@ -153,7 +161,7 @@ walk(Segments = [Seg | Rest], Node, Bindings) ->
 try_static(Seg, Rest, #node{static = Children}, Bindings) ->
     case maps:find(Seg, Children) of
         {ok, Child} -> walk(Rest, Child, Bindings);
-        error       -> nomatch
+        error -> nomatch
     end.
 
 -spec try_param(binary(), [binary()], #node{}, bindings()) ->
@@ -172,7 +180,7 @@ try_wildcard(Segments, #node{wildcard = {Name, Hs}}, Bindings) ->
 
 -spec pick_handler(method(), handlers(), bindings()) ->
     {ok, handler(), bindings(), meta()}
-  | {error, {method_not_allowed, [method()]}}.
+    | {error, {method_not_allowed, [method()]}}.
 pick_handler(Method, Handlers, Bindings) ->
     case maps:find(Method, Handlers) of
         {ok, {H, Meta}} ->
@@ -191,23 +199,25 @@ pick_handler(Method, Handlers, Bindings) ->
 %%====================================================================
 
 -spec split(binary()) -> [binary()].
-split(<<$/, Rest/binary>>) -> split(Rest);
+split(<<$/, Rest/binary>>) ->
+    split(Rest);
 split(Path) when is_binary(Path) ->
     %% Drop query fragment if present (router only sees the path).
-    Path1 = case binary:split(Path, <<"?">>) of
-        [P, _]  -> P;
-        [P]     -> P
-    end,
+    Path1 =
+        case binary:split(Path, <<"?">>) of
+            [P, _] -> P;
+            [P] -> P
+        end,
     case Path1 of
         <<>> -> [];
-        _    -> binary:split(Path1, <<"/">>, [global])
+        _ -> binary:split(Path1, <<"/">>, [global])
     end.
 
 -spec join([binary(), ...]) -> binary().
-join([S])  -> S;
+join([S]) -> S;
 join(Segs) -> iolist_to_binary(lists:join(<<"/">>, Segs)).
 
 -spec classify(binary()) -> {static, binary()} | {param, binary()} | {wildcard, binary()}.
 classify(<<$:, Name/binary>>) when byte_size(Name) > 0 -> {param, Name};
 classify(<<$*, Name/binary>>) when byte_size(Name) > 0 -> {wildcard, Name};
-classify(Seg)                                           -> {static, Seg}.
+classify(Seg) -> {static, Seg}.

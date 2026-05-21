@@ -45,14 +45,17 @@ Body} | {error, _})`; the default uses OTP `httpc`.
 }.
 
 -type fetch_fun() ::
-    fun((binary(), [{binary(), binary()}], binary()) ->
-        {ok, non_neg_integer(), binary()} | {error, term()}).
+    fun(
+        (binary(), [{binary(), binary()}], binary()) ->
+            {ok, non_neg_integer(), binary()} | {error, term()}
+    ).
 
--type error_reason() :: inactive
-                      | invalid_response
-                      | invalid_json
-                      | {http_status, non_neg_integer()}
-                      | term().
+-type error_reason() ::
+    inactive
+    | invalid_response
+    | invalid_json
+    | {http_status, non_neg_integer()}
+    | term().
 
 %%====================================================================
 %% Middleware
@@ -64,7 +67,7 @@ call(Req, Next, State) ->
     case livery_ext:bearer_token(Req) of
         undefined ->
             case maps:get(required, State, true) of
-                true  -> unauthorized(<<"missing token">>);
+                true -> unauthorized(<<"missing token">>);
                 false -> Next(Req)
             end;
         Token ->
@@ -92,35 +95,37 @@ introspect(Token, Opts) ->
     Endpoint = maps:get(endpoint, Opts),
     Fetch = maps:get(fetch, Opts, fun default_fetch/3),
     case Fetch(Endpoint, headers(Opts), form_body(Token, Opts)) of
-        {ok, 200, Body}     -> parse_response(Body);
-        {ok, Code, _Body}   -> {error, {http_status, Code}};
-        {error, _} = Error  -> Error
+        {ok, 200, Body} -> parse_response(Body);
+        {ok, Code, _Body} -> {error, {http_status, Code}};
+        {error, _} = Error -> Error
     end.
 
 -spec parse_response(binary()) -> {ok, map()} | {error, error_reason()}.
 parse_response(Body) ->
     try json:decode(Body) of
         #{<<"active">> := true} = Claims -> {ok, Claims};
-        #{<<"active">> := false}         -> {error, inactive};
-        _                                -> {error, invalid_response}
+        #{<<"active">> := false} -> {error, inactive};
+        _ -> {error, invalid_response}
     catch
         _:_ -> {error, invalid_json}
     end.
 
 -spec form_body(binary(), opts()) -> binary().
 form_body(Token, Opts) ->
-    Pairs = case maps:get(token_type_hint, Opts, undefined) of
-        undefined -> [{<<"token">>, Token}];
-        Hint      -> [{<<"token">>, Token}, {<<"token_type_hint">>, Hint}]
-    end,
+    Pairs =
+        case maps:get(token_type_hint, Opts, undefined) of
+            undefined -> [{<<"token">>, Token}];
+            Hint -> [{<<"token">>, Token}, {<<"token_type_hint">>, Hint}]
+        end,
     iolist_to_binary(uri_string:compose_query(Pairs)).
 
 -spec headers(opts()) -> [{binary(), binary()}].
 headers(Opts) ->
-    Base = [{<<"content-type">>, <<"application/x-www-form-urlencoded">>},
-            {<<"accept">>, <<"application/json">>}],
-    case {maps:get(client_id, Opts, undefined),
-          maps:get(client_secret, Opts, undefined)} of
+    Base = [
+        {<<"content-type">>, <<"application/x-www-form-urlencoded">>},
+        {<<"accept">>, <<"application/json">>}
+    ],
+    case {maps:get(client_id, Opts, undefined), maps:get(client_secret, Opts, undefined)} of
         {Id, Secret} when is_binary(Id), is_binary(Secret) ->
             Cred = base64:encode(<<Id/binary, ":", Secret/binary>>),
             [{<<"authorization">>, <<"Basic ", Cred/binary>>} | Base];
@@ -141,8 +146,14 @@ default_fetch(Url, Headers, Body) ->
     {ContentType, Rest} = take_content_type(Headers),
     HHeaders = [{binary_to_list(K), binary_to_list(V)} || {K, V} <- Rest],
     Request = {binary_to_list(Url), HHeaders, binary_to_list(ContentType), Body},
-    case httpc:request(post, Request, [{timeout, 5000}],
-                       [{body_format, binary}]) of
+    case
+        httpc:request(
+            post,
+            Request,
+            [{timeout, 5000}],
+            [{body_format, binary}]
+        )
+    of
         {ok, {{_Vsn, Code, _}, _RespHeaders, RespBody}} ->
             {ok, Code, RespBody};
         {error, Reason} ->
@@ -155,11 +166,14 @@ default_fetch(Url, Headers, Body) ->
     {binary(), [{binary(), binary()}]}.
 take_content_type(Headers) ->
     Default = <<"application/x-www-form-urlencoded">>,
-    case lists:partition(
-           fun({K, _}) -> string:lowercase(K) =:= <<"content-type">> end,
-           Headers) of
+    case
+        lists:partition(
+            fun({K, _}) -> string:lowercase(K) =:= <<"content-type">> end,
+            Headers
+        )
+    of
         {[{_, CT} | _], Rest} -> {CT, Rest};
-        {[], Rest}            -> {Default, Rest}
+        {[], Rest} -> {Default, Rest}
     end.
 
 %%====================================================================

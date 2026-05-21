@@ -55,7 +55,7 @@ call(Req, Next, State) ->
     case livery_ext:cookie(name(State), Req) of
         undefined ->
             case maps:get(required, State, false) of
-                true  -> unauthorized();
+                true -> unauthorized();
                 false -> Next(Req)
             end;
         Value ->
@@ -98,9 +98,11 @@ verify(Cookie, Opts) ->
             case {unb64(P), unb64(Sig)} of
                 {{ok, Json}, {ok, Actual}} ->
                     Expected = mac(secret(Opts), Json),
-                    case byte_size(Expected) =:= byte_size(Actual)
-                        andalso crypto:hash_equals(Expected, Actual) of
-                        true  -> decode_payload(Json);
+                    case
+                        byte_size(Expected) =:= byte_size(Actual) andalso
+                            crypto:hash_equals(Expected, Actual)
+                    of
+                        true -> decode_payload(Json);
                         false -> {error, bad_signature}
                     end;
                 _ ->
@@ -123,15 +125,18 @@ Attributes come from `Opts`: `path` (default `<<"/">>`),
 """.
 -spec set_cookie_header(binary(), map()) -> {binary(), binary()}.
 set_cookie_header(Value, Opts) ->
-    {<<"set-cookie">>,
-     iolist_to_binary([name(Opts), <<"=">>, Value, cookie_attrs(Opts)])}.
+    {<<"set-cookie">>, iolist_to_binary([name(Opts), <<"=">>, Value, cookie_attrs(Opts)])}.
 
 -doc "Build a `Set-Cookie` header that expires the session cookie.".
 -spec clear_cookie_header(map()) -> {binary(), binary()}.
 clear_cookie_header(Opts) ->
     {<<"set-cookie">>,
-     iolist_to_binary([name(Opts), <<"=; Path=">>, path(Opts),
-                       <<"; Max-Age=0">>])}.
+        iolist_to_binary([
+            name(Opts),
+            <<"=; Path=">>,
+            path(Opts),
+            <<"; Max-Age=0">>
+        ])}.
 
 %%====================================================================
 %% Internals
@@ -141,7 +146,7 @@ clear_cookie_header(Opts) ->
 decode_payload(Json) ->
     try json:decode(Json) of
         Map when is_map(Map) -> check_exp(Map);
-        _                    -> {error, malformed}
+        _ -> {error, malformed}
     catch
         _:_ -> {error, malformed}
     end.
@@ -149,7 +154,7 @@ decode_payload(Json) ->
 -spec check_exp(map()) -> {ok, map()} | {error, expired}.
 check_exp(#{<<"exp">> := Exp} = Map) when is_integer(Exp) ->
     case erlang:system_time(second) =< Exp of
-        true  -> {ok, Map};
+        true -> {ok, Map};
         false -> {error, expired}
     end;
 check_exp(Map) ->
@@ -163,16 +168,19 @@ add_exp(Data, _Opts) ->
 
 -spec cookie_attrs(map()) -> iodata().
 cookie_attrs(Opts) ->
-    [<<"; Path=">>, path(Opts),
-     domain_attr(Opts),
-     max_age_attr(Opts),
-     same_site_attr(Opts),
-     bool_attr(<<"; Secure">>, maps:get(secure, Opts, true)),
-     bool_attr(<<"; HttpOnly">>, maps:get(http_only, Opts, true))].
+    [
+        <<"; Path=">>,
+        path(Opts),
+        domain_attr(Opts),
+        max_age_attr(Opts),
+        same_site_attr(Opts),
+        bool_attr(<<"; Secure">>, maps:get(secure, Opts, true)),
+        bool_attr(<<"; HttpOnly">>, maps:get(http_only, Opts, true))
+    ].
 
 -spec domain_attr(map()) -> iodata().
 domain_attr(#{domain := D}) -> [<<"; Domain=">>, D];
-domain_attr(_)              -> [].
+domain_attr(_) -> [].
 
 -spec max_age_attr(map()) -> iodata().
 max_age_attr(#{max_age := M}) when is_integer(M) ->

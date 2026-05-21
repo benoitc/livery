@@ -51,12 +51,13 @@ JsonBytes = livery_openapi:to_json(Doc).
 
 -export_type([build_opts/0, route/0, document/0]).
 
--type route() :: {binary(), binary(), term()}
-               | {binary(), binary(), term(), map()}.
+-type route() ::
+    {binary(), binary(), term()}
+    | {binary(), binary(), term(), map()}.
 
 -type build_opts() :: #{
-    info    := map(),
-    routes  := [route()],
+    info := map(),
+    routes := [route()],
     servers => [map()]
 }.
 
@@ -69,17 +70,19 @@ JsonBytes = livery_openapi:to_json(Doc).
 -doc "Build an OpenAPI 3.1 document map from routes + info.".
 -spec build(build_opts()) -> document().
 build(Opts) ->
-    Info = maps:get(info, Opts, #{<<"title">> => <<"API">>,
-                                  <<"version">> => <<"0.0.0">>}),
+    Info = maps:get(info, Opts, #{
+        <<"title">> => <<"API">>,
+        <<"version">> => <<"0.0.0">>
+    }),
     Routes = maps:get(routes, Opts, []),
     Base = #{
         <<"openapi">> => <<"3.1.0">>,
-        <<"info">>    => normalize_info(Info),
-        <<"paths">>   => build_paths(Routes)
+        <<"info">> => normalize_info(Info),
+        <<"paths">> => build_paths(Routes)
     },
     case maps:get(servers, Opts, undefined) of
         undefined -> Base;
-        Servers   -> Base#{<<"servers">> => Servers}
+        Servers -> Base#{<<"servers">> => Servers}
     end.
 
 -spec normalize_info(map()) -> map().
@@ -117,18 +120,22 @@ operation(Meta, PathParams) ->
     Base5 = put_opt(<<"requestBody">>, maps:get(request_body, Meta, undefined), Base4),
     case Params of
         [] -> Base5;
-        _  -> Base5#{<<"parameters">> => Params}
+        _ -> Base5#{<<"parameters">> => Params}
     end.
 
 responses(default) ->
     #{<<"200">> => #{<<"description">> => <<"OK">>}};
 responses(Map) when is_map(Map) ->
-    maps:fold(fun(Status, Resp, Acc) ->
-        Acc#{status_key(Status) => normalize_response(Resp)}
-    end, #{}, Map).
+    maps:fold(
+        fun(Status, Resp, Acc) ->
+            Acc#{status_key(Status) => normalize_response(Resp)}
+        end,
+        #{},
+        Map
+    ).
 
 status_key(S) when is_integer(S) -> integer_to_binary(S);
-status_key(S) when is_binary(S)  -> S.
+status_key(S) when is_binary(S) -> S.
 
 normalize_response(Resp) when is_map(Resp) ->
     case maps:is_key(<<"description">>, Resp) orelse maps:is_key(description, Resp) of
@@ -141,7 +148,7 @@ normalize_response(Resp) when is_map(Resp) ->
 rekey_description(Resp) ->
     case maps:take(description, Resp) of
         {D, Rest} -> Rest#{<<"description">> => D};
-        error     -> Resp
+        error -> Resp
     end.
 
 %%====================================================================
@@ -163,18 +170,19 @@ template_segment(Seg, {Segs, Params}) ->
 
 path_param(Name) ->
     #{
-        <<"name">>     => Name,
-        <<"in">>       => <<"path">>,
+        <<"name">> => Name,
+        <<"in">> => <<"path">>,
         <<"required">> => true,
-        <<"schema">>   => #{<<"type">> => <<"string">>}
+        <<"schema">> => #{<<"type">> => <<"string">>}
     }.
 
-join([]) -> <<"/">>;
+join([]) ->
+    <<"/">>;
 join(Segs) ->
     case iolist_to_binary(lists:join(<<"/">>, Segs)) of
-        <<>>           -> <<"/">>;
+        <<>> -> <<"/">>;
         <<"/", _/binary>> = B -> B;
-        B              -> <<"/", B/binary>>
+        B -> <<"/", B/binary>>
     end.
 
 %%====================================================================
@@ -214,12 +222,16 @@ redoc_handler(SpecUrl) when is_binary(SpecUrl) ->
 
 -spec redoc_html(binary()) -> iodata().
 redoc_html(SpecUrl) ->
-    [<<"<!DOCTYPE html><html><head><meta charset=\"utf-8\">">>,
-     <<"<title>API documentation</title>">>,
-     <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
-     <<"</head><body><redoc spec-url=\"">>, SpecUrl, <<"\"></redoc>">>,
-     <<"<script src=\"https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js\"></script>">>,
-     <<"</body></html>">>].
+    [
+        <<"<!DOCTYPE html><html><head><meta charset=\"utf-8\">">>,
+        <<"<title>API documentation</title>">>,
+        <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
+        <<"</head><body><redoc spec-url=\"">>,
+        SpecUrl,
+        <<"\"></redoc>">>,
+        <<"<script src=\"https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js\"></script>">>,
+        <<"</body></html>">>
+    ].
 
 -doc "Swagger UI handler loading the spec from `/openapi.json`.".
 -spec swagger_ui_handler() -> fun((livery_req:req()) -> livery_resp:resp()).
@@ -240,27 +252,30 @@ swagger_ui_handler(SpecUrl) when is_binary(SpecUrl) ->
 
 -spec swagger_ui_html(binary()) -> iodata().
 swagger_ui_html(SpecUrl) ->
-    [<<"<!DOCTYPE html><html><head><meta charset=\"utf-8\">">>,
-     <<"<title>API documentation</title>">>,
-     <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
-     <<"<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css\">">>,
-     <<"</head><body><div id=\"swagger-ui\"></div>">>,
-     <<"<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js\"></script>">>,
-     <<"<script>window.onload=function(){SwaggerUIBundle({url:\"">>,
-     SpecUrl,
-     <<"\",dom_id:\"#swagger-ui\"});};</script>">>,
-     <<"</body></html>">>].
+    [
+        <<"<!DOCTYPE html><html><head><meta charset=\"utf-8\">">>,
+        <<"<title>API documentation</title>">>,
+        <<"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">">>,
+        <<"<link rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui.css\">">>,
+        <<"</head><body><div id=\"swagger-ui\"></div>">>,
+        <<"<script src=\"https://cdn.jsdelivr.net/npm/swagger-ui-dist/swagger-ui-bundle.js\"></script>">>,
+        <<"<script>window.onload=function(){SwaggerUIBundle({url:\"">>,
+        SpecUrl,
+        <<"\",dom_id:\"#swagger-ui\"});};</script>">>,
+        <<"</body></html>">>
+    ].
 
 %%====================================================================
 %% Helpers
 %%====================================================================
 
 put_opt(_Key, undefined, Map) -> Map;
-put_opt(Key, Value, Map)      -> Map#{Key => Value}.
+put_opt(Key, Value, Map) -> Map#{Key => Value}.
 
-get_any([], _Map, Default) -> Default;
+get_any([], _Map, Default) ->
+    Default;
 get_any([K | Rest], Map, Default) ->
     case maps:find(K, Map) of
         {ok, V} -> V;
-        error   -> get_any(Rest, Map, Default)
+        error -> get_any(Rest, Map, Default)
     end.

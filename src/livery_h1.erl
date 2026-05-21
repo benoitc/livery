@@ -43,17 +43,17 @@ adapter callbacks (`send_headers/4`, `send_data/3`,
 -export_type([listen_opts/0, listener/0, stream/0]).
 
 -type listener() :: h1:server_ref().
--type stream()   :: {h1:connection(), h1:stream_id()}.
+-type stream() :: {h1:connection(), h1:stream_id()}.
 
 -type listen_opts() :: #{
-    port      => inet:port_number(),
+    port => inet:port_number(),
     transport => tcp | ssl,
-    cert      => binary() | string(),
-    key       => binary() | string(),
-    cacerts   => [binary()],
+    cert => binary() | string(),
+    key => binary() | string(),
+    cacerts => [binary()],
     acceptors => pos_integer(),
-    stack     := livery_middleware:stack(),
-    handler   := livery_middleware:handler()
+    stack := livery_middleware:stack(),
+    handler := livery_middleware:handler()
 }.
 
 %%====================================================================
@@ -90,15 +90,18 @@ stop(Listener) ->
     _ = h1:stop_server(Listener),
     ok.
 
--spec send_headers(stream(), 100..599,
-                   [{binary(), binary()}],
-                   livery_adapter:send_opts()) ->
+-spec send_headers(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    livery_adapter:send_opts()
+) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
     case h1:send_response(Conn, StreamId, Status, Headers) of
         ok ->
             case maps:get(end_stream, Opts, false) of
-                true  -> h1:send_data(Conn, StreamId, <<>>, true);
+                true -> h1:send_data(Conn, StreamId, <<>>, true);
                 false -> ok
             end;
         Other ->
@@ -129,10 +132,12 @@ peer_info({_Conn, _StreamId}) ->
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
-    #{trailers         => true,
-      extended_connect => false,
-      datagrams        => false,
-      capsules         => false}.
+    #{
+        trailers => true,
+        extended_connect => false,
+        datagrams => false,
+        capsules => false
+    }.
 
 %%====================================================================
 %% WebSocket handoff (called by livery_ws:upgrade/3)
@@ -149,8 +154,12 @@ calls `ws:accept/5` with the supplied handler module and opts.
 Returns `{ok, SessionPid}` on success or `{error, _}` on a bad
 handshake or socket transfer failure.
 """.
--spec accept_ws(stream(), livery_req:req(),
-                module(), term()) ->
+-spec accept_ws(
+    stream(),
+    livery_req:req(),
+    module(),
+    term()
+) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
     Headers = livery_req:headers(Req),
@@ -160,8 +169,13 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
             case h1:accept_upgrade(Conn, StreamId, RespHeaders) of
                 {ok, Socket, _BufferedBytes} ->
                     WsReq = build_ws_req(Req),
-                    ws:accept(ws_transport_gen_tcp, Socket, WsReq,
-                              HandlerMod, Opts);
+                    ws:accept(
+                        ws_transport_gen_tcp,
+                        Socket,
+                        WsReq,
+                        HandlerMod,
+                        Opts
+                    );
                 {error, Reason} ->
                     {error, {accept_upgrade_failed, Reason}}
             end;
@@ -172,9 +186,9 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
 -spec build_ws_req(livery_req:req()) -> map().
 build_ws_req(Req) ->
     #{
-        method  => livery_req:method(Req),
-        path    => livery_req:path(Req),
-        query   => livery_req:query(Req),
+        method => livery_req:method(Req),
+        path => livery_req:path(Req),
+        query => livery_req:query(Req),
         headers => livery_req:headers(Req)
     }.
 
@@ -182,40 +196,75 @@ build_ws_req(Req) ->
 %% Internals: per-request dispatch
 %%====================================================================
 
--spec build_h1_opts(listen_opts(), livery_middleware:stack(),
-                    livery_middleware:handler()) -> map().
+-spec build_h1_opts(
+    listen_opts(),
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) -> map().
 build_h1_opts(Opts, Stack, Handler) ->
     Base = #{
         transport => maps:get(transport, Opts, tcp),
-        handler   => make_handler_fun(Stack, Handler)
+        handler => make_handler_fun(Stack, Handler)
     },
-    copy_keys([cert, key, cacerts, acceptors,
-               handshake_timeout, idle_timeout,
-               request_timeout, max_keepalive_requests],
-              Opts, Base).
+    copy_keys(
+        [
+            cert,
+            key,
+            cacerts,
+            acceptors,
+            handshake_timeout,
+            idle_timeout,
+            request_timeout,
+            max_keepalive_requests
+        ],
+        Opts,
+        Base
+    ).
 
 -spec copy_keys([atom()], map(), map()) -> map().
-copy_keys([], _Src, Dst) -> Dst;
+copy_keys([], _Src, Dst) ->
+    Dst;
 copy_keys([K | Rest], Src, Dst) ->
     case maps:find(K, Src) of
         {ok, V} -> copy_keys(Rest, Src, maps:put(K, V, Dst));
-        error   -> copy_keys(Rest, Src, Dst)
+        error -> copy_keys(Rest, Src, Dst)
     end.
 
--spec make_handler_fun(livery_middleware:stack(),
-                       livery_middleware:handler()) ->
-    fun((h1:connection(), h1:stream_id(),
-         binary(), binary(), h1:headers()) -> ok).
+-spec make_handler_fun(
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) ->
+    fun(
+        (
+            h1:connection(),
+            h1:stream_id(),
+            binary(),
+            binary(),
+            h1:headers()
+        ) -> ok
+    ).
 make_handler_fun(Stack, Handler) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
-        dispatch_request(Conn, StreamId, Method, Path, Headers,
-                         Stack, Handler)
+        dispatch_request(
+            Conn,
+            StreamId,
+            Method,
+            Path,
+            Headers,
+            Stack,
+            Handler
+        )
     end.
 
--spec dispatch_request(h1:connection(), h1:stream_id(),
-                       binary(), binary(), h1:headers(),
-                       livery_middleware:stack(),
-                       livery_middleware:handler()) -> ok.
+-spec dispatch_request(
+    h1:connection(),
+    h1:stream_id(),
+    binary(),
+    binary(),
+    h1:headers(),
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) -> ok.
 dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     %% This function runs in the per-request worker spawned by
     %% h1_server. Body and trailer events arrive as
@@ -228,26 +277,31 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     Req1 = Req#livery_req{raw_query = RawQuery},
     {ok, WorkerPid} = livery_req_sup:start_request(#{
         adapter => ?MODULE,
-        stream  => {Conn, StreamId},
-        req     => Req1,
-        stack   => Stack,
+        stream => {Conn, StreamId},
+        req => Req1,
+        stack => Stack,
         handler => Handler
     }),
     MRef = erlang:monitor(process, WorkerPid),
     translate_until_done(StreamId, BodyRef, WorkerPid, MRef).
 
--spec build_req(h1:connection(), h1:stream_id(),
-                binary(), binary(), h1:headers(),
-                livery_body:reader()) -> livery_req:req().
+-spec build_req(
+    h1:connection(),
+    h1:stream_id(),
+    binary(),
+    binary(),
+    h1:headers(),
+    livery_body:reader()
+) -> livery_req:req().
 build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
     livery_req:new(#{
-        protocol   => h1,
-        method     => Method,
-        path       => Path,
-        headers    => Headers,
-        body       => {stream, Reader},
-        adapter    => ?MODULE,
-        stream     => {Conn, StreamId},
+        protocol => h1,
+        method => Method,
+        path => Path,
+        headers => Headers,
+        body => {stream, Reader},
+        adapter => ?MODULE,
+        stream => {Conn, StreamId},
         engine_pid => Conn
     }).
 
@@ -255,7 +309,7 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
 split_query(Path) ->
     case binary:split(Path, <<"?">>) of
         [P, Q] -> {P, Q};
-        [P]    -> {P, <<>>}
+        [P] -> {P, <<>>}
     end.
 
 %%====================================================================
@@ -266,8 +320,12 @@ split_query(Path) ->
 %% to the livery_req_proc until it exits (the worker is monitored).
 %% Returning from this function lets h1_server pump the next request
 %% on the same connection.
--spec translate_until_done(h1:stream_id(), reference(),
-                           pid(), reference()) -> ok.
+-spec translate_until_done(
+    h1:stream_id(),
+    reference(),
+    pid(),
+    reference()
+) -> ok.
 translate_until_done(StreamId, BodyRef, WorkerPid, MRef) ->
     receive
         {h1_stream, StreamId, {data, <<>>, true}} ->

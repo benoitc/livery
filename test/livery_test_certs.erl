@@ -11,17 +11,33 @@
 load() ->
     {CertFile, KeyFile} = paths(),
     {ok, CertPem} = file:read_file(CertFile),
-    {ok, KeyPem}  = file:read_file(KeyFile),
+    {ok, KeyPem} = file:read_file(KeyFile),
     [{'Certificate', CertDer, _}] = public_key:pem_decode(CertPem),
     {ok, CertDer, decode_key(KeyPem)}.
 
 -spec paths() -> {file:filename(), file:filename()}.
 paths() ->
     Base = code:lib_dir(livery),
-    CertFile = filename:join([Base, "..", "..", "..", "..",
-                              "test", "certs", "cert.pem"]),
-    KeyFile  = filename:join([Base, "..", "..", "..", "..",
-                              "test", "certs", "key.pem"]),
+    CertFile = filename:join([
+        Base,
+        "..",
+        "..",
+        "..",
+        "..",
+        "test",
+        "certs",
+        "cert.pem"
+    ]),
+    KeyFile = filename:join([
+        Base,
+        "..",
+        "..",
+        "..",
+        "..",
+        "test",
+        "certs",
+        "key.pem"
+    ]),
     {CertFile, KeyFile}.
 
 decode_key(KeyPem) ->

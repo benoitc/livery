@@ -58,13 +58,16 @@ uninstall_logger() ->
     _ = instrument_logger:uninstall(),
     ok.
 
--spec call(livery_req:req(), livery_middleware:next(),
-           map()) -> livery_resp:resp().
+-spec call(
+    livery_req:req(),
+    livery_middleware:next(),
+    map()
+) -> livery_resp:resp().
 call(Req, Next, State) ->
     Parent = extract_parent(Req),
     Opts = #{
-        kind       => server,
-        parent     => Parent,
+        kind => server,
+        parent => Parent,
         attributes => request_attrs(Req)
     },
     Name = maps:get(tracer, State, <<"livery">>),
@@ -88,14 +91,17 @@ extract_parent(Req) ->
 -spec request_attrs(livery_req:req()) -> map().
 request_attrs(Req) ->
     Base = #{
-        <<"http.request.method">>    => livery_req:method(Req),
-        <<"url.path">>               => livery_req:path(Req),
-        <<"url.scheme">>             => livery_req:scheme(Req),
-        <<"network.protocol.name">>  => network_protocol(livery_req:protocol(Req))
+        <<"http.request.method">> => livery_req:method(Req),
+        <<"url.path">> => livery_req:path(Req),
+        <<"url.scheme">> => livery_req:scheme(Req),
+        <<"network.protocol.name">> => network_protocol(livery_req:protocol(Req))
     },
     Base1 = put_if_set(<<"server.address">>, livery_req:authority(Req), Base),
-    Base2 = put_if_set(<<"user_agent.original">>,
-                       livery_req:header(<<"user-agent">>, Req), Base1),
+    Base2 = put_if_set(
+        <<"user_agent.original">>,
+        livery_req:header(<<"user-agent">>, Req),
+        Base1
+    ),
     put_peer(livery_req:peer(Req), Base2).
 
 -spec response_attrs(livery_resp:resp()) -> map().
@@ -109,10 +115,9 @@ network_protocol(h3) -> <<"http/3">>.
 
 -spec put_peer({inet:ip_address(), inet:port_number()} | undefined, map()) -> map().
 put_peer(undefined, M) -> M;
-put_peer({IP, _Port}, M) ->
-    M#{<<"client.address">> => iolist_to_binary(inet:ntoa(IP))}.
+put_peer({IP, _Port}, M) -> M#{<<"client.address">> => iolist_to_binary(inet:ntoa(IP))}.
 
 -spec put_if_set(binary(), term() | undefined, map()) -> map().
 put_if_set(_K, undefined, M) -> M;
-put_if_set(_K, <<>>, M)      -> M;
-put_if_set(K, V, M)          -> M#{K => V}.
+put_if_set(_K, <<>>, M) -> M;
+put_if_set(K, V, M) -> M#{K => V}.

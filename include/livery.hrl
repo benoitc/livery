@@ -12,9 +12,10 @@
     headers = [] :: [{binary(), binary()}],
     peer = undefined :: {inet:ip_address(), inet:port_number()} | undefined,
     tls = undefined :: undefined | map(),
-    body = empty :: empty
-                  | {buffered, iodata()}
-                  | {stream, term()},
+    body = empty ::
+        empty
+        | {buffered, iodata()}
+        | {stream, term()},
     adapter = undefined :: module() | undefined,
     stream = undefined :: term(),
     engine_pid = undefined :: pid() | undefined,
@@ -26,16 +27,18 @@
 -record(livery_resp, {
     status = 200 :: 100..599,
     headers = [] :: [{binary(), binary()}],
-    body = {full, <<>>} :: {full, iodata()}
-                         | {chunked, fun((term()) -> ok)}
-                         | {sse, fun((term()) -> ok)}
-                         | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
-                         | {upgrade, ws | wt, term()}
-                         | empty
-                         | taken_over,
-    trailers :: undefined
-              | [{binary(), binary()}]
-              | fun(() -> [{binary(), binary()}])
+    body = {full, <<>>} ::
+        {full, iodata()}
+        | {chunked, fun((term()) -> ok)}
+        | {sse, fun((term()) -> ok)}
+        | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
+        | {upgrade, ws | wt, term()}
+        | empty
+        | taken_over,
+    trailers ::
+        undefined
+        | [{binary(), binary()}]
+        | fun(() -> [{binary(), binary()}])
 }).
 
 -endif.

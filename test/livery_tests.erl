@@ -14,12 +14,15 @@ dispatch_runs_handler_when_stack_empty_test() ->
     ?assertEqual(200, livery_resp:status(Resp)).
 
 dispatch_threads_request_through_middleware_test() ->
-    Stack = [livery_middleware:before(
-                fun(R) -> livery_req:set_meta(seen, yes, R) end)],
+    Stack = [
+        livery_middleware:before(
+            fun(R) -> livery_req:set_meta(seen, yes, R) end
+        )
+    ],
     Handler = fun(R) ->
         case livery_req:meta(seen, R) of
             yes -> livery_resp:text(200, <<"tagged">>);
-            _   -> livery_resp:text(500, <<>>)
+            _ -> livery_resp:text(500, <<>>)
         end
     end,
     Resp = livery:dispatch(Stack, Handler, livery_req:new(#{})),
@@ -29,7 +32,8 @@ dispatch_short_circuit_skips_handler_test() ->
     Resp = livery:dispatch(
         [fun(_R, _N) -> livery_resp:text(401, <<>>) end],
         fun(_R) -> error(must_not_be_called) end,
-        livery_req:new(#{})),
+        livery_req:new(#{})
+    ),
     ?assertEqual(401, livery_resp:status(Resp)).
 
 %%====================================================================
@@ -62,8 +66,10 @@ emit_full_zero_byte_with_trailers_test() ->
     Resp0 = livery_resp:new(200, [], {full, <<>>}),
     Resp = livery_resp:with_trailers([{<<"x-end">>, <<"yes">>}], Resp0),
     {Cap, _} = emit_through(Resp),
-    ?assertEqual([{<<"x-end">>, <<"yes">>}],
-                 livery_test_adapter:trailers(Cap)),
+    ?assertEqual(
+        [{<<"x-end">>, <<"yes">>}],
+        livery_test_adapter:trailers(Cap)
+    ),
     ?assert(livery_test_adapter:end_stream(Cap)).
 
 emit_chunked_test() ->
@@ -78,22 +84,34 @@ emit_chunked_test() ->
     ?assert(livery_test_adapter:end_stream(Cap)).
 
 emit_chunked_with_trailers_test() ->
-    Producer = fun(Emit) -> Emit(<<"data">>), ok end,
+    Producer = fun(Emit) ->
+        Emit(<<"data">>),
+        ok
+    end,
     Resp0 = livery_resp:stream(200, [], Producer),
     Resp = livery_resp:with_trailers([{<<"x-fin">>, <<"1">>}], Resp0),
     {Cap, _} = emit_through(Resp),
-    ?assertEqual([{<<"x-fin">>, <<"1">>}],
-                 livery_test_adapter:trailers(Cap)).
+    ?assertEqual(
+        [{<<"x-fin">>, <<"1">>}],
+        livery_test_adapter:trailers(Cap)
+    ).
 
 emit_sse_default_data_only_test() ->
-    Producer = fun(Emit) -> Emit(<<"plain">>), ok end,
+    Producer = fun(Emit) ->
+        Emit(<<"plain">>),
+        ok
+    end,
     {Cap, _} = emit_through(livery_resp:sse(200, Producer)),
     ?assertEqual(<<"data: plain\n\n">>, livery_test_adapter:body(Cap)).
 
 emit_sse_with_event_id_retry_test() ->
     Producer = fun(Emit) ->
-        Emit(#{event => <<"tick">>, id => <<"42">>,
-               retry => 1500, data => <<"v">>})
+        Emit(#{
+            event => <<"tick">>,
+            id => <<"42">>,
+            retry => 1500,
+            data => <<"v">>
+        })
     end,
     {Cap, _} = emit_through(livery_resp:sse(200, Producer)),
     Expected = <<"event: tick\nid: 42\nretry: 1500\ndata: v\n\n">>,
@@ -115,28 +133,36 @@ emit_upgrade_resets_stream_test() ->
     Resp = livery_resp:upgrade(ws, undefined),
     {Cap, R} = emit_through(Resp),
     ?assertEqual({error, not_implemented}, R),
-    ?assertEqual(upgrade_not_handled_at_emit,
-                 livery_test_adapter:reset_reason(Cap)).
+    ?assertEqual(
+        upgrade_not_handled_at_emit,
+        livery_test_adapter:reset_reason(Cap)
+    ).
 
 emit_with_fun_trailers_test() ->
     Trailer = fun() -> [{<<"x-late">>, <<"1">>}] end,
     Resp0 = livery_resp:text(200, <<"body">>),
     Resp = livery_resp:with_trailers(Trailer, Resp0),
     {Cap, _} = emit_through(Resp),
-    ?assertEqual([{<<"x-late">>, <<"1">>}],
-                 livery_test_adapter:trailers(Cap)).
+    ?assertEqual(
+        [{<<"x-late">>, <<"1">>}],
+        livery_test_adapter:trailers(Cap)
+    ).
 
 %%====================================================================
 %% Service lifecycle stubs (current placeholders)
 %%====================================================================
 
 start_listener_rejects_unknown_adapter_test() ->
-    ?assertEqual({error, unknown_adapter},
-                 livery:start_listener(foo, #{})).
+    ?assertEqual(
+        {error, unknown_adapter},
+        livery:start_listener(foo, #{})
+    ).
 
 stop_listener_rejects_unknown_handle_test() ->
-    ?assertEqual({error, unknown_listener},
-                 livery:stop_listener({foo, bar})).
+    ?assertEqual(
+        {error, unknown_listener},
+        livery:stop_listener({foo, bar})
+    ).
 
 %%====================================================================
 %% router_handler/1,2
@@ -144,15 +170,21 @@ stop_listener_rejects_unknown_handle_test() ->
 
 router_handler_routes_and_binds_test() ->
     Router = livery_router:compile([
-        {<<"GET">>, <<"/">>,         {?MODULE, rh_index}},
+        {<<"GET">>, <<"/">>, {?MODULE, rh_index}},
         {<<"GET">>, <<"/hi/:name">>, {?MODULE, rh_greet}}
     ]),
     H = livery:router_handler(Router),
-    Cap1 = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/">>}),
+    Cap1 = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/">>}
+    ),
     ?assertEqual(<<"index">>, livery_test_adapter:body(Cap1)),
-    Cap2 = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/hi/ada">>}),
+    Cap2 = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/hi/ada">>}
+    ),
     ?assertEqual(<<"hello, ada">>, livery_test_adapter:body(Cap2)).
 
 router_handler_fun_route_test() ->
@@ -160,25 +192,34 @@ router_handler_fun_route_test() ->
         {<<"GET">>, <<"/ping">>, fun(_R) -> livery_resp:text(200, <<"pong">>) end}
     ]),
     H = livery:router_handler(Router),
-    Cap = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/ping">>}),
+    Cap = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/ping">>}
+    ),
     ?assertEqual(<<"pong">>, livery_test_adapter:body(Cap)).
 
 router_handler_not_found_test() ->
     Router = livery_router:compile([{<<"GET">>, <<"/">>, {?MODULE, rh_index}}]),
     H = livery:router_handler(Router),
-    Cap = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/missing">>}),
+    Cap = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/missing">>}
+    ),
     ?assertEqual(404, livery_test_adapter:status(Cap)).
 
 router_handler_method_not_allowed_sets_allow_test() ->
     Router = livery_router:compile([
-        {<<"GET">>,  <<"/x">>, {?MODULE, rh_index}},
+        {<<"GET">>, <<"/x">>, {?MODULE, rh_index}},
         {<<"POST">>, <<"/x">>, {?MODULE, rh_index}}
     ]),
     H = livery:router_handler(Router),
-    Cap = livery_test_adapter:run([], H,
-        #{method => <<"DELETE">>, path => <<"/x">>}),
+    Cap = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"DELETE">>, path => <<"/x">>}
+    ),
     ?assertEqual(405, livery_test_adapter:status(Cap)),
     Allow = livery_test_adapter:header(<<"allow">>, Cap),
     ?assertNotEqual(nomatch, binary:match(Allow, <<"GET">>)),
@@ -190,35 +231,48 @@ router_handler_custom_fallbacks_test() ->
         not_found => fun(_R) -> livery_resp:text(404, <<"nope">>) end,
         method_not_allowed => fun(_R, _M) -> livery_resp:text(405, <<"no">>) end
     }),
-    Cap = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/missing">>}),
+    Cap = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/missing">>}
+    ),
     ?assertEqual(<<"nope">>, livery_test_adapter:body(Cap)).
 
 router_handler_runs_per_route_middleware_test() ->
     AddHeader = livery_middleware:after_response(
-        fun(R) -> livery_resp:with_header(<<"x-route">>, <<"1">>, R) end),
+        fun(R) -> livery_resp:with_header(<<"x-route">>, <<"1">>, R) end
+    ),
     Router = livery_router:compile([
-        {<<"GET">>, <<"/plain">>,   {?MODULE, rh_index}},
-        {<<"GET">>, <<"/wrapped">>, {?MODULE, rh_index},
-         #{middleware => [AddHeader]}}
+        {<<"GET">>, <<"/plain">>, {?MODULE, rh_index}},
+        {<<"GET">>, <<"/wrapped">>, {?MODULE, rh_index}, #{middleware => [AddHeader]}}
     ]),
     H = livery:router_handler(Router),
-    Plain = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/plain">>}),
+    Plain = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/plain">>}
+    ),
     ?assertEqual(undefined, livery_test_adapter:header(<<"x-route">>, Plain)),
-    Wrapped = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/wrapped">>}),
+    Wrapped = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/wrapped">>}
+    ),
     ?assertEqual(<<"1">>, livery_test_adapter:header(<<"x-route">>, Wrapped)).
 
 router_handler_per_route_short_circuit_test() ->
     Guard = fun(_Req, _Next) -> livery_resp:text(403, <<"blocked">>) end,
     Router = livery_router:compile([
-        {<<"GET">>, <<"/guarded">>, fun(_R) -> error(must_not_be_called) end,
-         #{middleware => [Guard]}}
+        {<<"GET">>, <<"/guarded">>, fun(_R) -> error(must_not_be_called) end, #{
+            middleware => [Guard]
+        }}
     ]),
     H = livery:router_handler(Router),
-    Cap = livery_test_adapter:run([], H,
-        #{method => <<"GET">>, path => <<"/guarded">>}),
+    Cap = livery_test_adapter:run(
+        [],
+        H,
+        #{method => <<"GET">>, path => <<"/guarded">>}
+    ),
     ?assertEqual(403, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"blocked">>, livery_test_adapter:body(Cap)).
 
@@ -243,5 +297,5 @@ emit_through(Resp) ->
 body(Resp) ->
     case livery_resp:body(Resp) of
         {full, B} -> iolist_to_binary(B);
-        Other     -> Other
+        Other -> Other
     end.

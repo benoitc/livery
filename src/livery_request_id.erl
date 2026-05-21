@@ -20,10 +20,11 @@ Identifiers are 32-character lowercase hex strings derived from
 -spec call(livery_req:req(), livery_middleware:next(), term()) ->
     livery_resp:resp().
 call(Req, Next, _State) ->
-    Id = case livery_req:header(?HEADER, Req) of
-        undefined -> generate();
-        Existing  -> Existing
-    end,
+    Id =
+        case livery_req:header(?HEADER, Req) of
+            undefined -> generate();
+            Existing -> Existing
+        end,
     Req1 = livery_req:set_req_id(Id, Req),
     Resp = Next(Req1),
     livery_resp:with_header(?HEADER, Id, Resp).

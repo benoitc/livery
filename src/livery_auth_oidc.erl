@@ -40,8 +40,8 @@ discover(Issuer, Opts) ->
         {ok, Body} ->
             try json:decode(Body) of
                 #{<<"issuer">> := _} = Config -> {ok, Config};
-                #{} = Config                  -> {ok, Config};
-                _                             -> {error, invalid_discovery}
+                #{} = Config -> {ok, Config};
+                _ -> {error, invalid_discovery}
             catch
                 _:_ -> {error, invalid_json}
             end;

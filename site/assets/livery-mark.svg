@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Livery">
+  <defs>
+    <linearGradient id="lv" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="0.5" stop-color="#818cf8"/>
+      <stop offset="1" stop-color="#f472b6"/>
+    </linearGradient>
+    <clipPath id="badge"><rect x="3" y="3" width="58" height="58" rx="16"/></clipPath>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="#0e1117" stroke="#2a3140" stroke-width="2"/>
+  <g clip-path="url(#badge)">
+    <!-- three livery stripes: one per protocol, converging like speed lines -->
+    <g transform="rotate(-32 32 32)">
+      <rect x="-24" y="14" width="112" height="7" rx="3.5" fill="#5eead4"/>
+      <rect x="-24" y="28.5" width="112" height="7" rx="3.5" fill="#818cf8"/>
+      <rect x="-24" y="43" width="112" height="7" rx="3.5" fill="#f472b6"/>
+    </g>
+    <!-- chevron carved from the stripes for a forward/fast read -->
+    <path d="M20 12 L40 32 L20 52" fill="none" stroke="#0e1117" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+  </g>
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="none" stroke="url(#lv)" stroke-width="1.5" opacity="0.5"/>
+</svg>

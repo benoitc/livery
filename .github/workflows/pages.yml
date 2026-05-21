@@ -1,0 +1,55 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28'
+          rebar3-version: '3.25.0'
+      - name: System deps (instrument NIF)
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+      - uses: actions/cache@v5
+        with:
+          path: |
+            _build
+            ~/.cache/rebar3
+          key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.lock') }}
+          restore-keys: build-ubuntu-24.04-otp-28-
+      - name: Build API docs (ex_doc)
+        run: rebar3 ex_doc
+      - name: Assemble site (landing page + API docs under /api)
+        run: |
+          rm -rf _site && mkdir -p _site/api
+          cp -r site/* _site/
+          cp -r doc/* _site/api/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -4,10 +4,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% WebTransport is not available on H1 (or the in-memory test
-%% adapter); upgrade/3 returns 501 there. The h2/h3 bridge to
-%% webtransport:accept/4 is exercised end-to-end once the adapters'
-%% extended-CONNECT delivery path is verified (deferred, shared with
-%% WS-over-H2/H3).
+%% adapter); upgrade/3 returns 501 there. These EUnit cases cover
+%% that fallback; the H2/H3 bridge to webtransport:accept/4 is
+%% exercised end-to-end in livery_wt_SUITE.
 
 upgrade_on_test_adapter_returns_501_test() ->
     Cap = livery_test_adapter:run(

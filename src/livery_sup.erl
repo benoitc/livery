@@ -2,9 +2,10 @@
 -moduledoc """
 Top-level Livery supervisor.
 
-Currently supervises `livery_req_sup`, the simple-one-for-one
-parent of per-request workers. The per-listener subtrees for H3,
-H2, and H1 are added by `livery_service` once Phase 4 lands.
+Supervises `livery_req_sup`, the simple-one-for-one parent of
+per-request workers. Listeners are owned by their wire libraries
+(`h1`/`h2`/`quic`); `livery_service` starts and stops them per
+service rather than under this supervisor.
 """.
 -behaviour(supervisor).
 

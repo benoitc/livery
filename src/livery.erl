@@ -23,7 +23,7 @@ response-emission walker that every adapter calls back into.
 ]).
 
 %%====================================================================
-%% Service lifecycle (stubs until livery_service lands)
+%% Service lifecycle
 %%====================================================================
 
 -doc """

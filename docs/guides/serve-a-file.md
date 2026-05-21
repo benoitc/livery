@@ -40,6 +40,30 @@ livery_resp:file(206, Path, {1024, eof}).
 
 Set the status to `206` yourself when you serve a partial range.
 
+## Security: never pass unsanitised paths
+
+`livery_resp:file/2,3` serves exactly the path you give it; Livery
+does not confine it to a directory. If you build the path from
+request data (a path parameter, query string, header), an attacker
+can use `..` to escape your intended root and read arbitrary files.
+
+Confine it yourself before serving:
+
+```erlang
+serve_asset(Req) ->
+    Name = livery_req:path_param(<<"name">>, Req),
+    Root = <<"/var/www/assets">>,
+    Path = filename:join(Root, Name),
+    %% Reject anything that resolves outside Root.
+    Safe = filename:absname(Path),
+    case binary:match(filename:absname(Path), filename:absname(Root)) of
+        {0, _} -> livery_resp:file(200, Safe);
+        _      -> livery_resp:text(403, <<"forbidden">>)
+    end.
+```
+
+Prefer an allowlist of known filenames where you can.
+
 ## Error handling
 
 | Situation | Response |

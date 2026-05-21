@@ -123,7 +123,8 @@ reset({Conn, StreamId}, Reason) ->
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
 peer_info({_Conn, _StreamId}) ->
-    %% h1 does not expose peer info today. Phase 2 stub.
+    %% The h1 library does not surface the peer address, so it stays
+    %% undefined here.
     #{peer => undefined, tls => undefined, alpn => <<"http/1.1">>}.
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().

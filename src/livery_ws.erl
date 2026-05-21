@@ -46,8 +46,8 @@ Returns a `#livery_resp{}` value:
   point.
 - `status = 400` with a textual body when the inbound headers do
   not satisfy RFC 6455.
-- `status = 501` when the current protocol does not yet support
-  upgrades (h2/h3 today).
+- `status = 501` when the adapter does not support WebSocket
+  upgrades (H1, H2, and H3 all do).
 """.
 -spec upgrade(livery_req:req(), handler_module(), handler_opts()) ->
     livery_resp:resp().

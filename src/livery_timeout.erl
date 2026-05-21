@@ -7,13 +7,12 @@ return within the deadline, the worker is killed and a 504 is
 emitted instead. A handler crash maps to 500.
 
 The deadline is enforced by running the downstream call in a
-spawned, monitored process. Handlers that receive body chunks via
-`livery_body:read/2` will not see those chunks under this
-middleware in Phase 1, because body messages target the parent
-request process. Pair `livery_timeout` with a body-buffering
-middleware in front of it, or apply it to routes whose handlers
-do not stream input. Adapter-level cancellation lands in Phase 2
-and removes this limitation.
+spawned, monitored process. Body chunks (`livery_body:read/2`) are
+delivered to the request process, not this spawned child, so a
+handler that streams its request body will not see those chunks
+under this middleware. Pair `livery_timeout` with a body-buffering
+middleware in front of it, or apply it only to routes whose
+handlers do not stream input.
 """.
 -behaviour(livery_middleware).
 

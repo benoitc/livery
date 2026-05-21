@@ -321,17 +321,23 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   tools/call session over H1. barrel_mcp 2.0 dropped cowboy; it
   still pulls hackney (its MCP client), so hackney moved from a
   test-only dep to a runtime dep, unified at 4.0.0.
-- Phase 11, partial (optional): `livery_wt:upgrade/3` bridges an
+- Phase 11, done (optional): `livery_wt:upgrade/3` bridges an
   extended-CONNECT request to `webtransport:accept/4` via
   `livery_h2:accept_wt/4` and `livery_h3:accept_wt/4` (reconstructs
   the `:method`/`:protocol`/`:scheme`/`:authority`/`:path`
   pseudo-headers the library expects). H1 returns 501. The
-  `webtransport` dep (`v0.2.2`) pulls only `h2`+`quic` (no Cowboy).
-  End-to-end WT session takeover is deferred: it needs the H2/H3
-  adapters to deliver the extended CONNECT and release the stream
-  to `webtransport`, the same path WS-over-H2/H3 needs (both
-  currently 501). Tracked as a combined extended-CONNECT
-  follow-up.
+  `webtransport` dep (`v0.2.3`) pulls only `h2`+`quic` (no Cowboy).
+  End-to-end session takeover is now PROVEN: merge
+  `webtransport:h3_settings/0` into the `livery_h3` listener opts
+  (the adapter already forwards `settings`/`stream_type_handler`/
+  `h3_datagram_enabled`/`connection_handler`/`quic_opts`) and a real
+  `webtransport` client opens a bidi stream and sends a datagram,
+  both echoed back through the session (`livery_wt_SUITE`). This
+  needed `webtransport` 0.2.3, which keys the per-connection session
+  router in ETS by the QUIC connection (resolved via
+  `quic_h3:get_quic_conn/1`) instead of the connection process
+  dictionary, so `accept/4` works from Livery's per-request worker.
+  No Livery code change was required.
 - Phase 12, 1 week: docs, examples, benchmarks, RC tag.
 - Phase 13, 3 days: Cowboy cutover validation. Write
   `docs/migrating_from_cowboy.md` and an `examples/erllama_listener/`

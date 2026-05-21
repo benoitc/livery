@@ -21,12 +21,22 @@ my_wt_route(Req) ->
 WebTransport runs only over H2 (extended CONNECT, RFC 9220-style)
 and H3. Calling `upgrade/3` on H1 returns `501 Not Implemented`.
 
-Status: the adapter bridge is wired but the end-to-end session
-takeover depends on the H2/H3 adapters delivering the extended
-CONNECT request and releasing the stream to `webtransport`. That
-delivery path is shared with WebSocket-over-H2/H3 and is tracked
-as a combined follow-up; until it is verified end-to-end this
-module is experimental.
+The listener must advertise the WebTransport settings. Merge
+`webtransport:h3_settings/0` (or `h2_settings/0`) into the listener
+options so the adapter forwards the H3/H2 SETTINGS, datagram
+support, and WT stream routing to the wire library:
+
+```erlang
+Opts = maps:merge(webtransport:h3_settings(), #{
+    cert => Cert, key => Key, stack => Stack,
+    handler => fun(Req) -> livery_wt:upgrade(Req, my_handler, #{}) end
+}),
+livery_h3:start(Opts).
+```
+
+End-to-end bidi-stream and datagram echo over a real session is
+covered by `livery_wt_SUITE` (needs `webtransport` >= 0.2.3, where
+`accept/4` works from Livery's per-request worker process).
 """.
 
 -include("livery.hrl").

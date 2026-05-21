@@ -62,6 +62,7 @@ solution.
 - [Catch handler errors](guides/handler-errors.md)
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
 - [Serve MCP tools](guides/serve-mcp-tools.md)
+- [Serve WebTransport](guides/serve-webtransport.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

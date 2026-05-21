@@ -37,7 +37,8 @@ Goals:
   middleware, and Alt-Svc advertisement.
 - First-class OpenAPI, MCP Streamable HTTP, SSE, OpenTelemetry-style
   tracing and metrics, OIDC/OAuth2.
-- Reference `legacy/` when it helps, ignore it otherwise.
+- Reference the pre-rewrite tree (in git history) when it helps,
+  ignore it otherwise.
 
 Non-goals:
 - No in-tree reimplementation of HPACK, QPACK, frame decoders,
@@ -89,7 +90,6 @@ livery/
   test/
   docs/rewrite_plan.md
   _checkouts/                local dep overrides (gitignored)
-  legacy/                    frozen reference, not compiled
   rebar.config
 ```
 
@@ -382,9 +382,10 @@ handler.
 
 ## 8. Legacy
 
-`legacy/` is a frozen reference. Not compiled, not linked. Grep it
-when useful (radix-trie shape, WebSocket close-code table, shutdown
-drain sequence). No CI guard.
+The pre-rewrite tree once lived under `legacy/` as a frozen
+reference. It has been removed now that the rewrite is complete;
+recover it from git history if you need the old radix-trie shape,
+WebSocket close-code table, or shutdown drain sequence.
 
 ## 9. Risks
 

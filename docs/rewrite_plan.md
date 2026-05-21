@@ -338,7 +338,17 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   `quic_h3:get_quic_conn/1`) instead of the connection process
   dictionary, so `accept/4` works from Livery's per-request worker.
   No Livery code change was required.
-- Phase 12, 1 week: docs, examples, benchmarks, RC tag.
+- Phase 12, mostly done: Diataxis docs + ex_doc reference (earlier
+  phases), runnable `examples/`, and a benchmark harness
+  (`bench/livery_bench.erl`, `bench` rebar profile): keep-alive load
+  against a reference handler over H1, H2 (h2c), and H3
+  (`run/1` per protocol, `run_all/1` for all three), reporting
+  p50/p90/p99/throughput, plus `compare/2` for the >10% p99
+  regression gate (baselines are host-specific, generated where the
+  gate runs). The H2 driver cycles the connection every 100 streams
+  (the wire library's per-connection cap) and reports the
+  reconnects. RC tag is the remaining step (a release action, left
+  to a maintainer).
 - Phase 13, 3 days: Cowboy cutover validation. Write
   `docs/migrating_from_cowboy.md` and an `examples/erllama_listener/`
   port. Release gate: erllama_server's CT suite runs green against a

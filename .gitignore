@@ -7,6 +7,10 @@ erl_crash.dump
 *.crashdump
 .eunit/
 .DS_Store
+
+# Profiling artifacts (livery_bench:profile/2, fprof, eprof)
+fprof.trace
+*.fprof
 logs/
 doc/
 .idea/

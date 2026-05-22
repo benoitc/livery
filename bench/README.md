@@ -64,3 +64,14 @@ Current  = livery_bench:run(#{connections => 100, duration_ms => 10000}),
 the baseline p99, or `{regressed, Detail}` otherwise. Percentile
 numbers are host-specific, so generate the baseline where the gate
 runs rather than committing fixed numbers.
+
+## Stress vs. benchmark
+
+This harness measures throughput and latency under load. Stability
+under concurrency is checked separately by
+`test/livery_stress_SUITE.erl`, a bounded Common Test suite that
+hammers the H1 adapter (sustained keep-alive load and connection
+churn) and asserts the invariants that matter: zero errors, the
+per-request workers drain back to zero (`livery_drain:in_flight/0`,
+i.e. no leak), and the service stays responsive. It runs in CI; use
+this `bench` harness for heavy, long-running soak testing.

@@ -23,6 +23,7 @@ pass it to `compare/2` to gate future runs.
 """.
 
 -export([run/0, run/1, run_all/0, run_all/1, compare/2, report/1]).
+-export([profile/2]).
 
 -define(RAW_REQUEST, <<"GET / HTTP/1.1\r\nHost: bench\r\n\r\n">>).
 
@@ -49,6 +50,30 @@ run(Opts) ->
         Metrics = metrics(Protocol, Lats, Count, Reconns, Duration, Conns),
         report(Metrics),
         Metrics
+    after
+        stop_listener(Protocol, Listener)
+    end.
+
+%% @doc Profile one protocol with fprof over `NReqs' sequential
+%% requests on a single connection. Traces all processes (so the
+%% wire library's own processes are included) and writes an fprof
+%% report sorted by own time to `/tmp/livery_<protocol>.fprof'.
+%% Returns the report path.
+profile(Protocol, NReqs) ->
+    {ok, _} = application:ensure_all_started(livery),
+    {ok, _} = ensure_started(Protocol),
+    {ok, Listener} = start_listener(Protocol, #{}),
+    try
+        Port = listener_port(Protocol, Listener),
+        {ok, Handle} = connect(Protocol, Port),
+        Dest = "/tmp/livery_" ++ atom_to_list(Protocol) ++ ".fprof",
+        fprof:trace([start, {procs, all}]),
+        _ = [do_request(Protocol, Handle) || _ <- lists:seq(1, NReqs)],
+        fprof:trace(stop),
+        fprof:profile(),
+        fprof:analyse([{dest, Dest}, {sort, own}, {cols, 120}, {totals, true}]),
+        close(Protocol, Handle),
+        {ok, Dest}
     after
         stop_listener(Protocol, Listener)
     end.

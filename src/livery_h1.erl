@@ -271,10 +271,17 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     %% `{h1_stream, StreamId, _}' messages in this process's
     %% mailbox.
     BodyRef = make_ref(),
+    DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
     Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
-    Req1 = Req#livery_req{raw_query = RawQuery},
+    %% The dispatch process (this one) runs the translator loop, so it
+    %% is the disconnect notifier the handler registers with.
+    Req1 = Req#livery_req{
+        raw_query = RawQuery,
+        notifier_pid = self(),
+        disc_ref = DiscRef
+    },
     {ok, WorkerPid} = livery_req_sup:start_request(#{
         adapter => ?MODULE,
         stream => {Conn, StreamId},
@@ -282,8 +289,13 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
         stack => Stack,
         handler => Handler
     }),
-    MRef = erlang:monitor(process, WorkerPid),
-    translate_until_done(StreamId, BodyRef, WorkerPid, MRef).
+    WMRef = erlang:monitor(process, WorkerPid),
+    %% Monitor the h1 connection process too, so a client disconnect
+    %% fires even when the handler is not reading the body or emitting.
+    CMRef = erlang:monitor(process, Conn),
+    translate_until_done(
+        StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false
+    ).
 
 -spec build_req(
     h1:connection(),
@@ -323,27 +335,46 @@ split_query(Path) ->
 -spec translate_until_done(
     h1:stream_id(),
     reference(),
+    reference(),
     pid(),
-    reference()
+    pid(),
+    reference(),
+    reference(),
+    [fun(() -> term())],
+    boolean()
 ) -> ok.
-translate_until_done(StreamId, BodyRef, WorkerPid, MRef) ->
+translate_until_done(StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs, Fired) ->
+    Loop = fun(Cbs1, Fired1) ->
+        translate_until_done(
+            StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs1, Fired1
+        )
+    end,
     receive
         {h1_stream, StreamId, {data, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_until_done(StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h1_stream, StreamId, {data, Chunk, true}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_until_done(StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h1_stream, StreamId, {data, Chunk, false}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            translate_until_done(StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h1_stream, StreamId, {trailers, Headers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Headers}},
-            translate_until_done(StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h1_stream, StreamId, {stream_reset, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            translate_until_done(StreamId, BodyRef, WorkerPid, MRef);
-        {'DOWN', MRef, process, WorkerPid, _Reason} ->
+            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs));
+        {'DOWN', CMRef, process, Conn, Reason} ->
+            Loop(
+                Cbs,
+                livery_disconnect:fire_once(
+                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
+                )
+            );
+        {livery_on_disconnect, DiscRef, Fun} ->
+            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired);
+        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             ok
     end.

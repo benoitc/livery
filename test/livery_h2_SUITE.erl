@@ -24,7 +24,8 @@
     sse_response/1,
     echo_buffered_body/1,
     error_500_on_crash/1,
-    response_with_trailers/1
+    response_with_trailers/1,
+    cancel_on_connection_close/1
 ]).
 
 %%====================================================================
@@ -40,7 +41,8 @@ all() ->
         sse_response,
         echo_buffered_body,
         error_500_on_crash,
-        response_with_trailers
+        response_with_trailers,
+        cancel_on_connection_close
     ].
 
 init_per_suite(Config) ->
@@ -158,6 +160,37 @@ handler_for(response_with_trailers) ->
     fun(_R) ->
         Resp = livery_resp:text(200, <<"hello">>),
         livery_resp:with_trailers([{<<"x-checksum">>, <<"abc">>}], Resp)
+    end;
+handler_for(cancel_on_connection_close) ->
+    Test = self(),
+    fun(R) ->
+        ok = livery_req:on_disconnect(R, fun() -> Test ! cancelled end),
+        livery_resp:stream(200, [], fun(Emit) ->
+            Emit(<<"start">>),
+            Test ! handler_ready,
+            receive
+                {livery_disconnect, _, _} -> ok
+            after 10000 -> ok
+            end
+        end)
+    end.
+
+cancel_on_connection_close(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, _StreamId} = h2:request(Conn, <<"GET">>, <<"/">>, [
+        {<<"host">>, <<"127.0.0.1">>}
+    ]),
+    receive
+        handler_ready -> ok
+    after 5000 -> ct:fail(handler_did_not_start)
+    end,
+    %% Closing the client connection terminates the server-side h2
+    %% connection process, which the translator monitors -> fire.
+    h2:close(Conn),
+    receive
+        cancelled -> ok
+    after 5000 -> ct:fail(cancel_callback_not_run)
     end.
 
 %%====================================================================

@@ -303,10 +303,20 @@ make_handler_fun(Stack, Handler) ->
 ) -> ok.
 dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     BodyRef = make_ref(),
+    DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
     Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
-    Req1 = Req#livery_req{raw_query = RawQuery},
+    %% Translator is the disconnect notifier; spawned before the worker
+    %% so the req carries its pid, and given the worker pid afterwards.
+    Translator = spawn(fun() ->
+        translator_init(Conn, StreamId, BodyRef, DiscRef)
+    end),
+    Req1 = Req#livery_req{
+        raw_query = RawQuery,
+        notifier_pid = Translator,
+        disc_ref = DiscRef
+    },
     {ok, WorkerPid} = livery_req_sup:start_request(#{
         adapter => ?MODULE,
         stream => {Conn, StreamId},
@@ -314,10 +324,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
         stack => Stack,
         handler => Handler
     }),
-    Translator = spawn(fun() ->
-        MRef = erlang:monitor(process, WorkerPid),
-        translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef)
-    end),
+    Translator ! {worker, WorkerPid},
     _ = quic_h3:set_stream_handler(
         Conn,
         StreamId,
@@ -357,33 +364,67 @@ split_query(Path) ->
 %% Translator: quic_h3 messages -> livery_body protocol
 %%====================================================================
 
+%% Two-phase init: receive the worker pid, then monitor the worker and
+%% the connection. quic_h3 routes a single-stream reset to the
+%% connection owner (not the stream handler), so the reliable client
+%% disconnect signal here is the connection 'DOWN'. A single-stream RST
+%% without a connection close is not observable in the current quic_h3.
+-spec translator_init(pid(), non_neg_integer(), reference(), reference()) -> ok.
+translator_init(Conn, StreamId, BodyRef, DiscRef) ->
+    receive
+        {worker, WorkerPid} ->
+            WMRef = erlang:monitor(process, WorkerPid),
+            CMRef = erlang:monitor(process, Conn),
+            translate_loop(
+                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false
+            )
+    end.
+
 -spec translate_loop(
     pid(),
     non_neg_integer(),
     reference(),
+    reference(),
     pid(),
-    reference()
+    reference(),
+    reference(),
+    [fun(() -> term())],
+    boolean()
 ) -> ok.
-translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef) ->
+translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired) ->
+    Loop = fun(Cbs1, Fired1) ->
+        translate_loop(
+            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1
+        )
+    end,
     receive
         {quic_h3, Conn, {data, StreamId, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {quic_h3, Conn, {data, StreamId, Chunk, true}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {quic_h3, Conn, {data, StreamId, Chunk, false}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {quic_h3, Conn, {trailers, StreamId, Trailers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {quic_h3, Conn, {stream_reset, StreamId, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
-        {'DOWN', MRef, process, WorkerPid, _Reason} ->
+            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs));
+        {'DOWN', CMRef, process, Conn, Reason} ->
+            Loop(
+                Cbs,
+                livery_disconnect:fire_once(
+                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
+                )
+            );
+        {livery_on_disconnect, DiscRef, Fun} ->
+            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired);
+        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             ok;
         {quic_h3, Conn, _Other} ->
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef)
+            Loop(Cbs, Fired)
     end.

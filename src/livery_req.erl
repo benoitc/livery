@@ -49,7 +49,10 @@ new value for the next stage using the setters.
     meta/3,
     set_meta/3,
 
-    set_req_id/2
+    set_req_id/2,
+
+    on_disconnect/2,
+    disconnect_tag/0
 ]).
 
 -export_type([req/0]).
@@ -83,6 +86,8 @@ set_field(body, V, R) -> R#livery_req{body = V};
 set_field(adapter, V, R) -> R#livery_req{adapter = V};
 set_field(stream, V, R) -> R#livery_req{stream = V};
 set_field(engine_pid, V, R) -> R#livery_req{engine_pid = V};
+set_field(notifier_pid, V, R) -> R#livery_req{notifier_pid = V};
+set_field(disc_ref, V, R) -> R#livery_req{disc_ref = V};
 set_field(req_id, V, R) -> R#livery_req{req_id = V};
 set_field(started_at, V, R) -> R#livery_req{started_at = V};
 set_field(meta, V, R) -> R#livery_req{meta = V};
@@ -264,6 +269,46 @@ set_meta(Key, Value, #livery_req{meta = M} = Req) ->
 -spec set_req_id(binary(), req()) -> req().
 set_req_id(Id, Req) when is_binary(Id) ->
     Req#livery_req{req_id = Id}.
+
+%%====================================================================
+%% Client disconnect
+%%====================================================================
+
+-doc """
+Register a cancel callback to run when the client disconnects.
+
+`Fun` is a 0-arity function (e.g. `fun() -> my_llm:cancel(Ref) end`).
+If the client resets the stream or closes the connection before the
+request finishes, `Fun` is run exactly once in a fresh process, even
+if the handler is blocked in a NIF. It never runs on normal
+completion. Returns `ok` immediately; a no-op on adapters without a
+real connection (e.g. the test adapter).
+
+A handler that runs its own `receive` loop can instead match the
+`{livery_disconnect, _Ref, _Reason}` message delivered to it; see
+`disconnect_tag/0`.
+""".
+-spec on_disconnect(req(), fun(() -> term())) -> ok.
+on_disconnect(#livery_req{notifier_pid = undefined}, _Fun) ->
+    ok;
+on_disconnect(#livery_req{notifier_pid = Pid, disc_ref = Ref}, Fun) when
+    is_pid(Pid), is_reference(Ref), is_function(Fun, 0)
+->
+    Pid ! {livery_on_disconnect, Ref, Fun},
+    ok;
+on_disconnect(#livery_req{}, _Fun) ->
+    ok.
+
+-doc """
+The tag of the disconnect message delivered to a request worker.
+
+A handler in a `receive` loop matches
+`{livery_disconnect, _Ref, _Reason}`. This helper returns the tag
+atom (`livery_disconnect`) for guard-style matching.
+""".
+-spec disconnect_tag() -> livery_disconnect.
+disconnect_tag() ->
+    livery_disconnect.
 
 %%====================================================================
 %% Helpers

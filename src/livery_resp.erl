@@ -57,8 +57,8 @@ Response builders here are pure: they never touch sockets.
 -type header_value() :: binary().
 -type body() ::
     {full, iodata()}
-    | {chunked, fun((term()) -> ok)}
-    | {sse, fun((term()) -> ok)}
+    | {chunked, fun((term()) -> ok | {error, term()})}
+    | {sse, fun((term()) -> ok | {error, term()})}
     | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
     | {upgrade, ws | wt, term()}
     | empty
@@ -212,20 +212,20 @@ until it returns.
 -spec stream(
     100..599,
     [{header_name(), header_value()}],
-    fun((term()) -> ok)
+    fun((term()) -> ok | {error, term()})
 ) -> resp().
 stream(Status, Headers, Producer) when is_function(Producer, 1) ->
     new(Status, Headers, {chunked, Producer}).
 
 -doc "Server-Sent Events response.".
--spec sse(100..599, fun((term()) -> ok)) -> resp().
+-spec sse(100..599, fun((term()) -> ok | {error, term()})) -> resp().
 sse(Status, Producer) -> sse(Status, [], Producer).
 
 -doc "`sse/2` with extra headers.".
 -spec sse(
     100..599,
     [{header_name(), header_value()}],
-    fun((term()) -> ok)
+    fun((term()) -> ok | {error, term()})
 ) -> resp().
 sse(Status, ExtraHeaders, Producer) when is_function(Producer, 1) ->
     Hs0 = with_default(<<"content-type">>, <<"text/event-stream">>, ExtraHeaders),
@@ -249,14 +249,14 @@ end).
 
 For pre-encoded bytes, use `stream/3` directly.
 """.
--spec ndjson(100..599, fun((term()) -> ok)) -> resp().
+-spec ndjson(100..599, fun((term()) -> ok | {error, term()})) -> resp().
 ndjson(Status, Producer) -> ndjson(Status, [], Producer).
 
 -doc "`ndjson/2` with extra headers.".
 -spec ndjson(
     100..599,
     [{header_name(), header_value()}],
-    fun((term()) -> ok)
+    fun((term()) -> ok | {error, term()})
 ) -> resp().
 ndjson(Status, ExtraHeaders, Producer) when is_function(Producer, 1) ->
     Hs = with_default(
@@ -268,8 +268,7 @@ ndjson(Status, ExtraHeaders, Producer) when is_function(Producer, 1) ->
         Encode = fun(Term) ->
             Emit([json:encode(Term), <<"\n">>])
         end,
-        _ = Producer(Encode),
-        ok
+        Producer(Encode)
     end,
     new(Status, Hs, {chunked, Wrapped}).
 

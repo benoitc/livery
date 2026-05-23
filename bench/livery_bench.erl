@@ -23,7 +23,7 @@ pass it to `compare/2` to gate future runs.
 """.
 
 -export([run/0, run/1, run_all/0, run_all/1, compare/2, report/1]).
--export([profile/2]).
+-export([profile/2, sweep/3]).
 
 -define(RAW_REQUEST, <<"GET / HTTP/1.1\r\nHost: bench\r\n\r\n">>).
 
@@ -77,6 +77,25 @@ profile(Protocol, NReqs) ->
     after
         stop_listener(Protocol, Listener)
     end.
+
+%% @doc Concurrency sweep: run `Protocol' at each connection count in
+%% `ConnsList' for `DurationMs' and return
+%% `[{Conns, ThroughputRps, P50Us, P99Us}]'. Use it to see whether
+%% throughput scales with concurrency (CPU-bound) or plateaus early
+%% (serialization bottleneck).
+sweep(Protocol, ConnsList, DurationMs) ->
+    [
+        begin
+            M = run(#{
+                protocol => Protocol,
+                connections => C,
+                duration_ms => DurationMs,
+                warmup_ms => 300
+            }),
+            {C, round(maps:get(throughput_rps, M)), maps:get(p50_us, M), maps:get(p99_us, M)}
+        end
+     || C <- ConnsList
+    ].
 
 %% @doc Run the benchmark across H1, H2, and H3.
 run_all() ->
@@ -159,7 +178,8 @@ start_listener(h3, Opts) ->
         cert => Cert,
         key => Key,
         stack => [],
-        handler => ref_handler()
+        handler => ref_handler(),
+        pool_size => maps:get(pool_size, Opts, 1)
     }).
 
 listener_port(h1, L) ->

@@ -247,7 +247,11 @@ build_h3_opts(Opts, Stack, Handler) ->
             quic_opts,
             stream_type_handler,
             h3_datagram_enabled,
-            connection_handler
+            connection_handler,
+            %% Number of UDP listener processes. >1 enables SO_REUSEPORT
+            %% so the kernel spreads packets across readers, letting H3
+            %% use more than one core for transport.
+            pool_size
         ],
         Opts,
         Base

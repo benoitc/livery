@@ -3,6 +3,31 @@
 Tracked work that is not yet scheduled. Upstream items link to the
 sibling library that owns the change.
 
+## Benchmarking: H3 needs an external client
+
+The in-VM bench harness understates H3. Findings (loopback, 14
+schedulers):
+
+- H3 throughput saturates at ~18k req/s by 16 connections and stays
+  flat to 200 connections; only latency grows (throughput =
+  concurrency / latency). H1 scales to ~74k.
+- It is not CPU-bound: aggregate scheduler busy is ~32% (about 10 of
+  14 cores idle) during the H3 run.
+- It is not the server UDP-listener pool: `pool_size` 1 through 8
+  makes no difference to the in-VM number.
+
+The ceiling is the in-VM QUIC round trip, since the harness runs the
+QUIC client and server in the same BEAM VM and the client stack is
+on the critical path. To measure H3 server throughput, drive Livery
+from an external native QUIC client (quiche-client, h2load with
+HTTP/3, or curl --http3) on a separate process or host. Profiling
+already showed Livery's H3 adapter is not the bottleneck.
+
+`livery_h3:start/1` now accepts `pool_size` (forwarded to
+`quic_h3`); `>1` enables SO_REUSEPORT so production H3 can use more
+than one UDP reader process. It does not change the in-VM benchmark,
+but helps real external traffic spread across cores.
+
 ## Upstream: optimize HTTP/3 header validation in `erlang_quic`
 
 Profiling an H3 request/response loop (`livery_bench:profile(h3, 100)`,

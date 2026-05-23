@@ -283,10 +283,21 @@ make_handler_fun(Stack, Handler) ->
 ) -> ok.
 dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     BodyRef = make_ref(),
+    DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
     Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
-    Req1 = Req#livery_req{raw_query = RawQuery},
+    %% The translator is the disconnect notifier. It is spawned before
+    %% the worker (so the req can carry its pid) and given the worker
+    %% pid afterwards via {worker, _}, breaking the dependency cycle.
+    Translator = spawn(fun() ->
+        translator_init(Conn, StreamId, BodyRef, DiscRef)
+    end),
+    Req1 = Req#livery_req{
+        raw_query = RawQuery,
+        notifier_pid = Translator,
+        disc_ref = DiscRef
+    },
     {ok, WorkerPid} = livery_req_sup:start_request(#{
         adapter => ?MODULE,
         stream => {Conn, StreamId},
@@ -294,16 +305,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
         stack => Stack,
         handler => Handler
     }),
-    %% h2 events for this stream go to a per-stream translator. The
-    %% translator forwards body/trailer events to the worker in the
-    %% livery_body protocol and exits on terminal events. It also
-    %% monitors the worker so it cleans up when the worker finishes,
-    %% including the WebSocket/WebTransport case where the worker
-    %% hands the stream off to another session and exits.
-    Translator = spawn(fun() ->
-        MRef = erlang:monitor(process, WorkerPid),
-        translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef)
-    end),
+    Translator ! {worker, WorkerPid},
     case
         h2:set_stream_handler(
             Conn,
@@ -374,35 +376,70 @@ connect_pseudo_headers(Req, Protocol) ->
 %% Translator: h2 messages -> livery_body protocol
 %%====================================================================
 
+%% Two-phase init: receive the worker pid, then monitor both the worker
+%% (for normal completion / handoff) and the connection (for client
+%% disconnect, which h2 does not fan out to stream handlers).
+-spec translator_init(h2:connection(), h2:stream_id(), reference(), reference()) ->
+    ok.
+translator_init(Conn, StreamId, BodyRef, DiscRef) ->
+    receive
+        {worker, WorkerPid} ->
+            WMRef = erlang:monitor(process, WorkerPid),
+            CMRef = erlang:monitor(process, Conn),
+            translate_loop(
+                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false
+            )
+    end.
+
 -spec translate_loop(
     h2:connection(),
     h2:stream_id(),
     reference(),
+    reference(),
     pid(),
-    reference()
+    reference(),
+    reference(),
+    [fun(() -> term())],
+    boolean()
 ) -> ok.
-translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef) ->
+translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired) ->
+    Loop = fun(Cbs1, Fired1) ->
+        translate_loop(
+            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1
+        )
+    end,
     receive
         {h2, Conn, {data, StreamId, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h2, Conn, {data, StreamId, Chunk, true}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
             WorkerPid ! {livery_body, BodyRef, eof},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h2, Conn, {data, StreamId, Chunk, false}} ->
             WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h2, Conn, {trailers, StreamId, Trailers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
+            Loop(Cbs, Fired);
         {h2, Conn, {stream_reset, StreamId, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef);
-        {'DOWN', MRef, process, WorkerPid, _Reason} ->
+            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs));
+        {'DOWN', CMRef, process, Conn, Reason} ->
+            %% Connection closed: client disconnect. Fire, keep looping
+            %% (to serve late registrations) until the worker exits.
+            Loop(
+                Cbs,
+                livery_disconnect:fire_once(
+                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
+                )
+            );
+        {livery_on_disconnect, DiscRef, Fun} ->
+            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired);
+        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             %% Worker finished (normal request done, or it handed the
             %% stream off to a ws/wt session). Stop translating.
             ok;
         {h2, Conn, _Other} ->
-            translate_loop(Conn, StreamId, BodyRef, WorkerPid, MRef)
+            Loop(Cbs, Fired)
     end.

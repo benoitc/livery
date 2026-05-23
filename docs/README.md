@@ -60,6 +60,7 @@ solution.
 - [Log every request](guides/log-requests.md)
 - [Propagate request IDs](guides/propagate-request-ids.md)
 - [Catch handler errors](guides/handler-errors.md)
+- [Cancel work when the client disconnects](guides/cancel-on-disconnect.md)
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
 - [Serve MCP tools](guides/serve-mcp-tools.md)
 - [Serve WebTransport](guides/serve-webtransport.md)

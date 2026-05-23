@@ -247,8 +247,7 @@ emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers) ->
             Emit = fun(Chunk) ->
                 Adapter:send_data(Stream, Chunk, #{end_stream => false})
             end,
-            _ = Producer(Emit),
-            close_stream(Adapter, Stream, Trailers);
+            finish_stream(Adapter, Stream, Producer(Emit), Trailers);
         Other ->
             Other
     end;
@@ -262,8 +261,7 @@ emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers) ->
                     #{end_stream => false}
                 )
             end,
-            _ = Producer(Emit),
-            close_stream(Adapter, Stream, Trailers);
+            finish_stream(Adapter, Stream, Producer(Emit), Trailers);
         Other ->
             Other
     end;
@@ -340,6 +338,14 @@ emit_trailers(Adapter, Stream, Trailers) when is_list(Trailers) ->
     Adapter:send_trailers(Stream, Trailers);
 emit_trailers(Adapter, Stream, Fun) when is_function(Fun, 0) ->
     Adapter:send_trailers(Stream, Fun()).
+
+%% Close a chunked/SSE stream once its producer returns. A producer
+%% that reports a failed send (the client is gone) short-circuits the
+%% terminal write and surfaces the error.
+finish_stream(_Adapter, _Stream, {error, _} = Err, _Trailers) ->
+    Err;
+finish_stream(Adapter, Stream, _ProducerResult, Trailers) ->
+    close_stream(Adapter, Stream, Trailers).
 
 close_stream(Adapter, Stream, undefined) ->
     Adapter:send_data(Stream, <<>>, #{end_stream => true});

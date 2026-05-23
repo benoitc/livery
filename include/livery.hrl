@@ -19,6 +19,8 @@
     adapter = undefined :: module() | undefined,
     stream = undefined :: term(),
     engine_pid = undefined :: pid() | undefined,
+    notifier_pid = undefined :: pid() | undefined,
+    disc_ref = undefined :: reference() | undefined,
     req_id = <<>> :: binary(),
     started_at = undefined :: integer() | undefined,
     meta = #{} :: map()
@@ -29,8 +31,8 @@
     headers = [] :: [{binary(), binary()}],
     body = {full, <<>>} ::
         {full, iodata()}
-        | {chunked, fun((term()) -> ok)}
-        | {sse, fun((term()) -> ok)}
+        | {chunked, fun((term()) -> ok | {error, term()})}
+        | {sse, fun((term()) -> ok | {error, term()})}
         | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
         | {upgrade, ws | wt, term()}
         | empty

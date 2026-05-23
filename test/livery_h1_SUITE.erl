@@ -24,7 +24,8 @@
     streaming_chunked_response/1,
     sse_response/1,
     echo_buffered_body/1,
-    error_500_on_crash/1
+    error_500_on_crash/1,
+    cancel_on_client_disconnect/1
 ]).
 
 %%====================================================================
@@ -40,7 +41,8 @@ all() ->
         streaming_chunked_response,
         sse_response,
         echo_buffered_body,
-        error_500_on_crash
+        error_500_on_crash,
+        cancel_on_client_disconnect
     ].
 
 init_per_suite(Config) ->
@@ -127,6 +129,29 @@ error_500_on_crash(Config) ->
     ?assertEqual(500, Status),
     ?assertEqual(<<"internal server error">>, Body).
 
+cancel_on_client_disconnect(Config) ->
+    %% Raw socket so we control the close. The handler registers an
+    %% on_disconnect callback and then reads the request body; HTTP/1.1
+    %% is half-duplex, so the disconnect is detected while the server
+    %% is reading the (incomplete) body. The client promises a large
+    %% body, sends a few bytes, then closes.
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}], 5000
+    ),
+    ok = gen_tcp:send(Sock, <<
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\nhi"
+    >>),
+    receive
+        handler_ready -> ok
+    after 5000 -> ct:fail(handler_did_not_start)
+    end,
+    ok = gen_tcp:close(Sock),
+    receive
+        cancelled -> ok
+    after 5000 -> ct:fail(cancel_callback_not_run)
+    end.
+
 %%====================================================================
 %% Handlers
 %%====================================================================
@@ -168,7 +193,16 @@ handler_for(echo_buffered_body) ->
         livery_resp:text(200, Bytes)
     end;
 handler_for(error_500_on_crash) ->
-    fun(_R) -> error(boom) end.
+    fun(_R) -> error(boom) end;
+handler_for(cancel_on_client_disconnect) ->
+    Test = self(),
+    fun(R) ->
+        ok = livery_req:on_disconnect(R, fun() -> Test ! cancelled end),
+        Test ! handler_ready,
+        {stream, Reader} = livery_req:body(R),
+        _ = livery_body:read_all(Reader, 10000),
+        livery_resp:text(200, <<"done">>)
+    end.
 
 %%====================================================================
 %% HTTP helpers (hackney)

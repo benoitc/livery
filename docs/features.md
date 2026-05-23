@@ -3,6 +3,19 @@
 Tracked work that is not yet scheduled. Upstream items link to the
 sibling library that owns the change.
 
+## Upstream: quic 1.4.1 regresses H3 extended CONNECT (pinned to 1.4.0)
+
+`rebar.config` pins `quic` to 1.4.0. Bumping to 1.4.1 breaks the
+HTTP/3 extended-CONNECT path that WebSocket-over-H3 and
+WebTransport-over-H3 ride: `livery_ws_SUITE:h3_echo_text_frame`
+fails (`h3_no_response`, `quic_closed`) and both `livery_wt_SUITE`
+cases time out on connect. WS over H1/H2 and plain H3
+request/response are unaffected, so the regression is in the
+CONNECT-with-`:protocol` stream lifecycle. Hold the bump until
+`erlang_quic` ships a fix (1.4.2). Diagnosis prompt:
+`erlang_quic_h3_extended_connect_regression_prompt.md` (kept in the
+projects parent folder).
+
 ## Upstream: optimize HTTP/3 header validation in `erlang_quic`
 
 Profiling an H3 request/response loop (`livery_bench:profile(h3, 100)`,

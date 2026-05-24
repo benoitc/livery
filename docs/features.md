@@ -5,17 +5,21 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Step 1 is done.
+Modern web/AI framework gaps, in priority order. Steps 1 and 2 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
    H1/H2/H3 by the per-stream translator (which monitors the
    connection). See `docs/guides/cancel-on-disconnect.md`.
-2. CORS middleware.
+2. CORS middleware. DONE: `livery_cors` (preflight short-circuit,
+   origin allowlist/predicate, credentials, expose, max-age, and
+   cache-correct `Vary`). See `docs/guides/enable-cors.md`.
 3. Response compression (gzip/br/zstd) with Accept-Encoding.
 4. Multipart / form-data body parsing (uploads, multimodal).
 5. Concurrency limit / load-shedding middleware (admission control).
-6. Security-headers middleware (HSTS/CSP/etc).
+6. Security-headers middleware (HSTS/CSP/etc). DONE:
+   `livery_security_headers` (nosniff, frame options, referrer policy,
+   HSTS on TLS, opt-in CSP). See `docs/guides/set-security-headers.md`.
 7. Rate limiting / throttling.
 8. HTTP caching primitives (ETag, conditional GET, Cache-Control).
 9. Static-directory serving with ETag/MIME.

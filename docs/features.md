@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1 and 2 are done.
+Modern web/AI framework gaps, in priority order. Steps 1-3 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -14,7 +14,14 @@ Modern web/AI framework gaps, in priority order. Steps 1 and 2 are done.
 2. CORS middleware. DONE: `livery_cors` (preflight short-circuit,
    origin allowlist/predicate, credentials, expose, max-age, and
    cache-correct `Vary`). See `docs/guides/enable-cors.md`.
-3. Response compression (gzip/br/zstd) with Accept-Encoding.
+3. Response compression with Accept-Encoding. DONE (gzip + deflate):
+   `livery_compress` negotiates over the `livery_codec` registry and
+   compresses full + chunked bodies; `livery_codec_gzip` and
+   `livery_codec_deflate` are built in over OTP `zlib`. See
+   `docs/guides/compress-responses.md`. Follow-up codec apps (separate
+   PRs, link system libs): `livery_brotli` (NIF, `br`) and
+   `livery_zstd` (cmake NIF, `zstd`) implement the same behaviour and
+   self-register via `livery_codec:register/1`.
 4. Multipart / form-data body parsing (uploads, multimodal).
 5. Concurrency limit / load-shedding middleware (admission control).
 6. Security-headers middleware (HSTS/CSP/etc). DONE:

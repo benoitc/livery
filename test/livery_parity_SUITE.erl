@@ -38,7 +38,9 @@
     handler_crash_returns_500/1,
     middleware_short_circuit/1,
     middleware_after_response/1,
-    full_pipeline_with_builtins/1
+    full_pipeline_with_builtins/1,
+    gzip_negotiation/1,
+    gzip_with_trailers/1
 ]).
 
 %%====================================================================
@@ -61,7 +63,9 @@ groups() ->
         handler_crash_returns_500,
         middleware_short_circuit,
         middleware_after_response,
-        full_pipeline_with_builtins
+        full_pipeline_with_builtins,
+        gzip_negotiation,
+        gzip_with_trailers
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -326,6 +330,47 @@ full_pipeline_with_builtins(Config) ->
     ?assert(is_binary(Id)),
     ?assertEqual(32, byte_size(Id)).
 
+gzip_negotiation(Config) ->
+    Body = <<"{\"message\":\"compress me across every adapter\",\"items\":[1,2,3,4,5]}">>,
+    Stack = [{livery_compress, #{min_size => 0}}],
+    Resp = drive(
+        Config,
+        Stack,
+        fun(_R) -> livery_resp:json(200, Body) end,
+        #{headers => [{<<"accept-encoding">>, <<"gzip">>}]}
+    ),
+    ?assertEqual(200, status(Resp)),
+    ?assertEqual(<<"gzip">>, header(<<"content-encoding">>, Resp)),
+    %% Decode the wire bytes with an independent zlib call: identical on
+    %% test_adapter, h1, h2, h3.
+    ?assertEqual(Body, zlib:gunzip(body(Resp))).
+
+gzip_with_trailers(Config) ->
+    Body = <<"{\"k\":\"trailer body that is gzip compressed on the wire\"}">>,
+    Stack = [{livery_compress, #{min_size => 0}}],
+    Handler = fun(_R) ->
+        Resp0 = livery_resp:json(200, Body),
+        livery_resp:with_trailers([{<<"x-checksum">>, <<"abc">>}], Resp0)
+    end,
+    Resp = drive(
+        Config,
+        Stack,
+        Handler,
+        #{headers => [{<<"accept-encoding">>, <<"gzip">>}]}
+    ),
+    ?assertEqual(<<"gzip">>, header(<<"content-encoding">>, Resp)),
+    %% No Content-Length: H1 must stay chunked so send_trailers works;
+    %% H2/H3 send trailers as a HEADERS frame. The body must still gunzip
+    %% (a broken send_trailers would truncate/reset the stream).
+    ?assertEqual(undefined, header(<<"content-length">>, Resp)),
+    ?assertEqual(Body, zlib:gunzip(body(Resp))),
+    %% Drivers that surface trailers (test_adapter/h2/h3) also check them;
+    %% the h1 driver returns undefined trailers (hackney drops them).
+    case trailers(Resp) of
+        undefined -> ok;
+        T -> ?assertEqual([{<<"x-checksum">>, <<"abc">>}], T)
+    end.
+
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple
 %%====================================================================
@@ -390,11 +435,12 @@ drive_h1(Stack, Handler, Spec) ->
             integer_to_binary(Port),
             <<"/">>
         ]),
-        Headers =
+        Base =
             case byte_size(Body) of
                 0 -> [];
                 _ -> [{<<"content-length">>, integer_to_binary(byte_size(Body))}]
             end,
+        Headers = Base ++ maps:get(headers, Spec, []),
         {ok, Status, RespHeaders, RespBody} =
             hackney:request(
                 Method,
@@ -430,7 +476,8 @@ drive_h2(Stack, Handler, Spec) ->
         Port = h2:server_port(Listener),
         {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
         try
-            Headers = [{<<"host">>, <<"127.0.0.1">>}],
+            Headers =
+                [{<<"host">>, <<"127.0.0.1">>}] ++ maps:get(headers, Spec, []),
             HasBody = byte_size(Body) > 0,
             {ok, StreamId} =
                 case HasBody of
@@ -508,12 +555,13 @@ drive_h3(Cert, Key, Stack, Handler, Spec) ->
             #{verify => verify_none, sync => true}
         ),
         try
-            Headers = [
-                {<<":method">>, Method},
-                {<<":path">>, <<"/">>},
-                {<<":scheme">>, <<"https">>},
-                {<<":authority">>, <<"localhost">>}
-            ],
+            Headers =
+                [
+                    {<<":method">>, Method},
+                    {<<":path">>, <<"/">>},
+                    {<<":scheme">>, <<"https">>},
+                    {<<":authority">>, <<"localhost">>}
+                ] ++ maps:get(headers, Spec, []),
             HasBody = byte_size(Body) > 0,
             StreamId =
                 case HasBody of

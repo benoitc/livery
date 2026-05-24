@@ -44,7 +44,8 @@
     multipart_echo/1,
     concurrency_shed/1,
     rate_limit_shed/1,
-    conditional_get/1
+    conditional_get/1,
+    static_file/1
 ]).
 
 %%====================================================================
@@ -73,7 +74,8 @@ groups() ->
         multipart_echo,
         concurrency_shed,
         rate_limit_shed,
-        conditional_get
+        conditional_get,
+        static_file
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -446,6 +448,29 @@ conditional_get(Config) ->
     R2 = drive(Config, Stack, H, #{headers => [{<<"if-none-match">>, ETag}]}),
     ?assertEqual(304, status(R2)),
     ?assertEqual(<<>>, body(R2)).
+
+static_file(Config) ->
+    %% Parity requests target `/`, so serve the directory index.
+    Dir = filename:join(
+        temp_dir(),
+        "livery_parity_static_" ++ integer_to_list(erlang:unique_integer([positive]))
+    ),
+    ok = filelib:ensure_path(Dir),
+    Body = <<"<h1>static</h1>">>,
+    ok = file:write_file(filename:join(Dir, "index.html"), Body),
+    try
+        H = livery_static:handler(Dir, #{prefix => <<"/">>}),
+        R1 = drive(Config, [], H, #{}),
+        ?assertEqual(200, status(R1)),
+        ?assertEqual(Body, body(R1)),
+        ?assertEqual(<<"text/html; charset=utf-8">>, header(<<"content-type">>, R1)),
+        ETag = header(<<"etag">>, R1),
+        ?assert(is_binary(ETag)),
+        R2 = drive(Config, [], H, #{headers => [{<<"if-none-match">>, ETag}]}),
+        ?assertEqual(304, status(R2))
+    after
+        _ = file:del_dir_r(Dir)
+    end.
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

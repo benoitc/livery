@@ -42,7 +42,8 @@
     gzip_negotiation/1,
     gzip_with_trailers/1,
     multipart_echo/1,
-    concurrency_shed/1
+    concurrency_shed/1,
+    rate_limit_shed/1
 ]).
 
 %%====================================================================
@@ -69,7 +70,8 @@ groups() ->
         gzip_negotiation,
         gzip_with_trailers,
         multipart_echo,
-        concurrency_shed
+        concurrency_shed,
+        rate_limit_shed
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -423,6 +425,14 @@ concurrency_shed(Config) ->
     ),
     ?assertEqual(503, status(Resp)),
     ?assertEqual(<<"service unavailable">>, body(Resp)).
+
+rate_limit_shed(Config) ->
+    %% capacity 1, no refill, fixed key: 1st request 200, 2nd 429.
+    Limiter = livery_ratelimit:limiter(1, 0, #{key => fun(_R) -> <<"parity">> end}),
+    Stack = [{livery_ratelimit, Limiter}],
+    H = fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+    ?assertEqual(200, status(drive(Config, Stack, H, #{}))),
+    ?assertEqual(429, status(drive(Config, Stack, H, #{}))).
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

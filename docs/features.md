@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1-4 are done.
+Modern web/AI framework gaps, in priority order. Steps 1-5 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -28,6 +28,9 @@ Modern web/AI framework gaps, in priority order. Steps 1-4 are done.
    (streaming urlencoded). See `docs/guides/handle-file-uploads.md` and
    `docs/guides/parse-form-bodies.md`.
 5. Concurrency limit / load-shedding middleware (admission control).
+   DONE: `livery_concurrency` (`limiter/1,2` factory over a lock-free
+   `atomics` counter; over the limit sheds `503` immediately, optional
+   Retry-After). See `docs/guides/limit-concurrency.md`.
 6. Security-headers middleware (HSTS/CSP/etc). DONE:
    `livery_security_headers` (nosniff, frame options, referrer policy,
    HSTS on TLS, opt-in CSP). See `docs/guides/set-security-headers.md`.

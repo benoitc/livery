@@ -41,7 +41,8 @@
     full_pipeline_with_builtins/1,
     gzip_negotiation/1,
     gzip_with_trailers/1,
-    multipart_echo/1
+    multipart_echo/1,
+    concurrency_shed/1
 ]).
 
 %%====================================================================
@@ -67,7 +68,8 @@ groups() ->
         full_pipeline_with_builtins,
         gzip_negotiation,
         gzip_with_trailers,
-        multipart_echo
+        multipart_echo,
+        concurrency_shed
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -409,6 +411,18 @@ multipart_echo(Config) ->
     ),
     ?assertEqual(200, status(Resp)),
     ?assertEqual(<<"a:5,b:2">>, body(Resp)).
+
+concurrency_shed(Config) ->
+    %% limiter(0) rejects every request: deterministic 503 on all adapters.
+    Stack = [{livery_concurrency, livery_concurrency:limiter(0)}],
+    Resp = drive(
+        Config,
+        Stack,
+        fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        #{}
+    ),
+    ?assertEqual(503, status(Resp)),
+    ?assertEqual(<<"service unavailable">>, body(Resp)).
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

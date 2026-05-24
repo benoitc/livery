@@ -477,6 +477,94 @@ cors_security_request_id_compose_test() ->
     ?assert(has_vary(<<"origin">>, Cap)).
 
 %%====================================================================
+%% livery_concurrency
+%%====================================================================
+
+concurrency_under_limit_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_concurrency, livery_concurrency:limiter(5)}],
+        fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        #{}
+    ),
+    ?assertEqual(200, livery_test_adapter:status(Cap)).
+
+concurrency_sheds_over_limit_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_concurrency, livery_concurrency:limiter(0)}],
+        fun(_R) -> error(must_not_be_called) end,
+        #{}
+    ),
+    ?assertEqual(503, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"service unavailable">>, livery_test_adapter:body(Cap)).
+
+concurrency_retry_after_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_concurrency, livery_concurrency:limiter(0, #{retry_after => 30})}],
+        fun(_R) -> error(must_not_be_called) end,
+        #{}
+    ),
+    ?assertEqual(503, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"30">>, livery_test_adapter:header(<<"retry-after">>, Cap)).
+
+concurrency_custom_status_test() ->
+    Opts = #{status => 429, body => <<"slow down">>},
+    Cap = livery_test_adapter:run(
+        [{livery_concurrency, livery_concurrency:limiter(0, Opts)}],
+        fun(_R) -> error(must_not_be_called) end,
+        #{}
+    ),
+    ?assertEqual(429, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"slow down">>, livery_test_adapter:body(Cap)).
+
+concurrency_holds_and_releases_test() ->
+    %% Shared limiter (one atomics ref) across all requests.
+    Stack = [{livery_concurrency, livery_concurrency:limiter(2)}],
+    Self = self(),
+    Blocking = fun(_R) ->
+        %% The slot is acquired before the handler runs, so by here it is
+        %% held; signal readiness, then block until released.
+        Self ! {entered, self()},
+        receive
+            finish -> ok
+        end,
+        livery_resp:text(200, <<"ok">>)
+    end,
+    Runners = [
+        spawn(fun() ->
+            Cap = livery_test_adapter:run(Stack, Blocking, #{}),
+            Self ! {done, self(), livery_test_adapter:status(Cap)}
+        end)
+     || _ <- lists:seq(1, 2)
+    ],
+    %% Wait until BOTH slots are provably occupied before the 3rd request.
+    Entered = [
+        receive
+            {entered, P} -> P
+        after 2000 -> error(handler_did_not_enter)
+        end
+     || _ <- lists:seq(1, 2)
+    ],
+    %% Third request is shed before its handler runs (no block).
+    Cap3 = livery_test_adapter:run(
+        Stack, fun(_R) -> error(must_not_be_called) end, #{}
+    ),
+    ?assertEqual(503, livery_test_adapter:status(Cap3)),
+    %% Release the held handlers; both complete with 200.
+    [P ! finish || P <- Entered],
+    [
+        receive
+            {done, _, S} -> ?assertEqual(200, S)
+        after 2000 -> error(runner_did_not_finish)
+        end
+     || _ <- Runners
+    ],
+    %% Slots returned: a fresh request is admitted.
+    Cap4 = livery_test_adapter:run(
+        Stack, fun(_R) -> livery_resp:text(200, <<"ok">>) end, #{}
+    ),
+    ?assertEqual(200, livery_test_adapter:status(Cap4)).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 

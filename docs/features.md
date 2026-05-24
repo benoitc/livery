@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1-3 are done.
+Modern web/AI framework gaps, in priority order. Steps 1-4 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -22,7 +22,11 @@ Modern web/AI framework gaps, in priority order. Steps 1-3 are done.
    PRs, link system libs): `livery_brotli` (NIF, `br`) and
    `livery_zstd` (cmake NIF, `zstd`) implement the same behaviour and
    self-register via `livery_codec:register/1`.
-4. Multipart / form-data body parsing (uploads, multimodal).
+4. Multipart / form-data body parsing (uploads, multimodal). DONE:
+   `livery_multipart` (streaming pull parser + `read_all`, bounded
+   buffering, filename returned verbatim) and `livery_ext:read_form/1,2`
+   (streaming urlencoded). See `docs/guides/handle-file-uploads.md` and
+   `docs/guides/parse-form-bodies.md`.
 5. Concurrency limit / load-shedding middleware (admission control).
 6. Security-headers middleware (HSTS/CSP/etc). DONE:
    `livery_security_headers` (nosniff, frame options, referrer policy,

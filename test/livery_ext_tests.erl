@@ -165,6 +165,60 @@ form_malformed_percent_passes_through_test() ->
     ?assertEqual({ok, [{<<"a">>, <<"%ZZ">>}]}, livery_ext:form(Req)).
 
 %%====================================================================
+%% read_form (streaming urlencoded)
+%%====================================================================
+
+read_form_buffered_test() ->
+    Req = form_req(<<"a=1&b=two+words&c=%2F">>),
+    ?assertEqual(
+        {ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"two words">>}, {<<"c">>, <<"/">>}]},
+        livery_ext:read_form(Req)
+    ).
+
+read_form_stream_test() ->
+    Req = form_stream_req([<<"a=1&">>, <<"b=2">>]),
+    ?assertEqual(
+        {ok, [{<<"a">>, <<"1">>}, {<<"b">>, <<"2">>}]},
+        livery_ext:read_form(Req)
+    ).
+
+read_form_case_insensitive_ct_test() ->
+    Req = ct_req(
+        <<"Application/X-WWW-Form-Urlencoded; charset=utf-8">>,
+        {buffered, <<"a=1">>}
+    ),
+    ?assertEqual({ok, [{<<"a">>, <<"1">>}]}, livery_ext:read_form(Req)).
+
+read_form_malformed_escape_verbatim_test() ->
+    Req = form_req(<<"a=%ZZ">>),
+    ?assertEqual({ok, [{<<"a">>, <<"%ZZ">>}]}, livery_ext:read_form(Req)).
+
+read_form_wrong_content_type_test() ->
+    Req = ct_req(<<"application/json">>, {buffered, <<"a=1">>}),
+    ?assertEqual({error, not_form}, livery_ext:read_form(Req)).
+
+read_form_no_content_type_test() ->
+    ?assertEqual({error, not_form}, livery_ext:read_form(with_body(<<"a=1">>))).
+
+read_form_empty_body_test() ->
+    Req = ct_req(<<"application/x-www-form-urlencoded">>, empty),
+    ?assertEqual({error, no_body}, livery_ext:read_form(Req)).
+
+read_form_max_size_buffered_test() ->
+    Req = form_req(<<"a=1234567890">>),
+    ?assertEqual(
+        {error, {limit, max_size}},
+        livery_ext:read_form(Req, #{max_size => 4})
+    ).
+
+read_form_max_size_stream_test() ->
+    Req = form_stream_req([<<"aaaa">>, <<"bbbb">>, <<"cccc">>]),
+    ?assertEqual(
+        {error, {limit, max_size}},
+        livery_ext:read_form(Req, #{max_size => 5})
+    ).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 
@@ -189,3 +243,21 @@ req_with_auth(Value) ->
         path => <<"/">>,
         headers => [{<<"authorization">>, Value}]
     }).
+
+ct_req(ContentType, Body) ->
+    livery_req:new(#{
+        protocol => h1,
+        method => <<"POST">>,
+        path => <<"/">>,
+        headers => [{<<"content-type">>, ContentType}],
+        body => Body
+    }).
+
+form_req(Bin) ->
+    ct_req(<<"application/x-www-form-urlencoded">>, {buffered, Bin}).
+
+form_stream_req(Chunks) ->
+    Ref = make_ref(),
+    [self() ! {livery_body, Ref, {data, C}} || C <- Chunks],
+    self() ! {livery_body, Ref, eof},
+    ct_req(<<"application/x-www-form-urlencoded">>, {stream, livery_body:new(Ref)}).

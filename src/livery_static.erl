@@ -251,47 +251,16 @@ etag(Size, Mtime) ->
     M = integer_to_binary(Mtime),
     <<"W/\"", S/binary, "-", M/binary, "\"">>.
 
+%% Look up the MIME type via `mimerl` (it expects a binary path so that
+%% `filename:extension/1` yields a binary), then add a UTF-8 charset to
+%% `text/*` types.
 -spec mime_type(string()) -> binary().
 mime_type(Path) ->
-    Ext = string:lowercase(filename:extension(Path)),
-    maps:get(iolist_to_binary(Ext), mime_map(), <<"application/octet-stream">>).
+    with_charset(mimerl:filename(iolist_to_binary(Path))).
 
--spec mime_map() -> #{binary() => binary()}.
-mime_map() ->
-    #{
-        <<".html">> => <<"text/html; charset=utf-8">>,
-        <<".htm">> => <<"text/html; charset=utf-8">>,
-        <<".css">> => <<"text/css; charset=utf-8">>,
-        <<".js">> => <<"text/javascript; charset=utf-8">>,
-        <<".mjs">> => <<"text/javascript; charset=utf-8">>,
-        <<".json">> => <<"application/json">>,
-        <<".xml">> => <<"application/xml">>,
-        <<".txt">> => <<"text/plain; charset=utf-8">>,
-        <<".md">> => <<"text/markdown; charset=utf-8">>,
-        <<".csv">> => <<"text/csv; charset=utf-8">>,
-        <<".svg">> => <<"image/svg+xml">>,
-        <<".png">> => <<"image/png">>,
-        <<".jpg">> => <<"image/jpeg">>,
-        <<".jpeg">> => <<"image/jpeg">>,
-        <<".gif">> => <<"image/gif">>,
-        <<".webp">> => <<"image/webp">>,
-        <<".avif">> => <<"image/avif">>,
-        <<".ico">> => <<"image/x-icon">>,
-        <<".woff">> => <<"font/woff">>,
-        <<".woff2">> => <<"font/woff2">>,
-        <<".ttf">> => <<"font/ttf">>,
-        <<".otf">> => <<"font/otf">>,
-        <<".wasm">> => <<"application/wasm">>,
-        <<".pdf">> => <<"application/pdf">>,
-        <<".zip">> => <<"application/zip">>,
-        <<".gz">> => <<"application/gzip">>,
-        <<".map">> => <<"application/json">>,
-        <<".webmanifest">> => <<"application/manifest+json">>,
-        <<".mp4">> => <<"video/mp4">>,
-        <<".webm">> => <<"video/webm">>,
-        <<".mp3">> => <<"audio/mpeg">>,
-        <<".wav">> => <<"audio/wav">>
-    }.
+-spec with_charset(binary()) -> binary().
+with_charset(<<"text/", _/binary>> = Type) -> <<Type/binary, "; charset=utf-8">>;
+with_charset(Type) -> Type.
 
 %% Parse a single `Range: bytes=A-B | A- | -N` into `{Offset, Length|eof}`;
 %% `undefined` when absent, multi-range, or malformed (emit yields 416 on

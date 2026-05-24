@@ -43,7 +43,8 @@
     gzip_with_trailers/1,
     multipart_echo/1,
     concurrency_shed/1,
-    rate_limit_shed/1
+    rate_limit_shed/1,
+    conditional_get/1
 ]).
 
 %%====================================================================
@@ -71,7 +72,8 @@ groups() ->
         gzip_with_trailers,
         multipart_echo,
         concurrency_shed,
-        rate_limit_shed
+        rate_limit_shed,
+        conditional_get
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -433,6 +435,17 @@ rate_limit_shed(Config) ->
     H = fun(_R) -> livery_resp:text(200, <<"ok">>) end,
     ?assertEqual(200, status(drive(Config, Stack, H, #{}))),
     ?assertEqual(429, status(drive(Config, Stack, H, #{}))).
+
+conditional_get(Config) ->
+    Stack = [{livery_etag, #{}}],
+    H = fun(_R) -> livery_resp:json(200, <<"{\"v\":1}">>) end,
+    R1 = drive(Config, Stack, H, #{}),
+    ?assertEqual(200, status(R1)),
+    ETag = header(<<"etag">>, R1),
+    ?assert(is_binary(ETag)),
+    R2 = drive(Config, Stack, H, #{headers => [{<<"if-none-match">>, ETag}]}),
+    ?assertEqual(304, status(R2)),
+    ?assertEqual(<<>>, body(R2)).
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

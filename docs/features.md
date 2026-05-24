@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1-6 are done.
+Modern web/AI framework gaps, in priority order. Steps 1-7 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -40,6 +40,9 @@ Modern web/AI framework gaps, in priority order. Steps 1-6 are done.
    `livery_ratelimit_store` ETS table. See
    `docs/guides/rate-limit-requests.md`.
 8. HTTP caching primitives (ETag, conditional GET, Cache-Control).
+   DONE: `livery_etag` (auto strong/weak ETag, `If-None-Match` -> 304,
+   handler override) plus `livery_resp:with_etag/2` and
+   `with_cache_control/2`. See `docs/guides/http-caching.md`.
 9. Static-directory serving with ETag/MIME.
 10. Health/readiness endpoints + Prometheus `/metrics`.
 

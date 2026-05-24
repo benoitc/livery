@@ -25,6 +25,8 @@ Response builders here are pure: they never touch sockets.
     delete_header/2,
     with_trailers/2,
     with_body/2,
+    with_etag/2,
+    with_cache_control/2,
 
     text/2,
     text/3,
@@ -51,7 +53,21 @@ Response builders here are pure: they never touch sockets.
     upgrade/2
 ]).
 
--export_type([resp/0, body/0]).
+-export_type([resp/0, body/0, cache_directive/0]).
+
+-type cache_directive() ::
+    no_cache
+    | no_store
+    | public
+    | private
+    | immutable
+    | must_revalidate
+    | proxy_revalidate
+    | no_transform
+    | {max_age, non_neg_integer()}
+    | {s_maxage, non_neg_integer()}
+    | {stale_while_revalidate, non_neg_integer()}
+    | {stale_if_error, non_neg_integer()}.
 
 -type resp() :: #livery_resp{}.
 -type header_name() :: binary().
@@ -147,6 +163,29 @@ after the handler has produced the response.
 -spec with_body(body(), resp()) -> resp().
 with_body(Body, Resp) ->
     Resp#livery_resp{body = Body}.
+
+-doc """
+Set the `ETag` header.
+
+A value already shaped as a strong (`"..."`) or weak (`W/"..."`) tag is
+used as-is; a bare token is wrapped as a strong ETag.
+""".
+-spec with_etag(binary(), resp()) -> resp().
+with_etag(Tag, Resp) ->
+    with_header(<<"etag">>, format_etag(Tag), Resp).
+
+-doc """
+Set the `Cache-Control` header.
+
+Pass a verbatim binary, or a list of directives: the atoms `no_cache`,
+`no_store`, `public`, `private`, `immutable`, `must_revalidate`,
+`proxy_revalidate`, `no_transform`, or the tuples `{max_age, Secs}`,
+`{s_maxage, Secs}`, `{stale_while_revalidate, Secs}`,
+`{stale_if_error, Secs}`.
+""".
+-spec with_cache_control(binary() | [cache_directive()], resp()) -> resp().
+with_cache_control(Value, Resp) ->
+    with_header(<<"cache-control">>, format_cache_control(Value), Resp).
 
 %%====================================================================
 %% Convenience builders
@@ -368,3 +407,40 @@ is_lower_ascii(_) -> false.
 -spec delete_all(binary(), [{binary(), term()}]) -> [{binary(), term()}].
 delete_all(Key, L) ->
     [KV || {K, _} = KV <- L, K =/= Key].
+
+-spec format_etag(binary()) -> binary().
+format_etag(<<"W/", _/binary>> = Weak) -> Weak;
+format_etag(<<$", _/binary>> = Quoted) -> Quoted;
+format_etag(Tag) -> <<$", Tag/binary, $">>.
+
+-spec format_cache_control(binary() | [cache_directive()]) -> binary().
+format_cache_control(Value) when is_binary(Value) ->
+    Value;
+format_cache_control(Directives) when is_list(Directives) ->
+    iolist_to_binary(lists:join(<<", ">>, [cc_directive(D) || D <- Directives])).
+
+-spec cc_directive(cache_directive()) -> binary().
+cc_directive(no_cache) ->
+    <<"no-cache">>;
+cc_directive(no_store) ->
+    <<"no-store">>;
+cc_directive(public) ->
+    <<"public">>;
+cc_directive(private) ->
+    <<"private">>;
+cc_directive(immutable) ->
+    <<"immutable">>;
+cc_directive(must_revalidate) ->
+    <<"must-revalidate">>;
+cc_directive(proxy_revalidate) ->
+    <<"proxy-revalidate">>;
+cc_directive(no_transform) ->
+    <<"no-transform">>;
+cc_directive({max_age, Secs}) ->
+    <<"max-age=", (integer_to_binary(Secs))/binary>>;
+cc_directive({s_maxage, Secs}) ->
+    <<"s-maxage=", (integer_to_binary(Secs))/binary>>;
+cc_directive({stale_while_revalidate, Secs}) ->
+    <<"stale-while-revalidate=", (integer_to_binary(Secs))/binary>>;
+cc_directive({stale_if_error, Secs}) ->
+    <<"stale-if-error=", (integer_to_binary(Secs))/binary>>.

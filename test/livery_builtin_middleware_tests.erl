@@ -565,8 +565,157 @@ concurrency_holds_and_releases_test() ->
     ?assertEqual(200, livery_test_adapter:status(Cap4)).
 
 %%====================================================================
+%% livery_etag
+%%====================================================================
+
+etag_auto_added_on_full_get_test() ->
+    Cap = run_get([{livery_etag, #{}}], json_handler(), []),
+    ?assertEqual(200, livery_test_adapter:status(Cap)),
+    E = livery_test_adapter:header(<<"etag">>, Cap),
+    ?assertMatch(<<$", _/binary>>, E).
+
+etag_absent_on_chunked_test() ->
+    Producer = fun(Emit) ->
+        Emit(<<"x">>),
+        ok
+    end,
+    Cap = run_get(
+        [{livery_etag, #{}}],
+        fun(_R) -> livery_resp:stream(200, [], Producer) end,
+        []
+    ),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"etag">>, Cap)).
+
+etag_absent_on_post_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_etag, #{}}], json_handler(), #{method => <<"POST">>}
+    ),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"etag">>, Cap)).
+
+etag_304_on_match_test() ->
+    First = run_get([{livery_etag, #{}}], json_handler(), []),
+    E = livery_test_adapter:header(<<"etag">>, First),
+    Cap = run_get([{livery_etag, #{}}], json_handler(), [{<<"if-none-match">>, E}]),
+    ?assertEqual(304, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<>>, livery_test_adapter:body(Cap)),
+    ?assertEqual(E, livery_test_adapter:header(<<"etag">>, Cap)),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"content-type">>, Cap)).
+
+etag_304_on_star_test() ->
+    Cap = run_get(
+        [{livery_etag, #{}}], json_handler(), [{<<"if-none-match">>, <<"*">>}]
+    ),
+    ?assertEqual(304, livery_test_adapter:status(Cap)).
+
+etag_200_on_nomatch_test() ->
+    Cap = run_get(
+        [{livery_etag, #{}}], json_handler(), [{<<"if-none-match">>, <<"\"other\"">>}]
+    ),
+    ?assertEqual(200, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"{\"a\":1}">>, livery_test_adapter:body(Cap)),
+    ?assert(is_binary(livery_test_adapter:header(<<"etag">>, Cap))).
+
+etag_handler_set_preserved_test() ->
+    H = fun(_R) -> livery_resp:with_etag(<<"v1">>, livery_resp:json(200, <<"{}">>)) end,
+    Cap = run_get([{livery_etag, #{}}], H, []),
+    ?assertEqual(<<"\"v1\"">>, livery_test_adapter:header(<<"etag">>, Cap)),
+    Cap2 = run_get([{livery_etag, #{}}], H, [{<<"if-none-match">>, <<"\"v1\"">>}]),
+    ?assertEqual(304, livery_test_adapter:status(Cap2)).
+
+etag_handler_set_on_chunked_304_test() ->
+    %% Conditional handling is NOT gated on {full, _}.
+    Producer = fun(Emit) ->
+        Emit(<<"data">>),
+        ok
+    end,
+    H = fun(_R) ->
+        livery_resp:with_etag(<<"c1">>, livery_resp:stream(200, [], Producer))
+    end,
+    Cap = run_get([{livery_etag, #{}}], H, [{<<"if-none-match">>, <<"\"c1\"">>}]),
+    ?assertEqual(304, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<>>, livery_test_adapter:body(Cap)).
+
+etag_weak_output_test() ->
+    Cap = run_get([{livery_etag, #{weak => true}}], json_handler(), []),
+    E = livery_test_adapter:header(<<"etag">>, Cap),
+    ?assertMatch(<<"W/\"", _/binary>>, E),
+    Cap2 = run_get(
+        [{livery_etag, #{weak => true}}], json_handler(), [{<<"if-none-match">>, E}]
+    ),
+    ?assertEqual(304, livery_test_adapter:status(Cap2)).
+
+etag_weak_comparison_test() ->
+    H = fun(_R) -> livery_resp:with_etag(<<"v1">>, livery_resp:json(200, <<"{}">>)) end,
+    Cap = run_get([{livery_etag, #{}}], H, [{<<"if-none-match">>, <<"W/\"v1\"">>}]),
+    ?assertEqual(304, livery_test_adapter:status(Cap)).
+
+etag_multiple_inm_headers_test() ->
+    H = fun(_R) -> livery_resp:with_etag(<<"v1">>, livery_resp:json(200, <<"{}">>)) end,
+    Cap = run_get([{livery_etag, #{}}], H, [
+        {<<"if-none-match">>, <<"\"nope\"">>},
+        {<<"if-none-match">>, <<"\"v1\"">>}
+    ]),
+    ?assertEqual(304, livery_test_adapter:status(Cap)).
+
+etag_auto_off_test() ->
+    Cap = run_get([{livery_etag, #{auto => false}}], json_handler(), []),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"etag">>, Cap)).
+
+etag_cache_control_survives_304_test() ->
+    H = fun(_R) ->
+        R = livery_resp:with_cache_control(
+            [public, {max_age, 60}], livery_resp:json(200, <<"{}">>)
+        ),
+        livery_resp:with_etag(<<"v1">>, R)
+    end,
+    Cap = run_get([{livery_etag, #{}}], H, [{<<"if-none-match">>, <<"\"v1\"">>}]),
+    ?assertEqual(304, livery_test_adapter:status(Cap)),
+    ?assertEqual(
+        <<"public, max-age=60">>,
+        livery_test_adapter:header(<<"cache-control">>, Cap)
+    ).
+
+with_etag_quoting_test() ->
+    ?assertEqual(<<"\"abc\"">>, resp_etag(livery_resp:with_etag(<<"abc">>, base_resp()))),
+    ?assertEqual(
+        <<"\"abc\"">>, resp_etag(livery_resp:with_etag(<<"\"abc\"">>, base_resp()))
+    ),
+    ?assertEqual(
+        <<"W/\"abc\"">>, resp_etag(livery_resp:with_etag(<<"W/\"abc\"">>, base_resp()))
+    ).
+
+with_cache_control_format_test() ->
+    R1 = livery_resp:with_cache_control([public, {max_age, 60}, immutable], base_resp()),
+    ?assertEqual(<<"public, max-age=60, immutable">>, resp_cc(R1)),
+    R2 = livery_resp:with_cache_control(<<"no-store">>, base_resp()),
+    ?assertEqual(<<"no-store">>, resp_cc(R2)).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
+
+run_get(Stack, Handler, ReqHeaders) ->
+    livery_test_adapter:run(
+        Stack, Handler, #{method => <<"GET">>, headers => ReqHeaders}
+    ).
+
+json_handler() ->
+    fun(_R) -> livery_resp:json(200, <<"{\"a\":1}">>) end.
+
+base_resp() ->
+    livery_resp:json(200, <<"{}">>).
+
+resp_etag(Resp) ->
+    resp_header(<<"etag">>, Resp).
+
+resp_cc(Resp) ->
+    resp_header(<<"cache-control">>, Resp).
+
+resp_header(Name, Resp) ->
+    case lists:keyfind(Name, 1, livery_resp:headers(Resp)) of
+        {_, V} -> V;
+        false -> undefined
+    end.
 
 run_cors(Cfg, Spec) ->
     livery_test_adapter:run(

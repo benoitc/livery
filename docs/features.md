@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1-5 are done.
+Modern web/AI framework gaps, in priority order. Steps 1-6 are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -34,7 +34,11 @@ Modern web/AI framework gaps, in priority order. Steps 1-5 are done.
 6. Security-headers middleware (HSTS/CSP/etc). DONE:
    `livery_security_headers` (nosniff, frame options, referrer policy,
    HSTS on TLS, opt-in CSP). See `docs/guides/set-security-headers.md`.
-7. Rate limiting / throttling.
+7. Rate limiting / throttling. DONE: `livery_ratelimit` (per-key token
+   bucket via `limiter/2,3`, keyed by bearer token by default, `429` +
+   `RateLimit-*`/`Retry-After`), backed by the supervised
+   `livery_ratelimit_store` ETS table. See
+   `docs/guides/rate-limit-requests.md`.
 8. HTTP caching primitives (ETag, conditional GET, Cache-Control).
 9. Static-directory serving with ETag/MIME.
 10. Health/readiness endpoints + Prometheus `/metrics`.

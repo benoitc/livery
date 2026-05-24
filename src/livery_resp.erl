@@ -24,6 +24,7 @@ Response builders here are pure: they never touch sockets.
     append_header/3,
     delete_header/2,
     with_trailers/2,
+    with_body/2,
 
     text/2,
     text/3,
@@ -136,6 +137,16 @@ been emitted.
 ) -> resp().
 with_trailers(Trailers, Resp) ->
     Resp#livery_resp{trailers = Trailers}.
+
+-doc """
+Replace the body variant, keeping status, headers, and trailers.
+
+Used by middleware (e.g. `livery_compress`) that rewrites the body
+after the handler has produced the response.
+""".
+-spec with_body(body(), resp()) -> resp().
+with_body(Body, Resp) ->
+    Resp#livery_resp{body = Body}.
 
 %%====================================================================
 %% Convenience builders

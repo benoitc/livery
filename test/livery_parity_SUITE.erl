@@ -40,7 +40,8 @@
     middleware_after_response/1,
     full_pipeline_with_builtins/1,
     gzip_negotiation/1,
-    gzip_with_trailers/1
+    gzip_with_trailers/1,
+    multipart_echo/1
 ]).
 
 %%====================================================================
@@ -65,7 +66,8 @@ groups() ->
         middleware_after_response,
         full_pipeline_with_builtins,
         gzip_negotiation,
-        gzip_with_trailers
+        gzip_with_trailers,
+        multipart_echo
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -370,6 +372,43 @@ gzip_with_trailers(Config) ->
         undefined -> ok;
         T -> ?assertEqual([{<<"x-checksum">>, <<"abc">>}], T)
     end.
+
+multipart_echo(Config) ->
+    Body = <<
+        "--PARITYBOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"a\"\r\n\r\n"
+        "hello\r\n"
+        "--PARITYBOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"b\"; filename=\"f.txt\"\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "xy\r\n"
+        "--PARITYBOUNDARY--\r\n"
+    >>,
+    Handler = fun(R) ->
+        {ok, Parts} = livery_multipart:read_all(R),
+        Summary = lists:join(
+            <<",">>,
+            [
+                [maps:get(name, P), <<":">>, integer_to_binary(byte_size(maps:get(body, P)))]
+             || P <- Parts
+            ]
+        ),
+        livery_resp:text(200, iolist_to_binary(Summary))
+    end,
+    Resp = drive(
+        Config,
+        [],
+        Handler,
+        #{
+            method => <<"POST">>,
+            body => {buffered, Body},
+            headers => [
+                {<<"content-type">>, <<"multipart/form-data; boundary=PARITYBOUNDARY">>}
+            ]
+        }
+    ),
+    ?assertEqual(200, status(Resp)),
+    ?assertEqual(<<"a:5,b:2">>, body(Resp)).
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

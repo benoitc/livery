@@ -16,6 +16,8 @@ when the route is configured for buffered intake).
 -export([
     json/1,
     form/1,
+    read_form/1,
+    read_form/2,
     path_param/2,
     query/2,
     header/2,
@@ -27,10 +29,16 @@ when the route is configured for buffered intake).
     session/2
 ]).
 
--export_type([json_error/0, form_error/0]).
+-export_type([json_error/0, form_error/0, read_form_error/0]).
 
 -type json_error() :: no_body | invalid_json | not_buffered.
 -type form_error() :: no_body | not_buffered.
+-type read_form_error() ::
+    not_form
+    | no_body
+    | {limit, max_size}
+    | {client_reset, term()}
+    | timeout.
 
 %%====================================================================
 %% Body extractors
@@ -67,6 +75,81 @@ form(#livery_req{body = {buffered, IoData}}) ->
     {ok, decode_form(iolist_to_binary(IoData))};
 form(#livery_req{body = {stream, _}}) ->
     {error, not_buffered}.
+
+-doc """
+Decode an `application/x-www-form-urlencoded` body, draining the stream.
+
+Unlike `form/1` (which requires an already-buffered body), this reads a
+streaming body to completion (bounded by `max_size`, default 1 MiB) and
+decodes it. A buffered body is decoded directly. The Content-Type check
+is case-insensitive and parameter-tolerant. Malformed percent escapes
+are preserved verbatim (same decoder as `form/1`).
+""".
+-spec read_form(livery_req:req()) ->
+    {ok, [{binary(), binary()}]} | {error, read_form_error()}.
+read_form(Req) ->
+    read_form(Req, #{}).
+
+-doc "`read_form/1` with `#{max_size => Bytes, timeout => Ms}` options.".
+-spec read_form(livery_req:req(), map()) ->
+    {ok, [{binary(), binary()}]} | {error, read_form_error()}.
+read_form(Req, Opts) ->
+    case is_urlencoded(Req) of
+        false ->
+            {error, not_form};
+        true ->
+            MaxSize = maps:get(max_size, Opts, 1048576),
+            Timeout = maps:get(timeout, Opts, 5000),
+            read_form_body(livery_req:body(Req), MaxSize, Timeout)
+    end.
+
+-spec read_form_body(
+    empty | {buffered, iodata()} | {stream, term()},
+    pos_integer(),
+    timeout()
+) -> {ok, [{binary(), binary()}]} | {error, read_form_error()}.
+read_form_body(empty, _MaxSize, _Timeout) ->
+    {error, no_body};
+read_form_body({buffered, IoData}, MaxSize, _Timeout) ->
+    Bin = iolist_to_binary(IoData),
+    case byte_size(Bin) > MaxSize of
+        true -> {error, {limit, max_size}};
+        false -> {ok, decode_form(Bin)}
+    end;
+read_form_body({stream, Reader}, MaxSize, Timeout) ->
+    case drain(Reader, Timeout, MaxSize, []) of
+        {ok, Bin} -> {ok, decode_form(Bin)};
+        {error, Reason} -> {error, Reason}
+    end.
+
+-spec is_urlencoded(livery_req:req()) -> boolean().
+is_urlencoded(Req) ->
+    case livery_req:header(<<"content-type">>, Req) of
+        undefined -> false;
+        Value -> normalize_ct(Value) =:= <<"application/x-www-form-urlencoded">>
+    end.
+
+-spec normalize_ct(binary()) -> binary().
+normalize_ct(Value) ->
+    Lower = iolist_to_binary(string:lowercase(Value)),
+    [Main | _] = binary:split(Lower, <<";">>),
+    iolist_to_binary(string:trim(Main)).
+
+-spec drain(term(), timeout(), pos_integer(), [iodata()]) ->
+    {ok, binary()} | {error, read_form_error()}.
+drain(Reader, Timeout, MaxSize, Acc) ->
+    case livery_body:read(Reader, Timeout) of
+        {ok, Chunk, Reader1} ->
+            Acc1 = [Chunk | Acc],
+            case iolist_size(Acc1) > MaxSize of
+                true -> {error, {limit, max_size}};
+                false -> drain(Reader1, Timeout, MaxSize, Acc1)
+            end;
+        {done, _Reader1} ->
+            {ok, iolist_to_binary(lists:reverse(Acc))};
+        {error, Reason, _Reader1} ->
+            {error, Reason}
+    end.
 
 %%====================================================================
 %% Path, query, header, auth

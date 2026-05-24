@@ -24,7 +24,7 @@ ETag is of the uncompressed body and you rely on `Vary: Accept-Encoding`
 """.
 -behaviour(livery_middleware).
 
--export([call/3]).
+-export([call/3, if_none_match/2]).
 
 -define(STRIPPED, [
     <<"content-length">>,
@@ -111,7 +111,7 @@ conditional(Req, Resp) ->
         undefined ->
             Resp;
         ETag ->
-            case matches(Req, ETag) of
+            case if_none_match(Req, ETag) of
                 true -> to_304(Resp);
                 false -> Resp
             end
@@ -124,8 +124,14 @@ etag_value(Resp) ->
         false -> undefined
     end.
 
--spec matches(livery_req:req(), binary()) -> boolean().
-matches(Req, ETag) ->
+-doc """
+True if the request's `If-None-Match` matches `ETag`.
+
+Honors `*` and uses RFC 9110 weak comparison. Exposed so other handlers
+(e.g. `livery_static`) share one conditional-request implementation.
+""".
+-spec if_none_match(livery_req:req(), binary()) -> boolean().
+if_none_match(Req, ETag) ->
     Tags = if_none_match_tags(Req),
     lists:member(<<"*">>, Tags) orelse
         lists:any(fun(Tag) -> weak_equal(Tag, ETag) end, Tags).

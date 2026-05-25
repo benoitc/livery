@@ -45,7 +45,9 @@
     concurrency_shed/1,
     rate_limit_shed/1,
     conditional_get/1,
-    static_file/1
+    static_file/1,
+    health_live/1,
+    metrics_export/1
 ]).
 
 %%====================================================================
@@ -75,7 +77,9 @@ groups() ->
         concurrency_shed,
         rate_limit_shed,
         conditional_get,
-        static_file
+        static_file,
+        health_live,
+        metrics_export
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -471,6 +475,20 @@ static_file(Config) ->
     after
         _ = file:del_dir_r(Dir)
     end.
+
+health_live(Config) ->
+    Resp = drive(Config, [], livery_health:live(), #{}),
+    ?assertEqual(200, status(Resp)),
+    ?assertEqual(<<"{\"status\":\"ok\"}">>, body(Resp)).
+
+metrics_export(Config) ->
+    %% init_per_suite starts livery, so the instrument registry is up.
+    Resp = drive(Config, [], livery_metrics:handler(), #{}),
+    ?assertEqual(200, status(Resp)),
+    ?assertMatch(
+        <<"text/plain; version=0.0.4", _/binary>>,
+        header(<<"content-type">>, Resp)
+    ).
 
 %%====================================================================
 %% Uniform driver API: returns a `response()' tuple

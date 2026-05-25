@@ -19,8 +19,11 @@ Attributes follow the conventions:
 - `url.scheme`
 
 State: `#{meter => binary() | atom()}` (defaults to `<<"livery">>`).
-Instruments are created lazily on first request and cached in
-`persistent_term/1` keyed by meter name.
+Instruments are resolved from the `instrument` registry on each request
+(`create_*` is idempotent and returns the existing handle by name), so
+the registry is the single source of truth and a registry restart
+self-heals. If the registry is unavailable, the request is served
+without metrics rather than failing.
 """.
 -behaviour(livery_middleware).
 
@@ -30,48 +33,76 @@ Instruments are created lazily on first request and cached in
     livery_resp:resp().
 call(Req, Next, State) ->
     Meter = maps:get(meter, State, <<"livery">>),
-    {Active, Duration} = get_instruments(Meter),
+    case instruments(Meter) of
+        {Active, Duration} ->
+            measure(Req, Next, Active, Duration);
+        skip ->
+            %% Instrument registry unavailable (e.g. restarting): serve
+            %% the request without metrics rather than failing it.
+            Next(Req)
+    end.
+
+%% Resolve the instrument pair from instrument's own registry. create_*
+%% is idempotent (persistent_term-backed by name), so this is a couple of
+%% registry reads on the hot path and the registry stays the single source
+%% of truth (a registry restart self-heals). Creation goes through
+%% instrument_registry (a gen_server:call), which exits `noproc' if the
+%% registry is down/restarting; catch that (and anything else) so an
+%% instrument outage never fails the request.
+-spec instruments(binary() | atom()) ->
+    {instrument_meter:instrument(), instrument_meter:instrument()} | skip.
+instruments(Meter) ->
+    try
+        M = instrument_meter:get_meter(Meter),
+        Active = instrument_meter:create_up_down_counter(
+            M,
+            <<"http.server.active_requests">>,
+            #{
+                description => <<"Number of active HTTP server requests">>,
+                unit => <<"{request}">>
+            }
+        ),
+        Duration = instrument_meter:create_histogram(
+            M,
+            <<"http.server.request.duration">>,
+            #{
+                description => <<"Duration of HTTP server requests">>,
+                unit => <<"s">>
+            }
+        ),
+        {Active, Duration}
+    catch
+        _Class:_Reason -> skip
+    end.
+
+-spec measure(
+    livery_req:req(),
+    livery_middleware:next(),
+    instrument_meter:instrument(),
+    instrument_meter:instrument()
+) -> livery_resp:resp().
+measure(Req, Next, Active, Duration) ->
     StartAttrs = active_attrs(Req),
-    _ = instrument_meter:add(Active, 1, StartAttrs),
+    track(fun() -> instrument_meter:add(Active, 1, StartAttrs) end),
     Start = erlang:monotonic_time(),
     try
         Resp = Next(Req),
         Elapsed = erlang:monotonic_time() - Start,
         Secs = erlang:convert_time_unit(Elapsed, native, microsecond) / 1.0e6,
-        _ = instrument_meter:record(Duration, Secs, dur_attrs(Req, Resp)),
+        track(fun() -> instrument_meter:record(Duration, Secs, dur_attrs(Req, Resp)) end),
         Resp
     after
-        _ = instrument_meter:add(Active, -1, StartAttrs)
+        track(fun() -> instrument_meter:add(Active, -1, StartAttrs) end)
     end.
 
--spec get_instruments(binary() | atom()) ->
-    {instrument_meter:instrument(), instrument_meter:instrument()}.
-get_instruments(Meter) ->
-    Key = {?MODULE, Meter},
-    case persistent_term:get(Key, undefined) of
-        undefined ->
-            M = instrument_meter:get_meter(Meter),
-            Active = instrument_meter:create_up_down_counter(
-                M,
-                <<"http.server.active_requests">>,
-                #{
-                    description => <<"Number of active HTTP server requests">>,
-                    unit => <<"{request}">>
-                }
-            ),
-            Duration = instrument_meter:create_histogram(
-                M,
-                <<"http.server.request.duration">>,
-                #{
-                    description => <<"Duration of HTTP server requests">>,
-                    unit => <<"s">>
-                }
-            ),
-            Pair = {Active, Duration},
-            ok = persistent_term:put(Key, Pair),
-            Pair;
-        Pair ->
-            Pair
+%% Metrics are best-effort: never let a metric op fail the request.
+-spec track(fun(() -> term())) -> ok.
+track(Fun) ->
+    try
+        _ = Fun(),
+        ok
+    catch
+        _Class:_Reason -> ok
     end.
 
 -spec active_attrs(livery_req:req()) -> map().

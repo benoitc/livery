@@ -13,6 +13,7 @@
 -include_lib("stdlib/include/assert.hrl").
 
 -export([
+    suite/0,
     all/0,
     init_per_suite/1,
     end_per_suite/1,
@@ -31,6 +32,12 @@
 %%====================================================================
 %% Suite plumbing
 %%====================================================================
+
+%% Bound every case so a wire-level stall (the in-VM QUIC path has hung
+%% the ubuntu CI job for hours) fails fast instead of running to the
+%% 30-minute CT default or the 6-hour GitHub job limit.
+suite() ->
+    [{timetrap, {seconds, 60}}].
 
 all() ->
     [
@@ -130,10 +137,16 @@ h1_echo_text_frame(Config) ->
         handler_opts => #{parent => Self}
     }),
     try
+        %% The handler emits a `ready' frame on connect; wait for it so
+        %% the stream is provably live before sending our own frame.
+        receive
+            {captured, {text, <<"ready">>}} -> ok
+        after 15000 -> ct:fail(no_ready_frame)
+        end,
         ok = ws:send(Sess, [{text, <<"hello">>}]),
         receive
             {captured, {text, <<"hello">>}} -> ok
-        after 2000 -> ct:fail(no_echo_frame)
+        after 15000 -> ct:fail(no_echo_frame)
         end
     after
         catch ws:close(Sess, 1000, <<"bye">>),
@@ -179,11 +192,16 @@ h2_echo_text_frame(Config) ->
         ),
         %% Extended CONNECT succeeds with a 200 response.
         200 = wait_h2_status(Conn, StreamId),
+        %% Wait for the handler's `ready' frame so the stream is provably
+        %% live before sending our own; thread the parser to the echo.
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {Ready, Parser1} = recv_ws_frame(Conn, StreamId, Parser0),
+        ?assertEqual({text, <<"ready">>}, Ready),
         %% Send a masked client text frame as h2 DATA.
         Frame = iolist_to_binary(ws_frame:encode({text, <<"over-h2">>}, client)),
         ok = h2:send_data(Conn, StreamId, Frame, false),
         %% Receive the echoed (unmasked, server-role) frame.
-        Echo = recv_ws_frame(Conn, StreamId, ws_frame:init_parser(#{role => client})),
+        {Echo, _Parser2} = recv_ws_frame(Conn, StreamId, Parser1),
         ?assertEqual({text, <<"over-h2">>}, Echo)
     after
         h2:close(Conn)
@@ -235,13 +253,12 @@ h3_echo_text_frame(Config) ->
             #{end_stream => false}
         ),
         200 = wait_h3_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {Ready, Parser1} = recv_ws_frame_h3(Conn, StreamId, Parser0),
+        ?assertEqual({text, <<"ready">>}, Ready),
         Frame = iolist_to_binary(ws_frame:encode({text, <<"over-h3">>}, client)),
         ok = quic_h3:send_data(Conn, StreamId, Frame, false),
-        Echo = recv_ws_frame_h3(
-            Conn,
-            StreamId,
-            ws_frame:init_parser(#{role => client})
-        ),
+        {Echo, _Parser2} = recv_ws_frame_h3(Conn, StreamId, Parser1),
         ?assertEqual({text, <<"over-h3">>}, Echo)
     after
         catch quic_h3:close(Conn)
@@ -251,19 +268,21 @@ wait_h3_status(Conn, StreamId) ->
     receive
         {quic_h3, Conn, {response, StreamId, Status, _Hs}} -> Status;
         {quic_h3, Conn, _Other} -> wait_h3_status(Conn, StreamId)
-    after 5000 -> ct:fail(h3_no_response)
+    after 15000 -> ct:fail(h3_no_response)
     end.
 
+%% Returns `{Frame, Parser}' so the parser (and any buffered bytes) can be
+%% threaded across the `ready' frame and the subsequent echo.
 recv_ws_frame_h3(Conn, StreamId, Parser) ->
     receive
         {quic_h3, Conn, {data, StreamId, Bin, _Fin}} ->
             case ws_frame:parse(Parser, Bin) of
-                {ok, [Frame | _], _P} -> Frame;
+                {ok, [Frame | _], P} -> {Frame, P};
                 {ok, [], P} -> recv_ws_frame_h3(Conn, StreamId, P)
             end;
         {quic_h3, Conn, _Other} ->
             recv_ws_frame_h3(Conn, StreamId, Parser)
-    after 5000 ->
+    after 15000 ->
         ct:fail(no_ws_frame_over_h3)
     end.
 
@@ -275,18 +294,20 @@ wait_h2_status(Conn, StreamId) ->
     receive
         {h2, Conn, {response, StreamId, Status, _Hs}} -> Status;
         {h2, Conn, _Other} -> wait_h2_status(Conn, StreamId)
-    after 5000 -> ct:fail(h2_no_response)
+    after 15000 -> ct:fail(h2_no_response)
     end.
 
+%% Returns `{Frame, Parser}' so the parser (and any buffered bytes) can be
+%% threaded across the `ready' frame and the subsequent echo.
 recv_ws_frame(Conn, StreamId, Parser) ->
     receive
         {h2, Conn, {data, StreamId, Bin, _Fin}} ->
             case ws_frame:parse(Parser, Bin) of
-                {ok, [Frame | _], _P} -> Frame;
+                {ok, [Frame | _], P} -> {Frame, P};
                 {ok, [], P} -> recv_ws_frame(Conn, StreamId, P)
             end;
         {h2, Conn, _Other} ->
             recv_ws_frame(Conn, StreamId, Parser)
-    after 5000 ->
+    after 15000 ->
         ct:fail(no_ws_frame_over_h2)
     end.

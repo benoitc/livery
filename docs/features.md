@@ -5,7 +5,7 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. Steps 1-8 are done.
+Modern web/AI framework gaps, in priority order. All 10 items are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
@@ -47,7 +47,11 @@ Modern web/AI framework gaps, in priority order. Steps 1-8 are done.
    (`handler/1,2` mounted on a `*path` wildcard route; MIME by extension,
    weak ETag + conditional GET, Range, directory index, strict path
    confinement). See `docs/guides/serve-static-files.md`.
-10. Health/readiness endpoints + Prometheus `/metrics`.
+10. Health/readiness endpoints + Prometheus `/metrics`. DONE:
+    `livery_health` (`live/0`, `ready/1` with named checks) and
+    `livery_metrics` (`handler/0` rendering the `instrument` registry via
+    `instrument_prometheus`). See `docs/guides/health-checks.md` and
+    `docs/guides/export-metrics.md`.
 
 ## Benchmarking: H3 needs an external client
 

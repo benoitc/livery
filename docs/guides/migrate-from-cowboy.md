@@ -127,9 +127,20 @@ Livery (after Phase 4):
 }).
 ```
 
-Until Phase 4 lands, only the test adapter is wired. You can run
-the same handlers in EUnit through `livery_test_adapter:run/3`
-today.
+The H1/H2/H3 adapters are wired, so the same handler set serves all
+three protocols from one `start_service/1` call. You can also drive
+handlers in EUnit through `livery_test_adapter:run/3`.
+
+## Validated against Cowboy
+
+`examples/livery_example_migration.erl` is the "after" side of this
+guide: a plain handler, a small REST resource, SSE, a streaming
+(`cowboy_loop`) replacement, and a WebSocket echo, all in Livery.
+`test/livery_cowboy_parity_SUITE.erl` runs that exact handler set behind
+both a live Cowboy listener and Livery and diffs the observable behaviour
+(status, content-type, body, framing) over H1, then drives the same
+Livery handlers over H2 and H3 to show the protocol upgrade Cowboy cannot
+give you. The mappings in this guide are enforced by that suite.
 
 ## Cowboy concepts that do not move
 
@@ -146,5 +157,7 @@ today.
 
 - Concept: [Architecture](../concepts/architecture.md)
 - Tutorial: [Your first service](../tutorials/your-first-service.md)
+- Example: `examples/livery_example_migration.erl` and
+  `test/livery_cowboy_parity_SUITE.erl`
 - Project plan: [rewrite_plan.md](../rewrite_plan.md) (Phase 13:
-  cutover validation against `erllama_server`)
+  Cowboy cutover validation)

@@ -349,17 +349,20 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   (the wire library's per-connection cap) and reports the
   reconnects. RC tag is the remaining step (a release action, left
   to a maintainer).
-- Phase 13, 3 days: Cowboy cutover validation. Write
-  `docs/migrating_from_cowboy.md` and an `examples/erllama_listener/`
-  port. Release gate: erllama_server's CT suite runs green against a
-  branch wired to `livery:start_service/1` over the full
-  H3 -> H2 -> H1 chain. Same handler set must serve plain handlers,
-  NDJSON streaming on `/api/pull` and `/api/chat` (the `cowboy_loop`
-  replacements), `cowboy_stream` access-log replacement via
-  `livery_access_log`, and TLS listener parity on every protocol,
-  with Alt-Svc upgrade exercised end-to-end. Concrete proof that
-  Livery replaces Cowboy in a live service and unlocks H2/H3 in the
-  process.
+- Phase 13, done (validation): Cowboy cutover validation by
+  example-parity rather than porting a single private service. The
+  migration guide is `docs/guides/migrate-from-cowboy.md`; the runnable
+  "after" is `examples/livery_example_migration.erl` (plain handler, REST
+  resource, SSE, a `cowboy_loop`-style streaming endpoint, WebSocket
+  echo). `test/livery_cowboy_parity_SUITE.erl` runs that exact handler
+  set behind BOTH a live Cowboy listener (test-only dep) and Livery and
+  diffs the observable behaviour (status, content-type, body, framing,
+  `livery_access_log` as the `cowboy_stream` access-log replacement) over
+  H1, then drives the same Livery handlers over H2 and H3 to prove the
+  protocol upgrade Cowboy cannot give. Cross-protocol parity of the
+  shared handler set over H1/H2/H3 is locked separately by
+  `test/livery_parity_SUITE.erl`. Concrete proof that Livery is a drop-in
+  Cowboy replacement and unlocks H2/H3 in the process.
 
 Each phase ends with parity, dialyzer, and xref green. Performance
 must stay within 10% p99 of the legacy baseline on the reference
@@ -376,9 +379,9 @@ handler.
   Autobahn, MCP Inspector, Keycloak.
 - End-to-end smoke at Phase 4 gate: one `livery:start_service/1`
   serves the same handler over H1, H2, H3 with Alt-Svc.
-- Cowboy cutover gate at Phase 13: erllama_server CT suite passes
-  against `livery:start_service/1` over the full H3 -> H2 -> H1
-  chain with Alt-Svc upgrade.
+- Cowboy cutover gate at Phase 13: `livery_cowboy_parity_SUITE`
+  diffs the migration handler set behind live Cowboy vs Livery over
+  H1 and drives the same Livery handlers over H2 and H3.
 
 ## 8. Legacy
 

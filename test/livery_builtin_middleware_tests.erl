@@ -147,6 +147,36 @@ access_log_emits_and_returns_response_test() ->
         logger:set_primary_config(level, maps:get(level, Primary))
     end.
 
+access_log_sanitizes_control_bytes_test() ->
+    Self = self(),
+    HandlerId = test_handler_sanitize,
+    Primary = logger:get_primary_config(),
+    ok = logger:set_primary_config(level, all),
+    ok = logger:add_handler(
+        HandlerId,
+        ?MODULE,
+        #{config => Self, level => all, formatter => {logger_formatter, #{}}}
+    ),
+    try
+        Handler = fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        _ = livery_test_adapter:run(
+            [{livery_access_log, #{}}],
+            Handler,
+            #{method => <<"GET">>, path => <<"/a\r\nb\tc">>}
+        ),
+        receive
+            {log_event, Event} ->
+                {report, Report} = maps:get(msg, Event),
+                %% CR/LF/TAB replaced with spaces so no extra log line.
+                ?assertEqual(<<"/a  b c">>, maps:get(path, Report))
+        after 200 ->
+            ?assert(false)
+        end
+    after
+        logger:remove_handler(HandlerId),
+        logger:set_primary_config(level, maps:get(level, Primary))
+    end.
+
 %% logger handler callback used by access_log_emits_and_returns_response_test
 log(Event, #{config := Pid}) ->
     Pid ! {log_event, Event},

@@ -69,7 +69,15 @@ ensure_started_at(Req) ->
     term(),
     list()
 ) -> ok.
-handle_crash(Adapter, Stream, _Class, _Reason, _Stack) ->
+handle_crash(Adapter, Stream, Class, Reason, Stack) ->
+    %% Record the failure server-side (no request body, so no PII leaks
+    %% here) while the client only ever sees the generic 500.
+    logger:error(#{
+        msg => "livery_handler_crash",
+        class => Class,
+        reason => Reason,
+        stacktrace => Stack
+    }),
     Resp = livery_resp:text(500, <<"internal server error">>),
     _ = livery:emit(Adapter, Stream, Resp),
     ok.

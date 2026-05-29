@@ -70,6 +70,12 @@ Start a listener with the given options.
 defaults to 0 (random port). `name` defaults to a unique atom.
 Returns the listener atom (passable to `stop/1` and
 `quic:get_server_port/1`).
+
+Pass an explicit, stable `name` if you start and stop listeners
+repeatedly: `quic_h3` registers under an atom name, and an
+auto-generated name mints a fresh atom per start (atoms are never
+garbage-collected). `livery_service` derives a stable name from the
+port for this reason.
 """.
 -spec start(listen_opts()) -> {ok, listener()} | {error, term()}.
 start(Opts) when is_map(Opts) ->

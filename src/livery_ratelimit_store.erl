@@ -6,7 +6,11 @@ A supervised gen_server that owns one public named ETS table and reaps
 idle buckets on a timer. The per-request token-bucket decision
 (`check/5`) runs in the calling process directly against the public
 table (lock-free CAS), so the gen_server is never on the hot path - it
-only owns the table and runs cleanup.
+only owns the table and runs cleanup. The table is `public` so requests
+update buckets without serializing through the owner; this is safe
+because Livery runs no untrusted in-VM code, and making it `protected`
+would force every check through the owner and reintroduce exactly the
+single-process bottleneck the lock-free design avoids.
 
 Each row is `{{Name, KeyDigest}, Tokens, LastMicros, Cap, Rate}`.
 `KeyDigest` is a SHA-256 of the rate-limit key, so raw bearer tokens are

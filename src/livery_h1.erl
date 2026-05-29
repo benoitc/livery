@@ -58,6 +58,14 @@ adapter callbacks (`send_headers/4`, `send_data/3`,
     cacerts => [binary()],
     acceptors => pos_integer(),
     max_body => non_neg_integer() | infinity,
+    %% Slow-client guards, passed through to `h1'. They have finite
+    %% defaults there (idle_timeout 300000 ms, request_timeout 60000 ms),
+    %% so a slow-loris client is already bounded; tighten for an
+    %% edge-facing listener.
+    idle_timeout => timeout(),
+    request_timeout => timeout(),
+    handshake_timeout => timeout(),
+    max_keepalive_requests => pos_integer() | infinity,
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.

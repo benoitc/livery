@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Cowboy cutover validation. `examples/livery_example_migration.erl`
+  expresses the common Cowboy patterns (plain handler, REST resource,
+  SSE, a `cowboy_loop`-style streaming endpoint, WebSocket echo) in
+  Livery, and `test/livery_cowboy_parity_SUITE.erl` runs that handler set
+  behind both a live Cowboy listener and Livery, diffing the observable
+  behaviour over H1, then drives the same Livery handlers over H2 and H3.
+
 ## [0.1.0] - 2026-05-26
 
 First public release. Livery is a BEAM-native web framework that serves

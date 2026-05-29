@@ -349,8 +349,8 @@ Logs carry `trace_id` and `span_id` via `instrument_logger`.
   (the wire library's per-connection cap) and reports the
   reconnects. RC tag is the remaining step (a release action, left
   to a maintainer).
-- Phase 13, done (validation): Cowboy cutover validation by
-  example-parity rather than porting a single private service. The
+- Phase 13, done: Cowboy cutover validated by example-parity
+  rather than porting a single private service. The
   migration guide is `docs/guides/migrate-from-cowboy.md`; the runnable
   "after" is `examples/livery_example_migration.erl` (plain handler, REST
   resource, SSE, a `cowboy_loop`-style streaming endpoint, WebSocket

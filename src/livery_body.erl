@@ -32,11 +32,15 @@ signaling lands with the H1 adapter; this module exposes
     read/2,
     read_all/1,
     read_all/2,
+    read_all/3,
     discard/1,
     discard/2,
     signal_demand/2,
     account/3
 ]).
+
+%% Default ceiling for read_all/1,2 (16 MiB); read_all/3 overrides it.
+-define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
 -export_type([reader/0, read_result/0, error_reason/0]).
 
@@ -123,23 +127,44 @@ read(#reader{ref = Ref} = R, Timeout) ->
         {error, timeout, R}
     end.
 
--doc "Drain the entire body, returning the concatenated bytes.".
+-doc """
+Drain the entire body, returning the concatenated bytes.
+
+Buffers at most 16 MiB by default; a larger body yields
+`{error, {limit, max_size}, _}` so a handler reading an unbounded client
+body cannot exhaust memory. Use `read_all/3` to raise or disable the cap.
+""".
 -spec read_all(reader()) -> {ok, binary(), reader()} | {error, error_reason(), reader()}.
 read_all(R) ->
-    read_all(R, 5000).
+    read_all(R, 5000, ?DEFAULT_MAX_BODY).
 
--doc "`read_all/1` with an explicit per-chunk timeout.".
+-doc "`read_all/1` with an explicit per-chunk timeout (16 MiB cap).".
 -spec read_all(reader(), timeout()) ->
     {ok, binary(), reader()} | {error, error_reason(), reader()}.
 read_all(R, Timeout) ->
-    read_all_loop(R, Timeout, []).
+    read_all(R, Timeout, ?DEFAULT_MAX_BODY).
 
--spec read_all_loop(reader(), timeout(), [iodata()]) ->
+-doc "`read_all/2` with an explicit byte cap (`infinity` disables it).".
+-spec read_all(reader(), timeout(), non_neg_integer() | infinity) ->
     {ok, binary(), reader()} | {error, error_reason(), reader()}.
-read_all_loop(R, Timeout, Acc) ->
+read_all(R, Timeout, Max) ->
+    read_all_loop(R, Timeout, Max, 0, []).
+
+-spec read_all_loop(
+    reader(), timeout(), non_neg_integer() | infinity, non_neg_integer(), [iodata()]
+) ->
+    {ok, binary(), reader()} | {error, error_reason(), reader()}.
+read_all_loop(R, Timeout, Max, Seen, Acc) ->
     case read(R, Timeout) of
         {ok, Chunk, R1} ->
-            read_all_loop(R1, Timeout, [Chunk | Acc]);
+            Seen1 = Seen + iolist_size(Chunk),
+            case is_integer(Max) andalso Seen1 > Max of
+                true ->
+                    E = {limit, max_size},
+                    {error, E, R1#reader{error = E}};
+                false ->
+                    read_all_loop(R1, Timeout, Max, Seen1, [Chunk | Acc])
+            end;
         {done, R1} ->
             {ok, iolist_to_binary(lists:reverse(Acc)), R1};
         {error, E, R1} ->

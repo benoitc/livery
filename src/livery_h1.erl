@@ -292,20 +292,39 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody)
         notifier_pid = self(),
         disc_ref = DiscRef
     },
-    {ok, WorkerPid} = livery_req_sup:start_request(#{
-        adapter => ?MODULE,
-        stream => {Conn, StreamId},
-        req => Req1,
-        stack => Stack,
-        handler => Handler
-    }),
-    WMRef = erlang:monitor(process, WorkerPid),
-    %% Monitor the h1 connection process too, so a client disconnect
-    %% fires even when the handler is not reading the body or emitting.
-    CMRef = erlang:monitor(process, Conn),
-    translate_until_done(
-        StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-    ).
+    case
+        livery_req_sup:start_request(#{
+            adapter => ?MODULE,
+            stream => {Conn, StreamId},
+            req => Req1,
+            stack => Stack,
+            handler => Handler
+        })
+    of
+        {ok, WorkerPid} ->
+            WMRef = erlang:monitor(process, WorkerPid),
+            %% Monitor the h1 connection process too, so a client
+            %% disconnect fires even when the handler is not reading the
+            %% body or emitting.
+            CMRef = erlang:monitor(process, Conn),
+            translate_until_done(
+                StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
+            );
+        {error, _} ->
+            reject_overload({Conn, StreamId})
+    end.
+
+%% No worker slot available (concurrency cap reached): answer 503 and
+%% serve the next request instead of crashing the stream handler.
+-spec reject_overload(stream()) -> ok.
+reject_overload(Stream) ->
+    _ = send_headers(
+        Stream,
+        503,
+        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+        #{end_stream => true}
+    ),
+    ok.
 
 -spec build_req(
     h1:connection(),

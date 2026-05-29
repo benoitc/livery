@@ -307,31 +307,49 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody)
         notifier_pid = Translator,
         disc_ref = DiscRef
     },
-    {ok, WorkerPid} = livery_req_sup:start_request(#{
-        adapter => ?MODULE,
-        stream => {Conn, StreamId},
-        req => Req1,
-        stack => Stack,
-        handler => Handler
-    }),
-    Translator ! {worker, WorkerPid},
     case
-        h2:set_stream_handler(
-            Conn,
-            StreamId,
-            Translator,
-            #{drain_buffer => false}
-        )
+        livery_req_sup:start_request(#{
+            adapter => ?MODULE,
+            stream => {Conn, StreamId},
+            req => Req1,
+            stack => Stack,
+            handler => Handler
+        })
     of
-        ok ->
-            ok;
-        {ok, _Drained} ->
-            ok;
-        {error, unknown_stream} ->
+        {ok, WorkerPid} ->
+            Translator ! {worker, WorkerPid},
+            case
+                h2:set_stream_handler(
+                    Conn,
+                    StreamId,
+                    Translator,
+                    #{drain_buffer => false}
+                )
+            of
+                ok ->
+                    ok;
+                {ok, _Drained} ->
+                    ok;
+                {error, unknown_stream} ->
+                    exit(Translator, kill),
+                    exit(WorkerPid, kill),
+                    ok
+            end;
+        {error, _} ->
             exit(Translator, kill),
-            exit(WorkerPid, kill),
-            ok
+            reject_overload({Conn, StreamId})
     end,
+    ok.
+
+%% No worker slot available (concurrency cap reached): answer 503.
+-spec reject_overload(stream()) -> ok.
+reject_overload(Stream) ->
+    _ = send_headers(
+        Stream,
+        503,
+        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+        #{end_stream => true}
+    ),
     ok.
 
 -spec build_req(

@@ -326,19 +326,37 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody)
         notifier_pid = Translator,
         disc_ref = DiscRef
     },
-    {ok, WorkerPid} = livery_req_sup:start_request(#{
-        adapter => ?MODULE,
-        stream => {Conn, StreamId},
-        req => Req1,
-        stack => Stack,
-        handler => Handler
-    }),
-    Translator ! {worker, WorkerPid},
-    _ = quic_h3:set_stream_handler(
-        Conn,
-        StreamId,
-        Translator,
-        #{drain_buffer => false}
+    case
+        livery_req_sup:start_request(#{
+            adapter => ?MODULE,
+            stream => {Conn, StreamId},
+            req => Req1,
+            stack => Stack,
+            handler => Handler
+        })
+    of
+        {ok, WorkerPid} ->
+            Translator ! {worker, WorkerPid},
+            _ = quic_h3:set_stream_handler(
+                Conn,
+                StreamId,
+                Translator,
+                #{drain_buffer => false}
+            ),
+            ok;
+        {error, _} ->
+            exit(Translator, kill),
+            reject_overload({Conn, StreamId})
+    end.
+
+%% No worker slot available (concurrency cap reached): answer 503.
+-spec reject_overload(stream()) -> ok.
+reject_overload(Stream) ->
+    _ = send_headers(
+        Stream,
+        503,
+        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+        #{end_stream => true}
     ),
     ok.
 

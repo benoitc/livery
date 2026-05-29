@@ -21,16 +21,16 @@ Each adapter implements the `livery_adapter` behaviour.
 
 ## Adapters that ship
 
-| Adapter | Phase | Backed by |
+| Adapter | Serves | Backed by |
 |---|---|---|
-| `livery_test_adapter` | 1 (done) | ETS, no socket |
-| `livery_h1` | 2 | `h1` |
-| `livery_h2` | 3 | `h2` |
-| `livery_h3` | 4 | `quic` (`quic_h3` subsystem) |
+| `livery_test_adapter` | in-memory | ETS, no socket |
+| `livery_h1` | HTTP/1.1 | `h1` |
+| `livery_h2` | HTTP/2 | `h2` |
+| `livery_h3` | HTTP/3 | `quic` (`quic_h3` subsystem) |
 
 The test adapter exists so handlers can be exercised in EUnit and
 the parity SUITE can run a single source of truth across every
-adapter as they come online.
+adapter.
 
 ## What an adapter is not
 
@@ -59,13 +59,18 @@ middleware downstream.
 A handler can branch on adapter capabilities for optional features:
 
 ```erlang
-case livery_adapter:capabilities(Listener) of
+Adapter = livery_req:adapter(Req),
+case Adapter:capabilities(livery_req:stream(Req)) of
     #{trailers := true} ->
         livery_resp:with_trailers([{<<"x-fin">>, <<"1">>}], Resp);
     _ ->
         Resp
 end.
 ```
+
+`capabilities/1` is a `livery_adapter` callback; call it on the
+concrete adapter module the request arrived on
+(`livery_req:adapter/1`), not on `livery_adapter` itself.
 
 `trailers` and `extended_connect` are protocol-specific. `datagrams`
 and `capsules` apply to WebTransport on H3.

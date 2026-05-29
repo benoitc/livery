@@ -57,9 +57,8 @@ Combine with `livery_body_limit` (buffered only today) or call
 
 `livery_body:signal_demand(R, N)` hints the adapter that the handler
 is ready for `N` more bytes. The H1/H2/H3 adapters translate this
-into engine-level window updates. Today this is a no-op for the
-test adapter; the H1 adapter (Phase 2) wires it to `h1`'s read
-size.
+into engine-level window updates. This is a no-op for the test
+adapter; the H1 adapter wires it to `h1`'s read size.
 
 ## See also
 

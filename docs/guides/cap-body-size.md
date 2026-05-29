@@ -20,12 +20,11 @@ A buffered body whose size exceeds `max` short-circuits with
 `livery_resp:text(413, <<"payload too large">>)`. The handler is
 not invoked.
 
-## Buffered only (Phase 1)
+## Buffered only
 
 `livery_body_limit` inspects `{buffered, IoData}` bodies and uses
 `iolist_size/1`. Streaming bodies (`{stream, _}`) pass through
-unchecked: incremental enforcement on a streaming reader lands with
-the H1 adapter in Phase 2.
+unchecked; count bytes in the handler as you drain the reader.
 
 For streaming intake, count bytes manually in the handler:
 
@@ -48,7 +47,7 @@ JsonApiStack = [{livery_body_limit, #{max => 65_536}}      | Common].
 ```
 
 Each router group runs its own stack. Route-level mounting lives
-in `livery_service` and `livery_router` (Phase 4).
+in `livery_service` and `livery_router`.
 
 ## See also
 

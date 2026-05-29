@@ -103,7 +103,7 @@ sidebar's "Modules" section, grouped as:
 
 ## Project state
 
-Livery is mid-rewrite. Phase 1 (the developer surface) is complete
-and exercised end-to-end through the test adapter. The H1/H2/H3
-wire adapters and `livery:start_service/1` land in Phases 2 to 4.
-Track progress in [rewrite_plan.md](rewrite_plan.md).
+The developer surface, the H1/H2/H3 wire adapters, and
+`livery:start_service/1` are all in place and exercised end-to-end
+(the parity SUITE diffs the shared handler set across every adapter).
+See [design.md](design.md) for the long-form architecture.

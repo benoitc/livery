@@ -87,10 +87,10 @@ H1/H2/H3 adapters use. Crashes inside the handler are mapped to a
 ## Level 4: the parity SUITE
 
 `test/livery_parity_SUITE.erl` runs a shared handler matrix
-through `livery_test_adapter` today, and will run the same matrix
-through `livery_h1`, `livery_h2`, and `livery_h3` once those land.
-Add your service's cross-protocol invariants there if they belong
-in the framework's regression suite.
+through `livery_test_adapter`, `livery_h1`, `livery_h2`, and
+`livery_h3`, diffing the externally observable behaviour. Add your
+service's cross-protocol invariants there if they belong in the
+framework's regression suite.
 
 ## Picking a level
 

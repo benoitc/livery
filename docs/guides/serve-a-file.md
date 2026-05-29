@@ -51,7 +51,7 @@ Confine it yourself before serving:
 
 ```erlang
 serve_asset(Req) ->
-    Name = livery_req:path_param(<<"name">>, Req),
+    Name = livery_req:binding(<<"name">>, Req),
     Root = <<"/var/www/assets">>,
     Path = filename:join(Root, Name),
     %% Reject anything that resolves outside Root.

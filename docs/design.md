@@ -173,7 +173,7 @@ create_user(Req) ->
 
 ```erlang
 upgrade_chat(Req) ->
-    livery_ws:upgrade(Req, #{handler => chat_handler, state => #{}}).
+    livery_ws:upgrade(Req, chat_handler, #{}).
 ```
 
 `chat_handler` implements `ws_handler` from `erlang_ws`. Livery
@@ -223,14 +223,20 @@ replacement for Cowboy's `cowboy_loop`.
 ### 6.7 MCP
 
 ```erlang
-Router2 = livery_mcp:mount(<<"/mcp">>, Router, #{
-    tools => my_tools, auth => bearer
-}),
+Mcp = livery_mcp:handler(#{session_enabled => true}),
+Router2 = livery_router:compile([
+    {<<"POST">>,   <<"/mcp">>, Mcp},
+    {<<"GET">>,    <<"/mcp">>, Mcp},
+    {<<"DELETE">>, <<"/mcp">>, Mcp}
+    | Routes
+]),
 livery:start_service(#{router => Router2, ...}).
 ```
 
-The MCP endpoint reuses the same middleware stack, the same auth,
-the same tracing, and is served over H1, H2, and H3 automatically.
+`livery_mcp:handler/1` bridges to `barrel_mcp`'s protocol engine;
+tools register through `barrel_mcp:reg_tool/4`. The MCP endpoint
+reuses the same middleware stack, the same auth, the same tracing,
+and is served over H1, H2, and H3 automatically.
 
 ## 7. Request lifecycle
 

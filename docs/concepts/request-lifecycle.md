@@ -73,10 +73,13 @@ and may hibernate during idle stretches.
 ## Cancellation
 
 A client disconnect is signaled by the wire library to the adapter
-as a stream reset. The adapter calls `livery_req_proc` (a future
-hook in Phase 2+) to cancel; alternatively the worker observes
-`{error, closed}` from the next `send_data` and breaks out of its
-producer loop.
+as a stream reset. The per-stream translator calls `livery_disconnect`
+to notify the request worker: it sends a `{livery_disconnect, Ref,
+Reason}` message (matchable via `livery_req:disconnect_tag/0`) so a
+handler blocked in a `receive` wakes, and it runs any callbacks the
+handler registered with `livery_req:on_disconnect/2`. Alternatively
+the worker observes `{error, closed}` from the next `send_data` and
+breaks out of its producer loop.
 
 ## Graceful shutdown
 

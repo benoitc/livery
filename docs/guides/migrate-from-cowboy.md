@@ -9,7 +9,7 @@ Livery, ideally without rewriting handlers from scratch.
 
 | Cowboy | Livery |
 |---|---|
-| `cowboy:start_clear/3`, `cowboy:start_tls/3` | `livery:start_service/1` (Phase 4) |
+| `cowboy:start_clear/3`, `cowboy:start_tls/3` | `livery:start_service/1` |
 | `cowboy_router:compile/1` | `livery_router:compile/1` |
 | Handler `init(Req, Opts) -> {ok, Req, Opts}` | `fun(Req) -> Resp` |
 | `cowboy_req:method/1` | `livery_req:method/1` |
@@ -117,7 +117,7 @@ Cowboy:
       stream_handlers => [my_access_log, cowboy_stream_h]}).
 ```
 
-Livery (after Phase 4):
+Livery:
 
 ```erlang
 {ok, _} = livery:start_service(#{
@@ -159,5 +159,3 @@ give you. The mappings in this guide are enforced by that suite.
 - Tutorial: [Your first service](../tutorials/your-first-service.md)
 - Example: `examples/livery_example_migration.erl` and
   `test/livery_cowboy_parity_SUITE.erl`
-- Project plan: [rewrite_plan.md](../rewrite_plan.md) (Phase 13:
-  Cowboy cutover validation)

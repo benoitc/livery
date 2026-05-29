@@ -41,7 +41,7 @@ Req1 = livery_req:set_body({buffered, Bytes}, Req),
 ```
 
 The H1/H2/H3 adapters can be configured to buffer up to a
-per-route threshold automatically (Phase 2+).
+per-route threshold automatically.
 
 ## Cap the size first
 

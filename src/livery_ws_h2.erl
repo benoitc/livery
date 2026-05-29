@@ -39,7 +39,12 @@ activate(_Handle) ->
 
 -spec close(handle()) -> ok.
 close({Conn, StreamId}) ->
-    _ = (catch h2:send_data(Conn, StreamId, <<>>, true)),
+    _ =
+        try
+            h2:send_data(Conn, StreamId, <<>>, true)
+        catch
+            _:_ -> ok
+        end,
     ok.
 
 -spec controlling_process(handle(), pid()) -> ok | {error, term()}.

@@ -37,7 +37,12 @@ activate(_Handle) ->
 
 -spec close(handle()) -> ok.
 close({Conn, StreamId}) ->
-    _ = (catch quic_h3:send_data(Conn, StreamId, <<>>, true)),
+    _ =
+        try
+            quic_h3:send_data(Conn, StreamId, <<>>, true)
+        catch
+            _:_ -> ok
+        end,
     ok.
 
 -spec controlling_process(handle(), pid()) -> ok | {error, term()}.

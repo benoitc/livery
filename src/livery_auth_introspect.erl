@@ -27,7 +27,7 @@ State:
 `client_id`/`client_secret` authenticate this resource server to
 the introspection endpoint via HTTP Basic. The HTTP call is
 pluggable via `fetch => fun((Url, Headers, Body) -> {ok, Status,
-Body} | {error, _})`; the default uses OTP `httpc`.
+Body} | {error, _})`; the default uses `hackney`.
 """.
 -behaviour(livery_middleware).
 
@@ -134,46 +134,25 @@ headers(Opts) ->
     end.
 
 %%====================================================================
-%% Default HTTP fetcher (OTP httpc)
+%% Default HTTP fetcher (hackney)
 %%====================================================================
 
--doc "Default introspection POST using OTP `httpc`. Starts inets/ssl lazily.".
+-doc "Default introspection POST using `hackney`, verifying the server's TLS cert.".
 -spec default_fetch(binary(), [{binary(), binary()}], binary()) ->
     {ok, non_neg_integer(), binary()} | {error, term()}.
 default_fetch(Url, Headers, Body) ->
-    _ = application:ensure_all_started(inets),
-    _ = application:ensure_all_started(ssl),
-    {ContentType, Rest} = take_content_type(Headers),
-    HHeaders = [{binary_to_list(K), binary_to_list(V)} || {K, V} <- Rest],
-    Request = {binary_to_list(Url), HHeaders, binary_to_list(ContentType), Body},
-    case
-        httpc:request(
-            post,
-            Request,
-            [{timeout, 5000}, {ssl, livery_auth:tls_opts()}],
-            [{body_format, binary}]
-        )
-    of
-        {ok, {{_Vsn, Code, _}, _RespHeaders, RespBody}} ->
+    {ok, _} = application:ensure_all_started(hackney),
+    Opts = [
+        with_body,
+        {recv_timeout, 5000},
+        {connect_timeout, 5000},
+        {ssl_options, livery_auth:tls_opts()}
+    ],
+    case hackney:request(post, Url, Headers, Body, Opts) of
+        {ok, Code, _RespHeaders, RespBody} ->
             {ok, Code, RespBody};
         {error, Reason} ->
             {error, Reason}
-    end.
-
-%% Pull content-type out of the header list so httpc receives it as
-%% the dedicated argument rather than a (possibly duplicated) header.
--spec take_content_type([{binary(), binary()}]) ->
-    {binary(), [{binary(), binary()}]}.
-take_content_type(Headers) ->
-    Default = <<"application/x-www-form-urlencoded">>,
-    case
-        lists:partition(
-            fun({K, _}) -> string:lowercase(K) =:= <<"content-type">> end,
-            Headers
-        )
-    of
-        {[{_, CT} | _], Rest} -> {CT, Rest};
-        {[], Rest} -> {Default, Rest}
     end.
 
 %%====================================================================

@@ -34,7 +34,8 @@ signaling lands with the H1 adapter; this module exposes
     read_all/2,
     discard/1,
     discard/2,
-    signal_demand/2
+    signal_demand/2,
+    account/3
 ]).
 
 -export_type([reader/0, read_result/0, error_reason/0]).
@@ -51,6 +52,8 @@ signaling lands with the H1 adapter; this module exposes
 
 -type error_reason() ::
     timeout
+    | body_too_large
+    | {limit, max_size}
     | {client_reset, term()}.
 
 -type read_result() ::
@@ -113,7 +116,9 @@ read(#reader{ref = Ref} = R, Timeout) ->
             {done, R#reader{ended = true, trailers = Hs}};
         {livery_body, Ref, {reset, Reason}} ->
             E = {client_reset, Reason},
-            {error, E, R#reader{error = E}}
+            {error, E, R#reader{error = E}};
+        {livery_body, Ref, {error, Reason}} ->
+            {error, Reason, R#reader{error = Reason}}
     after Timeout ->
         {error, timeout, R}
     end.
@@ -173,3 +178,29 @@ signal_demand(#reader{source = Pid, ref = Ref}, N) when
 ->
     Pid ! {livery_body_demand, Ref, N},
     ok.
+
+%%====================================================================
+%% Ingestion ceiling
+%%====================================================================
+
+-doc """
+Account `Chunk` against a running byte total and a ceiling.
+
+Used by the adapter translators to bound how much request body they
+forward into the per-request worker's mailbox. Returns `{ok, NewTotal}`
+while under `Max`, `over` once the ceiling is exceeded, and threads an
+`aborted` sentinel through once the stream has been cut so later chunks
+are ignored. `Max` may be `infinity` to disable the ceiling.
+""".
+-spec account(non_neg_integer() | aborted, iodata(), non_neg_integer() | infinity) ->
+    {ok, non_neg_integer()} | over | aborted.
+account(aborted, _Chunk, _Max) ->
+    aborted;
+account(_Bytes, _Chunk, infinity) ->
+    {ok, 0};
+account(Bytes, Chunk, Max) ->
+    Total = Bytes + iolist_size(Chunk),
+    case Total > Max of
+        true -> over;
+        false -> {ok, Total}
+    end.

@@ -24,6 +24,7 @@
     streaming_chunked_response/1,
     sse_response/1,
     echo_buffered_body/1,
+    body_ceiling_rejects_oversize/1,
     error_500_on_crash/1,
     cancel_on_client_disconnect/1
 ]).
@@ -41,6 +42,7 @@ all() ->
         streaming_chunked_response,
         sse_response,
         echo_buffered_body,
+        body_ceiling_rejects_oversize,
         error_500_on_crash,
         cancel_on_client_disconnect
     ].
@@ -63,7 +65,8 @@ init_per_testcase(TC, Config) ->
     {ok, Listener} = livery_h1:start(#{
         port => 0,
         stack => Stack,
-        handler => Handler
+        handler => Handler,
+        max_body => max_body_for(TC)
     }),
     Port = h1:server_port(Listener),
     [{listener, Listener}, {port, Port} | Config].
@@ -124,6 +127,12 @@ echo_buffered_body(Config) ->
     {ok, 200, _, Body} = post(Config, <<"/">>, <<"echo me">>),
     ?assertEqual(<<"echo me">>, Body).
 
+body_ceiling_rejects_oversize(Config) ->
+    %% max_body is 64 for this case (see max_body_for/1).
+    {ok, 200, _, _} = post(Config, <<"/">>, binary:copy(<<"x">>, 32)),
+    {ok, Over, _, _} = post(Config, <<"/">>, binary:copy(<<"x">>, 256)),
+    ?assertEqual(413, Over).
+
 error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(500, Status),
@@ -158,6 +167,10 @@ cancel_on_client_disconnect(Config) ->
 
 stack_for(_TC) -> [].
 
+%% Small ceiling for the over-size case; default for everything else.
+max_body_for(body_ceiling_rejects_oversize) -> 64;
+max_body_for(_TC) -> 16 * 1024 * 1024.
+
 handler_for(text_response) ->
     fun(_R) -> livery_resp:text(200, <<"hello">>) end;
 handler_for(json_response) ->
@@ -191,6 +204,14 @@ handler_for(echo_buffered_body) ->
         {stream, Reader} = livery_req:body(R),
         {ok, Bytes, _} = livery_body:read_all(Reader, 5000),
         livery_resp:text(200, Bytes)
+    end;
+handler_for(body_ceiling_rejects_oversize) ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 5000) of
+            {ok, Bytes, _} -> livery_resp:text(200, Bytes);
+            {error, body_too_large, _} -> livery_resp:text(413, <<"too large">>)
+        end
     end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;

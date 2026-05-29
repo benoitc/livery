@@ -25,6 +25,11 @@ adapter callbacks (`send_headers/4`, `send_data/3`,
 
 -include("livery.hrl").
 
+%% Default request-body ceiling (16 MiB). Bounds how much body the
+%% translator forwards into the worker mailbox; override per listener
+%% with the `max_body' option (`infinity' disables it).
+-define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
+
 %% Public API
 -export([start/1, accept_ws/4]).
 
@@ -52,6 +57,7 @@ adapter callbacks (`send_headers/4`, `send_data/3`,
     key => binary() | string(),
     cacerts => [binary()],
     acceptors => pos_integer(),
+    max_body => non_neg_integer() | infinity,
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.
@@ -202,9 +208,10 @@ build_ws_req(Req) ->
     livery_middleware:handler()
 ) -> map().
 build_h1_opts(Opts, Stack, Handler) ->
+    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
     Base = #{
         transport => maps:get(transport, Opts, tcp),
-        handler => make_handler_fun(Stack, Handler)
+        handler => make_handler_fun(Stack, Handler, MaxBody)
     },
     copy_keys(
         [
@@ -232,7 +239,8 @@ copy_keys([K | Rest], Src, Dst) ->
 
 -spec make_handler_fun(
     livery_middleware:stack(),
-    livery_middleware:handler()
+    livery_middleware:handler(),
+    non_neg_integer() | infinity
 ) ->
     fun(
         (
@@ -243,7 +251,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h1:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler) ->
+make_handler_fun(Stack, Handler, MaxBody) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -252,7 +260,8 @@ make_handler_fun(Stack, Handler) ->
             Path,
             Headers,
             Stack,
-            Handler
+            Handler,
+            MaxBody
         )
     end.
 
@@ -263,9 +272,10 @@ make_handler_fun(Stack, Handler) ->
     binary(),
     h1:headers(),
     livery_middleware:stack(),
-    livery_middleware:handler()
+    livery_middleware:handler(),
+    non_neg_integer() | infinity
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
+dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody) ->
     %% This function runs in the per-request worker spawned by
     %% h1_server. Body and trailer events arrive as
     %% `{h1_stream, StreamId, _}' messages in this process's
@@ -294,7 +304,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     %% fires even when the handler is not reading the body or emitting.
     CMRef = erlang:monitor(process, Conn),
     translate_until_done(
-        StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false
+        StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
     ).
 
 -spec build_req(
@@ -341,40 +351,67 @@ split_query(Path) ->
     reference(),
     reference(),
     [fun(() -> term())],
-    boolean()
+    boolean(),
+    non_neg_integer() | infinity,
+    non_neg_integer() | aborted
 ) -> ok.
-translate_until_done(StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs, Fired) ->
-    Loop = fun(Cbs1, Fired1) ->
+translate_until_done(
+    StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes
+) ->
+    Loop = fun(Cbs1, Fired1, Bytes1) ->
         translate_until_done(
-            StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs1, Fired1
+            StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs1, Fired1, Max, Bytes1
         )
     end,
     receive
         {h1_stream, StreamId, {data, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired);
+            Loop(Cbs, Fired, Bytes);
         {h1_stream, StreamId, {data, Chunk, true}} ->
-            WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired);
+            case livery_body:account(Bytes, Chunk, Max) of
+                {ok, Bytes1} ->
+                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
+                    WorkerPid ! {livery_body, BodyRef, eof},
+                    Loop(Cbs, Fired, Bytes1);
+                _ ->
+                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, aborted)
+            end;
         {h1_stream, StreamId, {data, Chunk, false}} ->
-            WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            Loop(Cbs, Fired);
+            case livery_body:account(Bytes, Chunk, Max) of
+                {ok, Bytes1} ->
+                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
+                    Loop(Cbs, Fired, Bytes1);
+                aborted ->
+                    Loop(Cbs, Fired, aborted);
+                over ->
+                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, aborted)
+            end;
         {h1_stream, StreamId, {trailers, Headers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Headers}},
-            Loop(Cbs, Fired);
+            Loop(Cbs, Fired, Bytes);
         {h1_stream, StreamId, {stream_reset, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs));
+            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
         {'DOWN', CMRef, process, Conn, Reason} ->
             Loop(
                 Cbs,
                 livery_disconnect:fire_once(
                     Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
-                )
+                ),
+                Bytes
             );
         {livery_on_disconnect, DiscRef, Fun} ->
-            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired);
+            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             ok
     end.
+
+%% Signal the worker that the body exceeded `max_body' and cut the
+%% stream so the client stops sending. Bounds the worker mailbox.
+-spec abort_body(stream(), pid(), reference()) -> ok.
+abort_body(Stream, WorkerPid, BodyRef) ->
+    WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
+    _ = reset(Stream, body_too_large),
+    ok.

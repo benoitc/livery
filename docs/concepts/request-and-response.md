@@ -59,8 +59,8 @@ Inbound body is one of:
 - `{stream, Reader}` — call `livery_body:read/2` to drain.
 
 The H1/H2/H3 adapters choose buffered or streaming based on a
-per-route config (Phase 2+). The test adapter always sets whatever
-the test spec passed in.
+per-route config. The test adapter always sets whatever the test
+spec passed in.
 
 ## Extractors
 

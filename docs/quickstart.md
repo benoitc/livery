@@ -2,8 +2,8 @@
 
 Write your first Livery handler and exercise it end-to-end through
 the in-memory adapter. This takes about five minutes. No socket is
-involved; the same handler set will be served by the H1/H2/H3
-adapters once they land in Phases 2 to 4.
+involved; the same handler runs unchanged behind the H1, H2, and H3
+adapters when you serve it with `livery:start_service/1`.
 
 ## Prerequisites
 

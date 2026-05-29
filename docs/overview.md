@@ -70,9 +70,12 @@ It is written in the spirit of Axum + Tower + Hyper on the BEAM.
 | In-memory driver | `livery_test_adapter` |
 | Per-request worker | `livery_req_proc`, `livery_req_sup` |
 
-Phase 2 onward adds `livery_h1`, `livery_h2`, `livery_h3`,
-`livery_service`, `livery_ws`, `livery_sse`, `livery_drain`,
-`livery_auth*`, `livery_openapi*`, `livery_mcp*`, `livery_instrument_*`.
+The wire adapters and service runtime are `livery_h1`, `livery_h2`,
+`livery_h3`, and `livery_service`; streaming, upgrades, shutdown,
+auth, OpenAPI, MCP, and observability are `livery_ws`, `livery_wt`,
+`livery_drain`, `livery_auth*`, `livery_openapi*`, `livery_mcp`,
+and `livery_instrument_*`. SSE and NDJSON are builders on
+`livery_resp`.
 
 ## How Livery differs from Cowboy
 
@@ -83,9 +86,9 @@ Phase 2 onward adds `livery_h1`, `livery_h2`, `livery_h3`,
 | Middleware shape | callback per handler family | one `call(Req, Next, State)` |
 | Extractors | manual `cowboy_req:*` threading | `livery_ext:json/1`, `query/2`, etc. |
 | Streaming | `cowboy_loop` + `info/3` | producer fun with `Emit`, free to `receive` |
-| OpenAPI | external | built-in (Phase 9) |
-| MCP | second listener | first-class endpoint type (Phase 10) |
-| Alt-Svc upgrade | not provided | built into `livery_service` (Phase 4) |
+| OpenAPI | external | built-in |
+| MCP | second listener | first-class endpoint type |
+| Alt-Svc upgrade | not provided | built into `livery_service` |
 
 See [Migrate from Cowboy](guides/migrate-from-cowboy.md) for the
 full mapping table.

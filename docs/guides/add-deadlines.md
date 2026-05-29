@@ -19,19 +19,17 @@ worker process. If the worker does not return within `after_ms`,
 the process is killed and `504` is emitted. Handler crashes are
 mapped to `500`.
 
-## Phase 1 caveat
+## Caveat: streaming request bodies
 
-The deadline runs in a spawned worker, but body messages from the
-adapter target the original request process (`livery_req_proc`).
-Handlers that read body chunks via `livery_body:read/2` will not
-see them under this middleware in Phase 1. Workarounds:
+The deadline runs in a spawned, monitored worker, but body messages
+from the adapter target the original request process
+(`livery_req_proc`). Handlers that read body chunks via
+`livery_body:read/2` will not see them under this middleware.
+Workarounds:
 
 - Place a body-buffering middleware in front of `livery_timeout`.
 - Apply the middleware only to routes whose handlers do not stream
   input.
-
-Adapter-level cancellation (Phase 2+) replaces this implementation
-and removes the caveat.
 
 ## Per-route deadlines
 

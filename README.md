@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://benoitc.github.io/livery/">Website</a> ·
   <a href="https://benoitc.github.io/livery/api/index.html">Docs</a> ·
-  <a href="docs/rewrite_plan.md">Design</a>
+  <a href="docs/design.md">Design</a>
 </p>
 
 ---

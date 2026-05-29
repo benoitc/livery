@@ -31,8 +31,7 @@ keep the adapters thin and push changes upstream.
 
 Authoritative behaviour is the test suites under `test/` (the
 parity SUITE diffs externally observable behaviour across all four
-adapters) and the module docs. `docs/rewrite_plan.md` tracks phase
-progress.
+adapters) and the module docs.
 
 ## Required Checks
 

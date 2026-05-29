@@ -39,6 +39,9 @@ call(Req, Next, _State) ->
                 error      -> livery_resp:text(401, <<"bad token">>)
             end
     end.
+
+%% Replace with real verification; livery_auth does JWT/JWKS for you.
+verify(_Token) -> {ok, #{}}.
 ```
 
 Place it in the stack after `livery_request_id` and
@@ -56,8 +59,7 @@ case livery_req:header(<<"authorization">>, Req) of
 end.
 ```
 
-OIDC, JWKS rotation, and JWT verification ship as `livery_auth` in
-Phase 8.
+OIDC, JWKS rotation, and JWT verification ship as `livery_auth`.
 
 ## See also
 

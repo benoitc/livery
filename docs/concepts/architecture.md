@@ -38,7 +38,7 @@ WebTransport integration.
 
 ## One app, three adapters
 
-`livery:start_service/1` (Phase 4) brings up H3 on UDP, H2 on TLS,
+`livery:start_service/1` brings up H3 on UDP, H2 on TLS,
 and H1 on TCP under one supervisor. All three feed into the same
 router and the same middleware stack. Responses on H1 and H2 carry
 `Alt-Svc: h3=":443"` so clients can race and upgrade.

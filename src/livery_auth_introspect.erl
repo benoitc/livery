@@ -150,7 +150,7 @@ default_fetch(Url, Headers, Body) ->
         httpc:request(
             post,
             Request,
-            [{timeout, 5000}],
+            [{timeout, 5000}, {ssl, livery_auth:tls_opts()}],
             [{body_format, binary}]
         )
     of

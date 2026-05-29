@@ -17,7 +17,8 @@ ratelimit_test_() ->
         {"custom status and body", fun custom_status/0},
         {"CAS under contention", fun contention/0},
         {"cleanup keeps an exhausted key", fun cleanup_keeps_exhausted/0},
-        {"cleanup removes a full key", fun cleanup_removes_full/0}
+        {"cleanup removes a full key", fun cleanup_removes_full/0},
+        {"store sheds new keys at capacity", fun store_ceiling/0}
     ]}.
 
 setup() ->
@@ -146,6 +147,20 @@ cleanup_removes_full() ->
     ?assertEqual(
         [], ets:lookup(livery_ratelimit, {Name, crypto:hash(sha256, F)})
     ).
+
+store_ceiling() ->
+    Base = ets:info(livery_ratelimit, size),
+    Old = application:get_env(livery, ratelimit_max_keys, 1000000),
+    application:set_env(livery, ratelimit_max_keys, Base + 2),
+    try
+        L = livery_ratelimit:limiter(1, 0),
+        ?assertEqual(200, status(run(L, <<"ceil1">>))),
+        ?assertEqual(200, status(run(L, <<"ceil2">>))),
+        %% Table is now at capacity: a new key is shed with 429.
+        ?assertEqual(429, status(run(L, <<"ceil3">>)))
+    after
+        application:set_env(livery, ratelimit_max_keys, Old)
+    end.
 
 %%====================================================================
 %% Helpers

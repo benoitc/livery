@@ -32,10 +32,15 @@ signaling lands with the H1 adapter; this module exposes
     read/2,
     read_all/1,
     read_all/2,
+    read_all/3,
     discard/1,
     discard/2,
-    signal_demand/2
+    signal_demand/2,
+    account/3
 ]).
+
+%% Default ceiling for read_all/1,2 (16 MiB); read_all/3 overrides it.
+-define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
 -export_type([reader/0, read_result/0, error_reason/0]).
 
@@ -51,6 +56,8 @@ signaling lands with the H1 adapter; this module exposes
 
 -type error_reason() ::
     timeout
+    | body_too_large
+    | {limit, max_size}
     | {client_reset, term()}.
 
 -type read_result() ::
@@ -113,28 +120,51 @@ read(#reader{ref = Ref} = R, Timeout) ->
             {done, R#reader{ended = true, trailers = Hs}};
         {livery_body, Ref, {reset, Reason}} ->
             E = {client_reset, Reason},
-            {error, E, R#reader{error = E}}
+            {error, E, R#reader{error = E}};
+        {livery_body, Ref, {error, Reason}} ->
+            {error, Reason, R#reader{error = Reason}}
     after Timeout ->
         {error, timeout, R}
     end.
 
--doc "Drain the entire body, returning the concatenated bytes.".
+-doc """
+Drain the entire body, returning the concatenated bytes.
+
+Buffers at most 16 MiB by default; a larger body yields
+`{error, {limit, max_size}, _}` so a handler reading an unbounded client
+body cannot exhaust memory. Use `read_all/3` to raise or disable the cap.
+""".
 -spec read_all(reader()) -> {ok, binary(), reader()} | {error, error_reason(), reader()}.
 read_all(R) ->
-    read_all(R, 5000).
+    read_all(R, 5000, ?DEFAULT_MAX_BODY).
 
--doc "`read_all/1` with an explicit per-chunk timeout.".
+-doc "`read_all/1` with an explicit per-chunk timeout (16 MiB cap).".
 -spec read_all(reader(), timeout()) ->
     {ok, binary(), reader()} | {error, error_reason(), reader()}.
 read_all(R, Timeout) ->
-    read_all_loop(R, Timeout, []).
+    read_all(R, Timeout, ?DEFAULT_MAX_BODY).
 
--spec read_all_loop(reader(), timeout(), [iodata()]) ->
+-doc "`read_all/2` with an explicit byte cap (`infinity` disables it).".
+-spec read_all(reader(), timeout(), non_neg_integer() | infinity) ->
     {ok, binary(), reader()} | {error, error_reason(), reader()}.
-read_all_loop(R, Timeout, Acc) ->
+read_all(R, Timeout, Max) ->
+    read_all_loop(R, Timeout, Max, 0, []).
+
+-spec read_all_loop(
+    reader(), timeout(), non_neg_integer() | infinity, non_neg_integer(), [iodata()]
+) ->
+    {ok, binary(), reader()} | {error, error_reason(), reader()}.
+read_all_loop(R, Timeout, Max, Seen, Acc) ->
     case read(R, Timeout) of
         {ok, Chunk, R1} ->
-            read_all_loop(R1, Timeout, [Chunk | Acc]);
+            Seen1 = Seen + iolist_size(Chunk),
+            case is_integer(Max) andalso Seen1 > Max of
+                true ->
+                    E = {limit, max_size},
+                    {error, E, R1#reader{error = E}};
+                false ->
+                    read_all_loop(R1, Timeout, Max, Seen1, [Chunk | Acc])
+            end;
         {done, R1} ->
             {ok, iolist_to_binary(lists:reverse(Acc)), R1};
         {error, E, R1} ->
@@ -173,3 +203,29 @@ signal_demand(#reader{source = Pid, ref = Ref}, N) when
 ->
     Pid ! {livery_body_demand, Ref, N},
     ok.
+
+%%====================================================================
+%% Ingestion ceiling
+%%====================================================================
+
+-doc """
+Account `Chunk` against a running byte total and a ceiling.
+
+Used by the adapter translators to bound how much request body they
+forward into the per-request worker's mailbox. Returns `{ok, NewTotal}`
+while under `Max`, `over` once the ceiling is exceeded, and threads an
+`aborted` sentinel through once the stream has been cut so later chunks
+are ignored. `Max` may be `infinity` to disable the ceiling.
+""".
+-spec account(non_neg_integer() | aborted, iodata(), non_neg_integer() | infinity) ->
+    {ok, non_neg_integer()} | over | aborted.
+account(aborted, _Chunk, _Max) ->
+    aborted;
+account(_Bytes, _Chunk, infinity) ->
+    {ok, 0};
+account(Bytes, Chunk, Max) ->
+    Total = Bytes + iolist_size(Chunk),
+    case Total > Max of
+        true -> over;
+        false -> {ok, Total}
+    end.

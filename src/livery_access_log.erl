@@ -25,10 +25,23 @@ call(Req, Next, State) ->
     logger:log(Level, #{
         msg => "livery_access",
         protocol => livery_req:protocol(Req),
-        method => livery_req:method(Req),
-        path => livery_req:path(Req),
+        method => sanitize(livery_req:method(Req)),
+        path => sanitize(livery_req:path(Req)),
         status => livery_resp:status(Resp),
         duration_us => Elapsed,
         request_id => livery_req:req_id(Req)
     }),
     Resp.
+
+%% Replace control bytes (including CR/LF) in attacker-controlled fields
+%% so a crafted path/method cannot forge extra log lines.
+-spec sanitize(binary()) -> binary().
+sanitize(Bin) when is_binary(Bin) ->
+    <<
+        <<(control_to_space(B))>>
+     || <<B>> <= Bin
+    >>.
+
+-spec control_to_space(byte()) -> byte().
+control_to_space(B) when B < 32; B =:= 127 -> $\s;
+control_to_space(B) -> B.

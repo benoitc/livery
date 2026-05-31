@@ -25,6 +25,10 @@ in `capabilities/1`.
 
 -include("livery.hrl").
 
+%% Default request-body ceiling (16 MiB); override with `max_body'
+%% (`infinity' disables it). See livery_h1 for the rationale.
+-define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
+
 %% h2:server_opts() declares `cert' and `key' as required map keys,
 %% which is wrong for h2c (tcp transport). Suppress the cascading
 %% contract-mismatch warning on our entry points until h2's spec
@@ -57,6 +61,7 @@ in `capabilities/1`.
     cacerts => [binary()],
     acceptors => pos_integer(),
     enable_connect_protocol => boolean(),
+    max_body => non_neg_integer() | infinity,
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.
@@ -220,9 +225,10 @@ accept_wt(h2, Req, HandlerMod, Opts) ->
 ) -> map().
 build_h2_opts(Opts, Stack, Handler) ->
     Transport = maps:get(transport, Opts, tcp),
+    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
     Base = #{
         transport => Transport,
-        handler => make_handler_fun(Stack, Handler)
+        handler => make_handler_fun(Stack, Handler, MaxBody)
     },
     copy_keys(
         [
@@ -248,7 +254,8 @@ copy_keys([K | Rest], Src, Dst) ->
 
 -spec make_handler_fun(
     livery_middleware:stack(),
-    livery_middleware:handler()
+    livery_middleware:handler(),
+    non_neg_integer() | infinity
 ) ->
     fun(
         (
@@ -259,7 +266,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h2:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler) ->
+make_handler_fun(Stack, Handler, MaxBody) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -268,7 +275,8 @@ make_handler_fun(Stack, Handler) ->
             Path,
             Headers,
             Stack,
-            Handler
+            Handler,
+            MaxBody
         )
     end.
 
@@ -279,9 +287,10 @@ make_handler_fun(Stack, Handler) ->
     binary(),
     h2:headers(),
     livery_middleware:stack(),
-    livery_middleware:handler()
+    livery_middleware:handler(),
+    non_neg_integer() | infinity
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
+dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody) ->
     BodyRef = make_ref(),
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
@@ -291,38 +300,56 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler) ->
     %% the worker (so the req can carry its pid) and given the worker
     %% pid afterwards via {worker, _}, breaking the dependency cycle.
     Translator = spawn(fun() ->
-        translator_init(Conn, StreamId, BodyRef, DiscRef)
+        translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody)
     end),
     Req1 = Req#livery_req{
         raw_query = RawQuery,
         notifier_pid = Translator,
         disc_ref = DiscRef
     },
-    {ok, WorkerPid} = livery_req_sup:start_request(#{
-        adapter => ?MODULE,
-        stream => {Conn, StreamId},
-        req => Req1,
-        stack => Stack,
-        handler => Handler
-    }),
-    Translator ! {worker, WorkerPid},
     case
-        h2:set_stream_handler(
-            Conn,
-            StreamId,
-            Translator,
-            #{drain_buffer => false}
-        )
+        livery_req_sup:start_request(#{
+            adapter => ?MODULE,
+            stream => {Conn, StreamId},
+            req => Req1,
+            stack => Stack,
+            handler => Handler
+        })
     of
-        ok ->
-            ok;
-        {ok, _Drained} ->
-            ok;
-        {error, unknown_stream} ->
+        {ok, WorkerPid} ->
+            Translator ! {worker, WorkerPid},
+            case
+                h2:set_stream_handler(
+                    Conn,
+                    StreamId,
+                    Translator,
+                    #{drain_buffer => false}
+                )
+            of
+                ok ->
+                    ok;
+                {ok, _Drained} ->
+                    ok;
+                {error, unknown_stream} ->
+                    exit(Translator, kill),
+                    exit(WorkerPid, kill),
+                    ok
+            end;
+        {error, _} ->
             exit(Translator, kill),
-            exit(WorkerPid, kill),
-            ok
+            reject_overload({Conn, StreamId})
     end,
+    ok.
+
+%% No worker slot available (concurrency cap reached): answer 503.
+-spec reject_overload(stream()) -> ok.
+reject_overload(Stream) ->
+    _ = send_headers(
+        Stream,
+        503,
+        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+        #{end_stream => true}
+    ),
     ok.
 
 -spec build_req(
@@ -379,15 +406,20 @@ connect_pseudo_headers(Req, Protocol) ->
 %% Two-phase init: receive the worker pid, then monitor both the worker
 %% (for normal completion / handoff) and the connection (for client
 %% disconnect, which h2 does not fan out to stream handlers).
--spec translator_init(h2:connection(), h2:stream_id(), reference(), reference()) ->
-    ok.
-translator_init(Conn, StreamId, BodyRef, DiscRef) ->
+-spec translator_init(
+    h2:connection(),
+    h2:stream_id(),
+    reference(),
+    reference(),
+    non_neg_integer() | infinity
+) -> ok.
+translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody) ->
     receive
         {worker, WorkerPid} ->
             WMRef = erlang:monitor(process, WorkerPid),
             CMRef = erlang:monitor(process, Conn),
             translate_loop(
-                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false
+                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
             )
     end.
 
@@ -400,31 +432,47 @@ translator_init(Conn, StreamId, BodyRef, DiscRef) ->
     reference(),
     reference(),
     [fun(() -> term())],
-    boolean()
+    boolean(),
+    non_neg_integer() | infinity,
+    non_neg_integer() | aborted
 ) -> ok.
-translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired) ->
-    Loop = fun(Cbs1, Fired1) ->
+translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes) ->
+    Loop = fun(Cbs1, Fired1, Bytes1) ->
         translate_loop(
-            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1
+            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1, Max, Bytes1
         )
     end,
     receive
         {h2, Conn, {data, StreamId, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired);
+            Loop(Cbs, Fired, Bytes);
         {h2, Conn, {data, StreamId, Chunk, true}} ->
-            WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired);
+            case livery_body:account(Bytes, Chunk, Max) of
+                {ok, Bytes1} ->
+                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
+                    WorkerPid ! {livery_body, BodyRef, eof},
+                    Loop(Cbs, Fired, Bytes1);
+                _ ->
+                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, aborted)
+            end;
         {h2, Conn, {data, StreamId, Chunk, false}} ->
-            WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-            Loop(Cbs, Fired);
+            case livery_body:account(Bytes, Chunk, Max) of
+                {ok, Bytes1} ->
+                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
+                    Loop(Cbs, Fired, Bytes1);
+                aborted ->
+                    Loop(Cbs, Fired, aborted);
+                over ->
+                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, aborted)
+            end;
         {h2, Conn, {trailers, StreamId, Trailers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            Loop(Cbs, Fired);
+            Loop(Cbs, Fired, Bytes);
         {h2, Conn, {stream_reset, StreamId, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs));
+            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
         {'DOWN', CMRef, process, Conn, Reason} ->
             %% Connection closed: client disconnect. Fire, keep looping
             %% (to serve late registrations) until the worker exits.
@@ -432,14 +480,23 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                 Cbs,
                 livery_disconnect:fire_once(
                     Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
-                )
+                ),
+                Bytes
             );
         {livery_on_disconnect, DiscRef, Fun} ->
-            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired);
+            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             %% Worker finished (normal request done, or it handed the
             %% stream off to a ws/wt session). Stop translating.
             ok;
         {h2, Conn, _Other} ->
-            Loop(Cbs, Fired)
+            Loop(Cbs, Fired, Bytes)
     end.
+
+%% Signal the worker that the body exceeded `max_body' and reset the
+%% stream so the client stops sending.
+-spec abort_body(stream(), pid(), reference()) -> ok.
+abort_body(Stream, WorkerPid, BodyRef) ->
+    WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
+    _ = reset(Stream, body_too_large),
+    ok.

@@ -18,10 +18,18 @@ Stack = [
 
 "N requests per minute" maps to `limiter(N, N/60)`. Per-key state lives in
 the supervised `livery_ratelimit_store` ETS table; the raw key is never
-stored (it is SHA-256 hashed). Client IP is not available from the wire
-libs, so identify clients by token or a custom `key` fun. Responses carry
+stored (it is SHA-256 hashed). Responses carry
 `RateLimit-Limit`/`-Remaining`/`-Reset` (and `Retry-After` on a 429)
 unless `headers => false`.
+
+Security: the default key is the bearer token, which the client controls.
+That gives per-credential quotas, NOT protection against an unauthenticated
+flood: a client rotating tokens gets a fresh bucket each time. Client IP is
+not yet surfaced by the wire libs, so for flood protection key on a trusted
+identity via a custom `key` fun (an authenticated user id, or a forwarded-IP
+header you trust because you terminate behind a known proxy). The store caps
+its key count (see `livery_ratelimit_store`) so distinct-key floods bound
+memory regardless.
 """.
 -behaviour(livery_middleware).
 

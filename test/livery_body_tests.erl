@@ -60,6 +60,25 @@ read_all_concats_chunks_test() ->
     ?assertEqual(<<"abcdef">>, Body),
     ?assert(livery_body:ended(R1)).
 
+read_all_caps_oversize_body_test() ->
+    Ref = make_ref(),
+    R = livery_body:new(Ref),
+    self() ! {livery_body, Ref, {data, <<"abcde">>}},
+    self() ! {livery_body, Ref, {data, <<"fghij">>}},
+    self() ! {livery_body, Ref, eof},
+    ?assertMatch(
+        {error, {limit, max_size}, _},
+        livery_body:read_all(R, 50, 6)
+    ).
+
+read_all_infinity_allows_large_body_test() ->
+    Ref = make_ref(),
+    R = livery_body:new(Ref),
+    self() ! {livery_body, Ref, {data, <<"abcde">>}},
+    self() ! {livery_body, Ref, {data, <<"fghij">>}},
+    self() ! {livery_body, Ref, eof},
+    ?assertMatch({ok, <<"abcdefghij">>, _}, livery_body:read_all(R, 50, infinity)).
+
 read_all_propagates_reset_test() ->
     Ref = make_ref(),
     R = livery_body:new(Ref),

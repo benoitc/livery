@@ -6,6 +6,19 @@
 -define(NOW, 1_700_000_000).
 
 %%====================================================================
+%% livery_auth:tls_opts/0 — fetchers must verify the peer
+%%====================================================================
+
+tls_opts_verifies_peer_test() ->
+    Opts = livery_auth:tls_opts(),
+    ?assertEqual(verify_peer, proplists:get_value(verify, Opts)),
+    ?assert(is_list(proplists:get_value(cacerts, Opts))),
+    ?assertMatch(
+        [{match_fun, _}],
+        proplists:get_value(customize_hostname_check, Opts)
+    ).
+
+%%====================================================================
 %% livery_auth:verify/2 — RS256
 %%====================================================================
 

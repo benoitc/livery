@@ -29,7 +29,7 @@ and for EC P-256:
 
 -include_lib("public_key/include/public_key.hrl").
 
--export([verify/2]).
+-export([verify/2, tls_opts/0]).
 
 -export_type([jwk/0, verify_opts/0, claims/0, error_reason/0]).
 
@@ -75,6 +75,26 @@ verify(Token, Opts) when is_binary(Token) ->
         error ->
             {error, malformed}
     end.
+
+-doc """
+TLS client options for verifying an HTTPS peer's certificate.
+
+Used by the OIDC/JWKS/introspection fetchers so the channel that
+discovers signing keys (and thus the identity trust root) is
+authenticated: a forged JWK set served by an on-path attacker would
+otherwise let them mint tokens this node accepts. Verifies against
+the OS trust store with hostname checking.
+""".
+-spec tls_opts() -> [ssl:tls_client_option()].
+tls_opts() ->
+    [
+        {verify, verify_peer},
+        {cacerts, public_key:cacerts_get()},
+        {customize_hostname_check, [
+            {match_fun, public_key:pkix_verify_hostname_match_fun(https)}
+        ]},
+        {depth, 99}
+    ].
 
 %%====================================================================
 %% Internals

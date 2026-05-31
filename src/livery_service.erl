@@ -244,9 +244,11 @@ maybe_start_h2(Opts, Stack, Handler) ->
 maybe_start_h3(Opts, Stack, Handler) ->
     case maps:find(http3, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(
-                ListenOpts,
-                #{stack => Stack, handler => Handler}
+            ListenOpts1 = ensure_h3_name(
+                maps:merge(
+                    ListenOpts,
+                    #{stack => Stack, handler => Handler}
+                )
             ),
             {ok, Name} = livery_h3:start(ListenOpts1),
             {ok, Port} = quic:get_server_port(Name),
@@ -254,6 +256,18 @@ maybe_start_h3(Opts, Stack, Handler) ->
         error ->
             undefined
     end.
+
+%% `quic_h3' registers the listener under an atom name. Derive a stable
+%% one from the bound port so restarting a service reuses the same
+%% (interned) atom instead of leaking a fresh atom each start. A random
+%% port (0) keeps the per-start auto-generated name.
+-spec ensure_h3_name(map()) -> map().
+ensure_h3_name(#{name := _} = Opts) ->
+    Opts;
+ensure_h3_name(#{port := Port} = Opts) when is_integer(Port), Port > 0 ->
+    Opts#{name => list_to_atom("livery_h3_p" ++ integer_to_list(Port))};
+ensure_h3_name(Opts) ->
+    Opts.
 
 stop_h1(undefined) -> ok;
 stop_h1({Ref, _Port}) -> livery_h1:stop(Ref).

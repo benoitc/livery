@@ -10,7 +10,7 @@ to get verification keys.
 
 The HTTP fetch is pluggable via `fetch => fun((Url) -> {ok, Body}
 | {error, _})`; the default uses `livery_auth_jwks:default_fetch/1`
-(OTP `httpc`).
+(`hackney`).
 
 ```erlang
 {ok, Cfg}  = livery_auth_oidc:discover(<<"https://issuer.example">>),

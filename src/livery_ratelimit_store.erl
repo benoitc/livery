@@ -6,12 +6,22 @@ A supervised gen_server that owns one public named ETS table and reaps
 idle buckets on a timer. The per-request token-bucket decision
 (`check/5`) runs in the calling process directly against the public
 table (lock-free CAS), so the gen_server is never on the hot path - it
-only owns the table and runs cleanup.
+only owns the table and runs cleanup. The table is `public` so requests
+update buckets without serializing through the owner; this is safe
+because Livery runs no untrusted in-VM code, and making it `protected`
+would force every check through the owner and reintroduce exactly the
+single-process bottleneck the lock-free design avoids.
 
 Each row is `{{Name, KeyDigest}, Tokens, LastMicros, Cap, Rate}`.
 `KeyDigest` is a SHA-256 of the rate-limit key, so raw bearer tokens are
 never stored. `Cap`/`Rate` are denormalized so the sweep can compute
 refill without the limiter config.
+
+The table is bounded: once it holds `ratelimit_max_keys` rows
+(application environment, default 1,000,000) new keys are shed
+(`{deny, undefined}`) rather than inserted, so a flood of distinct keys
+cannot grow the table without limit. Idle buckets are reaped every
+minute, so the bound is also released as load drops.
 """.
 -behaviour(gen_server).
 
@@ -19,7 +29,8 @@ refill without the limiter config.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 -define(TABLE, livery_ratelimit).
--define(CLEANUP_INTERVAL, 600000).
+-define(CLEANUP_INTERVAL, 60000).
+-define(DEFAULT_MAX_KEYS, 1000000).
 
 -record(state, {}).
 -type state() :: #state{}.
@@ -72,13 +83,24 @@ do_check(Id, Cap, Rate, Now) ->
 -spec decide_new({term(), binary()}, float(), integer(), non_neg_integer(), number()) ->
     result().
 decide_new(Id, Tokens, Now, Cap, Rate) when Tokens >= 1.0 ->
-    New = {Id, Tokens - 1.0, Now, Cap, Rate},
-    case ets:insert_new(?TABLE, New) of
-        true -> {allow, Tokens - 1.0, reset_secs(Tokens - 1.0, Cap, Rate)};
-        false -> do_check(Id, Cap, Rate, Now)
+    case at_capacity() of
+        true ->
+            %% Shed new keys rather than grow the table without bound.
+            {deny, undefined};
+        false ->
+            New = {Id, Tokens - 1.0, Now, Cap, Rate},
+            case ets:insert_new(?TABLE, New) of
+                true -> {allow, Tokens - 1.0, reset_secs(Tokens - 1.0, Cap, Rate)};
+                false -> do_check(Id, Cap, Rate, Now)
+            end
     end;
 decide_new(_Id, Tokens, _Now, _Cap, Rate) ->
     {deny, retry_secs(Tokens, Rate)}.
+
+-spec at_capacity() -> boolean().
+at_capacity() ->
+    Max = application:get_env(livery, ratelimit_max_keys, ?DEFAULT_MAX_KEYS),
+    ets:info(?TABLE, size) >= Max.
 
 -spec decide_existing(
     {term(), binary()}, tuple(), float(), integer(), non_neg_integer(), number()

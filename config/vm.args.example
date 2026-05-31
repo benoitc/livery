@@ -1,0 +1,23 @@
+## Example vm.args for a release embedding Livery.
+##
+## Livery caps concurrent in-flight requests at the supervisor level
+## (the `max_concurrent_requests` application env, default 10000), but a
+## library cannot set node-wide ceilings for you. An edge-facing node
+## should bound the process and port tables so a connection/request flood
+## cannot exhaust them. Copy the relevant lines into your release's
+## vm.args and tune to your host.
+
+## Maximum number of processes (default 1048576). One per in-flight
+## request/connection plus translators; size above your expected peak.
++P 2000000
+
+## Maximum number of ports/sockets (default 65536).
++Q 1000000
+
+## Maximum number of ETS tables (rarely the limit; raise if you create
+## many tables).
+## +e 8192
+
+## Do not let a crash dump land in a world-readable working directory;
+## point it somewhere the operator controls and can scrub.
+-env ERL_CRASH_DUMP /var/log/livery/erl_crash.dump

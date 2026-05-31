@@ -9,8 +9,8 @@ with a TTL. `refresh/1,2` forces a re-fetch — call it on a
 
 The HTTP fetch is pluggable via `fetch => fun((Url) -> {ok, Body}
 | {error, _})` in the options, so deployments (and tests) can
-supply their own client. The default uses OTP's `httpc` (inets),
-started lazily; no extra dependency.
+supply their own client. The default uses `hackney` and verifies the
+server's TLS certificate.
 
 ```erlang
 {ok, Keys} = livery_auth_jwks:keys(<<"https://issuer/.well-known/jwks.json">>),
@@ -101,26 +101,23 @@ decode_jwks(Body) ->
     end.
 
 %%====================================================================
-%% Default HTTP fetcher (OTP httpc)
+%% Default HTTP fetcher (hackney)
 %%====================================================================
 
--doc "Default JWKS fetcher using OTP `httpc`. Starts inets/ssl lazily.".
+-doc "Default JWKS fetcher using `hackney`, verifying the server's TLS cert.".
 -spec default_fetch(binary()) -> {ok, binary()} | {error, term()}.
 default_fetch(Url) ->
-    _ = application:ensure_all_started(inets),
-    _ = application:ensure_all_started(ssl),
-    Request = {binary_to_list(Url), []},
-    case
-        httpc:request(
-            get,
-            Request,
-            [{timeout, 5000}],
-            [{body_format, binary}]
-        )
-    of
-        {ok, {{_Vsn, 200, _}, _Headers, Body}} ->
+    {ok, _} = application:ensure_all_started(hackney),
+    Opts = [
+        with_body,
+        {recv_timeout, 5000},
+        {connect_timeout, 5000},
+        {ssl_options, livery_auth:tls_opts()}
+    ],
+    case hackney:request(get, Url, [], <<>>, Opts) of
+        {ok, 200, _Headers, Body} ->
             {ok, Body};
-        {ok, {{_Vsn, Code, _}, _Headers, _Body}} ->
+        {ok, Code, _Headers, _Body} ->
             {error, {http_status, Code}};
         {error, Reason} ->
             {error, Reason}

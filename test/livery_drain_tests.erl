@@ -37,11 +37,11 @@ in_flight_zero_when_idle() ->
     ?assertEqual(0, livery_drain:in_flight()).
 
 in_flight_counts_live_workers() ->
-    {Tab, S1} = blocked_worker(),
-    {Tab2, S2} = blocked_worker(),
+    {Tab, S1, P1} = blocked_worker(),
+    {Tab2, S2, P2} = blocked_worker(),
     ?assertEqual(2, livery_drain:in_flight()),
-    release(S1),
-    release(S2),
+    release(P1, S1),
+    release(P2, S2),
     wait_idle(1000),
     livery_test_adapter:stop(Tab),
     livery_test_adapter:stop(Tab2).
@@ -54,14 +54,14 @@ await_ok_when_idle() ->
     ?assertEqual(ok, livery_drain:await(#{timeout => 100})).
 
 await_times_out_then_succeeds() ->
-    {Tab, Sync} = blocked_worker(),
+    {Tab, Sync, Pid} = blocked_worker(),
     %% Worker is parked, so a short window times out.
     ?assertEqual(
         {error, timeout},
         livery_drain:await(#{timeout => 150, poll_interval => 20})
     ),
     %% Release it; await now drains to zero.
-    release(Sync),
+    release(Pid, Sync),
     ?assertEqual(ok, livery_drain:await(#{timeout => 1000, poll_interval => 20})),
     livery_test_adapter:stop(Tab).
 
@@ -69,8 +69,8 @@ await_times_out_then_succeeds() ->
 %% Helpers: a livery_req_proc worker whose handler blocks until told
 %%====================================================================
 
-%% Start one request worker under livery_req_sup whose handler waits
-%% for a `{release, Sync}' message. Returns {TestAdapterTab, Sync}.
+%% Start one request worker via livery_req_sup whose handler waits
+%% for a `{release, Sync}' message. Returns {TestAdapterTab, Sync, Pid}.
 blocked_worker() ->
     Tab = livery_test_adapter:start(),
     Stream = livery_test_adapter:new_stream(Tab),
@@ -84,7 +84,7 @@ blocked_worker() ->
         livery_resp:text(200, <<"done">>)
     end,
     Req = livery_req:new(#{method => <<"GET">>, path => <<"/">>}),
-    {ok, _Pid} = livery_req_sup:start_request(#{
+    {ok, Pid} = livery_req_sup:start_request(#{
         adapter => livery_test_adapter,
         stream => Stream,
         req => Req,
@@ -95,17 +95,11 @@ blocked_worker() ->
         {worker_ready, Sync} -> ok
     after 1000 -> error(worker_never_started)
     end,
-    {Tab, Sync}.
+    {Tab, Sync, Pid}.
 
-release(Sync) ->
-    %% The worker is blocked in its handler; find it and release.
-    %% We broadcast to all req_proc children (only the blocked ones
-    %% are listening for {release, Sync}).
-    [
-        Pid ! {release, Sync}
-     || {_, Pid, _, _} <- supervisor:which_children(livery_req_sup),
-        is_pid(Pid)
-    ],
+release(Pid, Sync) ->
+    %% The worker is blocked in its handler; release it directly.
+    Pid ! {release, Sync},
     ok.
 
 wait_idle(Timeout) ->

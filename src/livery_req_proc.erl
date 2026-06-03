@@ -18,7 +18,8 @@ messages, which the body reader already drains via the mailbox.
 
 -export([
     start_link/1,
-    init/2
+    init/2,
+    run/1
 ]).
 
 -export_type([args/0]).
@@ -38,14 +39,29 @@ start_link(Args) ->
 
 -doc false.
 -spec init(pid(), args()) -> no_return().
-init(Parent, #{
+init(Parent, Args) ->
+    proc_lib:init_ack(Parent, {ok, self()}),
+    dispatch(Args),
+    exit(normal).
+
+-doc """
+Run a request to completion in the calling-spawned process. Used by
+`livery_req_sup:start_request/1`, which spawns the worker directly
+(no `init_ack` handshake) and monitors it for the in-flight count.
+""".
+-spec run(args()) -> no_return().
+run(Args) ->
+    dispatch(Args),
+    exit(normal).
+
+-spec dispatch(args()) -> ok.
+dispatch(#{
     adapter := Adapter,
     stream := Stream,
     req := Req0,
     stack := Stack,
     handler := Handler
 }) ->
-    proc_lib:init_ack(Parent, {ok, self()}),
     Req = ensure_started_at(Req0),
     try
         Resp = livery:dispatch(Stack, Handler, Req),
@@ -54,7 +70,7 @@ init(Parent, #{
         Class:Reason:Stack0 ->
             handle_crash(Adapter, Stream, Class, Reason, Stack0)
     end,
-    exit(normal).
+    ok.
 
 -spec ensure_started_at(livery_req:req()) -> livery_req:req().
 ensure_started_at(#livery_req{started_at = undefined} = Req) ->

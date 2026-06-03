@@ -97,3 +97,19 @@ here.
 -callback peer_info(stream()) -> peer_info().
 
 -callback capabilities(listener()) -> capabilities().
+
+%% Optional: emit a complete response (status, headers and body) in one
+%% call so the adapter can coalesce it into a single write instead of a
+%% separate `send_headers' + `send_data'. `emit/3' uses it for a `full'
+%% body with no trailers when the adapter exports it, and otherwise
+%% falls back to the granular callbacks.
+-callback send_full(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    iodata(),
+    send_opts()
+) ->
+    send_result().
+
+-optional_callbacks([send_full/5]).

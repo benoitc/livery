@@ -230,15 +230,16 @@ emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers) ->
                 Other -> Other
             end;
         _ ->
-            case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
-                ok ->
-                    EndStream = not HasTrailers,
-                    case Adapter:send_data(Stream, IoData, #{end_stream => EndStream}) of
-                        ok -> emit_trailers(Adapter, Stream, Trailers);
-                        Other -> Other
-                    end;
-                Other ->
-                    Other
+            CanCoalesce =
+                not HasTrailers andalso
+                    erlang:function_exported(Adapter, send_full, 5),
+            case CanCoalesce of
+                true ->
+                    %% Coalesce headers + body into one adapter call (and
+                    %% one socket write) when the adapter supports it.
+                    Adapter:send_full(Stream, Status, Hs, IoData, #{end_stream => true});
+                false ->
+                    emit_full_granular(Adapter, Stream, Status, Hs, IoData, Trailers)
             end
     end;
 emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers) ->
@@ -331,6 +332,21 @@ emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers) ->
     %% Upgrades are handled at the adapter level (livery_ws, livery_wt).
     Adapter:reset(Stream, upgrade_not_handled_at_emit),
     {error, not_implemented}.
+
+%% Granular full-body emit: separate headers then body, closing the
+%% stream after the body unless trailers follow. Used when the adapter
+%% does not export the coalesced `send_full/5'.
+emit_full_granular(Adapter, Stream, Status, Hs, IoData, Trailers) ->
+    case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
+        ok ->
+            EndStream = Trailers =:= undefined,
+            case Adapter:send_data(Stream, IoData, #{end_stream => EndStream}) of
+                ok -> emit_trailers(Adapter, Stream, Trailers);
+                Other -> Other
+            end;
+        Other ->
+            Other
+    end.
 
 emit_trailers(_Adapter, _Stream, undefined) ->
     ok;

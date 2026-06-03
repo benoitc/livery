@@ -1,7 +1,9 @@
 # Architecture
 
-Livery is a single OTP application that sits on top of three
-external wire libraries and exposes one developer-facing surface.
+Here is the whole shape of Livery in one picture, before we zoom in. It
+is a single OTP application that sits on top of three external wire
+libraries and exposes one developer-facing surface, so you write your
+handlers once and they serve every protocol.
 
 ```
                  ┌─────────────────────┐
@@ -60,8 +62,8 @@ No state machine, no buffering, no framing. The adapter answers
 
 ## Per-request process
 
-For each inbound request the adapter spawns a short-lived worker
-under `livery_req_sup` (simple-one-for-one). The worker:
+For each inbound request the adapter spawns a short-lived worker via
+`livery_req_sup:start_request/1`. The worker:
 
 1. Owns the body reference and receives `{livery_body, Ref, _}`
    messages from the adapter.
@@ -70,8 +72,10 @@ under `livery_req_sup` (simple-one-for-one). The worker:
    adapter's `send_*` callbacks.
 4. Exits when done.
 
-The engine process is never blocked on a slow handler. Crashes are
-mapped to `500` and the worker exits normally.
+The listener process is never blocked on a slow handler: it handed the
+request to its own worker and moved on. Crashes are mapped to `500` and
+the worker exits normally. The [request lifecycle](request-lifecycle.md)
+page follows this path step by step.
 
 ## What this enables
 
@@ -83,6 +87,7 @@ mapped to `500` and the worker exits normally.
 
 ## See also
 
-- [Adapters](adapters.md) — the behaviour in detail
-- [Request lifecycle](request-lifecycle.md) — message flow
+- [Adapters](adapters.md) - the behaviour in detail
+- [Request lifecycle](request-lifecycle.md) - message flow
+- Tutorial: [Build a complete service](../tutorials/build-a-complete-service.md)
 - Long-form: [design.md](../design.md)

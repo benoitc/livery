@@ -1,20 +1,34 @@
 # Routing
 
+A router maps a method and a path to a handler. You give Livery a flat
+list of routes, it compiles them into a radix trie once, and from then
+on each request is matched to its handler in time proportional to the
+path depth, not the number of routes.
+
+## When you want a router
+
+**Use a router when** you have more than a couple of endpoints, path
+parameters (`/things/:id`), or different methods on the same path. **Skip
+it when** the service is a single catch-all (a health probe, a webhook
+sink, a proxy); there you can give `start_service/1` a plain `handler`
+function instead of a `router`. Most services want the router.
+
 ## Shape
 
-`livery_router` is a radix-trie router compiled from a flat list
-of `{Method, Path, Handler}` triples:
+`livery_router:compile/1` takes `{Method, Path, Handler}` triples (with
+an optional fourth `Meta` element):
 
 ```erlang
 Router = livery_router:compile([
-    {<<"GET">>,  <<"/">>,           {hello, index}},
-    {<<"GET">>,  <<"/hi/:name">>,   {hello, greet}},
+    {<<"GET">>,  <<"/">>,            {hello, index}},
+    {<<"GET">>,  <<"/hi/:name">>,    {hello, greet}},
     {<<"GET">>,  <<"/files/*rest">>, {files, serve}},
-    {<<"POST">>, <<"/items">>,      {items, create}}
+    {<<"POST">>, <<"/items">>,       {items, create}}
 ]).
 ```
 
-`match/3` returns one of:
+A handler is `{Module, Function}` or a `fun((Req) -> Resp)`. `match/3`
+returns one of:
 
 ```erlang
 {ok, {hello, greet}, #{<<"name">> => <<"alice">>}, _Meta} =
@@ -27,23 +41,29 @@ Router = livery_router:compile([
     livery_router:match(<<"GET">>, <<"/items">>, Router).
 ```
 
-The captured path bindings end up on the request as
-`livery_req:bindings/1`.
+## From route to handler
 
-## Dispatching through a router
-
-You rarely call `match/3` directly. `livery:router_handler/1`
-turns a compiled router into a request handler — it matches, sets
-the path bindings, invokes the route handler, and produces `404`
-for an unknown path or `405` (with an `Allow` header) for a known
-path on the wrong method:
+The captured path parameters land on the request as *bindings*, and the
+handler reads them by name. The route `{<<"GET">>, <<"/hi/:name">>,
+{hello, greet}}` points at this function:
 
 ```erlang
-Handler = livery:router_handler(Router),
+greet(Req) ->
+    Name = livery_req:binding(<<"name">>, Req),
+    livery_resp:text(200, [<<"hello, ">>, Name]).
+```
+
+You rarely call `match/3` yourself. `livery:router_handler/1` turns a
+compiled router into a request handler: it matches, sets the bindings,
+invokes the route handler, and produces `404` for an unknown path or
+`405` (with an `Allow` header) for a known path on the wrong method.
+
+```erlang
+Handler = livery:router_handler(Router).
 %% Handler :: fun((livery_req:req()) -> livery_resp:resp())
 ```
 
-Give the router straight to the service and it does this for you:
+Give the router straight to the service and it wires that for you:
 
 ```erlang
 livery:start_service(#{
@@ -52,10 +72,9 @@ livery:start_service(#{
 }).
 ```
 
-`start_service/1` takes exactly one of `router` or `handler` (a
-single catch-all). `router_handler/2` accepts `not_found` and
-`method_not_allowed` funs to override the default `404`/`405`
-responses.
+`start_service/1` takes exactly one of `router` or `handler`.
+`livery:router_handler/2` accepts `not_found` and `method_not_allowed`
+funs to override the default `404`/`405`.
 
 ## Segment kinds
 
@@ -65,46 +84,37 @@ responses.
 | `/users/:id` | one segment, captured | `#{<<"id">> => Seg}` |
 | `/files/*rest` | one or more trailing segments | `#{<<"rest">> => Joined}` |
 
-Static segments are matched first, then `:param` segments, then
-`*wildcard`. The trie keeps lookup proportional to path depth, not
-route count.
+Static segments match first, then `:param`, then `*wildcard`.
 
-## Method matching
+**Use a `:param`** for a resource identifier (`/things/:id`). **Use a
+`*wildcard`** when the tail is itself a path: serving static files under
+a prefix, or mounting a sub-application. For example
+`{<<"GET">>, <<"/assets/*path">>, {my_static, serve}}` hands the joined
+remainder to a handler that reads `livery_req:binding(<<"path">>, Req)`
+and serves a confined file (see [Serve static files](../guides/serve-static-files.md)).
 
-When a path matches a node but no route is registered for the
-requested method, `match/3` returns
-`{error, {method_not_allowed, Methods}}` where `Methods` is the
-list of methods that *are* registered for that path.
-`livery:router_handler/1` turns that into a `405` response with an
-`Allow` header. A path that matches nothing returns
-`{error, not_found}` → `404`.
+## Per-route middleware and metadata
 
-## Route metadata
-
-Route tuples accept an optional fourth element, a `Meta` map
-(`{Method, Path, Handler, Meta}`): operation id, summary, request
-schema, response schemas, tags. `match/3` returns it as the
-fourth element, and `livery_openapi:build/1` emits an OpenAPI 3.1
-document from the same route table.
-
-`Meta` may also carry a `middleware` key — a `livery_middleware`
-stack that `livery:router_handler/1` runs for that route only,
-inside any service-level stack:
+The optional fourth element is a `Meta` map: an operation id, summary,
+schemas, tags (which `livery_openapi:build/1` turns into an OpenAPI 3.1
+document), and a `middleware` key. That key is a stack
+`livery:router_handler/1` runs for that route only, nested inside any
+service-level stack:
 
 ```erlang
 {<<"GET">>, <<"/admin">>, {admin, index},
- #{middleware => [{my_auth, #{role => admin}}]}}
+ #{middleware => [{my_api_key, #{keys => [<<"s3cret">>]}}]}}
 ```
 
 ## Performance
 
-The radix trie does no allocation on lookup besides the bindings
-map. Empty bindings reuse a single shared `#{}`. Matching a path
-of N segments is O(N) regardless of total route count, with a
-constant factor low enough that the router is not a hot path in
-production benchmarks.
+The trie allocates nothing on a lookup besides the bindings map, and
+empty bindings reuse one shared `#{}`. Matching an N-segment path is O(N)
+regardless of route count, so the router is not a hot path in benchmarks.
 
 ## See also
 
-- Reference: `livery_router`
 - Tutorial: [Your first service](../tutorials/your-first-service.md)
+- Tutorial: [Build a complete service](../tutorials/build-a-complete-service.md)
+- Concept: [The middleware pipeline](middleware-pipeline.md)
+- Reference: `livery_router`

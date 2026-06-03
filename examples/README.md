@@ -17,7 +17,7 @@ Then start one from a shell (`rebar3 as examples shell`):
 REST + path params + SSE + NDJSON + an OpenAPI document, served over
 HTTP/1.1 on one port. `livery:start_service/1` takes a single
 handler, so the example drives `livery_router` from inside that
-handler — a useful pattern until route mounting lands in the
+handler - a useful pattern until route mounting lands in the
 service runtime.
 
 ```
@@ -58,6 +58,17 @@ section of the same tutorial. It implements the `livery_adapter`
 behaviour and runs the real per-request worker, but captures the
 response in ETS instead of writing to a socket, so the wiring is easy to
 read. `test/livery_example_adapter_tests.erl` drives it end to end.
+
+## `livery_example_stream`
+
+The receive-driven streaming companion to the [Streaming and
+backpressure](../docs/concepts/streaming-and-backpressure.md) concept
+doc. A `/clock` endpoint returns Server-Sent Events, one per second, from
+a named `tick/3` producer that loops on `receive` and stops on client
+disconnect. Start it with `livery_example_stream:start(8080)` and watch
+with `curl -N http://127.0.0.1:8080/clock`.
+`test/livery_example_stream_tests.erl` drives the producer with a tiny
+interval.
 
 ## Notes
 

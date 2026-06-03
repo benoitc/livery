@@ -47,7 +47,8 @@
     conditional_get/1,
     static_file/1,
     health_live/1,
-    metrics_export/1
+    metrics_export/1,
+    ipv6_loopback/1
 ]).
 
 %%====================================================================
@@ -55,7 +56,7 @@
 %%====================================================================
 
 all() ->
-    [{group, test_adapter}, {group, h1}, {group, h2}, {group, h3}].
+    [ipv6_loopback, {group, test_adapter}, {group, h1}, {group, h2}, {group, h3}].
 
 groups() ->
     Shared = [
@@ -504,6 +505,102 @@ metrics_export(Config) ->
 drive(Config, Stack, Handler, Spec) ->
     Driver = ?config(driver, Config),
     Driver(Stack, Handler, Spec).
+
+%% Bind each adapter on the IPv6 loopback and round-trip a request,
+%% proving the `ip'/`inet6' listen option reaches all three wire libs.
+%% Skips on a host without an IPv6 loopback (e.g. CI with IPv6 disabled).
+-define(V6_LOOPBACK, {0, 0, 0, 0, 0, 0, 0, 1}).
+
+ipv6_loopback(Config) ->
+    case ipv6_loopback_available() of
+        false ->
+            {skip, no_ipv6_loopback};
+        true ->
+            ok = ipv6_h1(),
+            ok = ipv6_h2(),
+            ok = ipv6_h3(?config(cert, Config), ?config(key, Config))
+    end.
+
+ipv6_loopback_available() ->
+    case gen_tcp:listen(0, [inet6, {ip, ?V6_LOOPBACK}]) of
+        {ok, S} ->
+            ok = gen_tcp:close(S),
+            true;
+        {error, _} ->
+            false
+    end.
+
+ipv6_h1() ->
+    Handler = fun(_R) -> livery_resp:text(200, <<"v6">>) end,
+    {ok, L} = livery_h1:start(#{
+        port => 0, ip => ?V6_LOOPBACK, stack => [], handler => Handler
+    }),
+    try
+        Port = h1:server_port(L),
+        Url = iolist_to_binary([
+            <<"http://[::1]:">>, integer_to_binary(Port), <<"/">>
+        ]),
+        {ok, 200, _, Body} = hackney:request(
+            get, Url, [], <<>>, [with_body, {recv_timeout, 5000}, {connect_options, [inet6]}]
+        ),
+        ?assertEqual(<<"v6">>, Body),
+        ok
+    after
+        livery_h1:stop(L)
+    end.
+
+ipv6_h2() ->
+    Handler = fun(_R) -> livery_resp:text(200, <<"v6">>) end,
+    {ok, L} = livery_h2:start(#{
+        port => 0, transport => tcp, ip => ?V6_LOOPBACK, stack => [], handler => Handler
+    }),
+    try
+        Port = h2:server_port(L),
+        {ok, Conn} = h2:connect(?V6_LOOPBACK, Port, #{transport => tcp}),
+        try
+            {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"::1">>}]),
+            Resp = collect_h2(Conn, StreamId, undefined, [], [], undefined),
+            ?assertEqual(200, Resp#response.status),
+            ?assertEqual(<<"v6">>, Resp#response.body),
+            ok
+        after
+            h2:close(Conn)
+        end
+    after
+        livery_h2:stop(L)
+    end.
+
+ipv6_h3(Cert, Key) ->
+    Handler = fun(_R) -> livery_resp:text(200, <<"v6">>) end,
+    {ok, L} = livery_h3:start(#{
+        port => 0, ip => ?V6_LOOPBACK, cert => Cert, key => Key, stack => [], handler => Handler
+    }),
+    try
+        {ok, Port} = quic:get_server_port(L),
+        {ok, Conn} = quic_h3:connect(
+            <<"::1">>, Port, #{verify => verify_none, sync => true}
+        ),
+        try
+            {ok, StreamId} = quic_h3:request(
+                Conn,
+                [
+                    {<<":method">>, <<"GET">>},
+                    {<<":path">>, <<"/">>},
+                    {<<":scheme">>, <<"https">>},
+                    {<<":authority">>, <<"[::1]">>}
+                ],
+                #{end_stream => true}
+            ),
+            Resp = collect_h3(Conn, StreamId, undefined, [], [], undefined),
+            ?assertEqual(200, Resp#response.status),
+            ?assertEqual(<<"v6">>, Resp#response.body),
+            ok
+        after
+            catch quic_h3:close(Conn)
+        end
+    after
+        livery_h3:stop(L)
+    end.
 
 status(#response{status = S}) -> S.
 body(#response{body = B}) -> B.

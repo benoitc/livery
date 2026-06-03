@@ -75,8 +75,16 @@ concrete adapter module the request arrived on
 `trailers` and `extended_connect` are protocol-specific. `datagrams`
 and `capsules` apply to WebTransport on H3.
 
+## Listen address
+
+Every adapter takes the same `ip => inet:ip_address()` and
+`inet6 => boolean()` listen options, translated to the underlying wire
+library by `livery_inet:socket_addr_opts/1`. See
+[Bind to an address or IPv6](../guides/bind-listen-address.md).
+
 ## See also
 
+- Guide: [Bind to an address or IPv6](../guides/bind-listen-address.md)
 - Reference: `livery_adapter`
 - Reference: `livery_test_adapter`
 - Concept: [Architecture](architecture.md)

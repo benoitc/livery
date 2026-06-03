@@ -2,8 +2,8 @@
 -moduledoc """
 Top-level Livery supervisor.
 
-Supervises `livery_req_sup`, the simple-one-for-one parent of
-per-request workers, and `livery_ratelimit_store`, the owner of the
+Supervises `livery_req_sup`, the per-request worker registry and
+concurrency cap, and `livery_ratelimit_store`, the owner of the
 rate-limiter ETS table. Listeners are owned by their wire libraries
 (`h1`/`h2`/`quic`); `livery_service` starts and stops them per
 service rather than under this supervisor.
@@ -24,8 +24,8 @@ init([]) ->
         id => livery_req_sup,
         start => {livery_req_sup, start_link, []},
         restart => permanent,
-        shutdown => infinity,
-        type => supervisor,
+        shutdown => 5000,
+        type => worker,
         modules => [livery_req_sup]
     },
     RateLimitStore = #{

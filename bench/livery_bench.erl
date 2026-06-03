@@ -23,7 +23,8 @@ pass it to `compare/2` to gate future runs.
 """.
 
 -export([run/0, run/1, run_all/0, run_all/1, compare/2, report/1]).
--export([profile/2, sweep/3]).
+-export([profile/2, sweep/3, compare_servers/0, compare_servers/1]).
+-export([compare_servers_to_file/2]).
 
 -define(RAW_REQUEST, <<"GET / HTTP/1.1\r\nHost: bench\r\n\r\n">>).
 
@@ -36,22 +37,24 @@ run() ->
 %% `warmup_ms', `port'.
 run(Opts) ->
     Protocol = maps:get(protocol, Opts, h1),
+    Server = maps:get(server, Opts, livery),
     Conns = maps:get(connections, Opts, 50),
     Duration = maps:get(duration_ms, Opts, 3000),
     Warmup = maps:get(warmup_ms, Opts, 500),
     {ok, _} = application:ensure_all_started(livery),
-    {ok, _} = ensure_started(Protocol),
-    {ok, Listener} = start_listener(Protocol, Opts),
+    {ok, _} = ensure_started(Server, Protocol),
+    {ok, Listener} = start_listener(Server, Protocol, Opts),
     try
-        Port = listener_port(Protocol, Listener),
+        Port = listener_port(Server, Protocol, Listener),
         %% warmup, discarded
         _ = drive(Protocol, Port, Conns, Warmup),
         {Lats, Count, Reconns} = drive(Protocol, Port, Conns, Duration),
-        Metrics = metrics(Protocol, Lats, Count, Reconns, Duration, Conns),
+        Metrics0 = metrics(Protocol, Lats, Count, Reconns, Duration, Conns),
+        Metrics = Metrics0#{server => Server},
         report(Metrics),
         Metrics
     after
-        stop_listener(Protocol, Listener)
+        stop_listener(Server, Protocol, Listener)
     end.
 
 %% @doc Profile one protocol with fprof over `NReqs' sequential
@@ -61,10 +64,10 @@ run(Opts) ->
 %% Returns the report path.
 profile(Protocol, NReqs) ->
     {ok, _} = application:ensure_all_started(livery),
-    {ok, _} = ensure_started(Protocol),
-    {ok, Listener} = start_listener(Protocol, #{}),
+    {ok, _} = ensure_started(livery, Protocol),
+    {ok, Listener} = start_listener(livery, Protocol, #{}),
     try
-        Port = listener_port(Protocol, Listener),
+        Port = listener_port(livery, Protocol, Listener),
         {ok, Handle} = connect(Protocol, Port),
         Dest = "/tmp/livery_" ++ atom_to_list(Protocol) ++ ".fprof",
         fprof:trace([start, {procs, all}]),
@@ -75,7 +78,7 @@ profile(Protocol, NReqs) ->
         close(Protocol, Handle),
         {ok, Dest}
     after
-        stop_listener(Protocol, Listener)
+        stop_listener(livery, Protocol, Listener)
     end.
 
 %% @doc Concurrency sweep: run `Protocol' at each connection count in
@@ -104,6 +107,61 @@ run_all() ->
 run_all(Opts) ->
     [{P, run(Opts#{protocol => P})} || P <- [h1, h2, h3]].
 
+%% @doc Compare Livery against Cowboy on HTTP/1.1 and HTTP/2 (h2c)
+%% with the same load driver and an identical JSON handler. Prints a
+%% side-by-side table and returns the raw metrics maps.
+compare_servers() ->
+    compare_servers(#{}).
+
+%% @doc Non-interactive entry point for `rebar3 ... --eval'. Runs the
+%% comparison, writes the result (or any crash) to `File', and halts.
+compare_servers_to_file(File, Opts) ->
+    {ok, _} = application:ensure_all_started(livery),
+    Out =
+        try compare_servers(Opts) of
+            R -> io_lib:format("~p~n", [R])
+        catch
+            C:E:S -> io_lib:format("CRASH ~p:~p~n~p~n", [C, E, S])
+        end,
+    ok = file:write_file(File, Out),
+    ok.
+
+compare_servers(Opts) ->
+    Runs = [
+        {Server, Protocol}
+     || Protocol <- [h1, h2], Server <- [livery, cowboy]
+    ],
+    Results = [
+        {Server, Protocol, run(Opts#{server => Server, protocol => Protocol})}
+     || {Server, Protocol} <- Runs
+    ],
+    report_comparison(Results),
+    Results.
+
+report_comparison(Results) ->
+    io:format(
+        "~n=== livery vs cowboy ===~n"
+        "~-8s ~-8s ~12s ~10s ~10s ~10s~n",
+        ["server", "proto", "req/s", "p50 ms", "p90 ms", "p99 ms"]
+    ),
+    lists:foreach(
+        fun({Server, Protocol, M}) ->
+            io:format(
+                "~-8s ~-8s ~12w ~10.3f ~10.3f ~10.3f~n",
+                [
+                    atom_to_list(Server),
+                    atom_to_list(Protocol),
+                    round(maps:get(throughput_rps, M)),
+                    maps:get(p50_us, M) / 1000,
+                    maps:get(p90_us, M) / 1000,
+                    maps:get(p99_us, M) / 1000
+                ]
+            )
+        end,
+        Results
+    ),
+    io:nl().
+
 %% @doc Compare a current run against a baseline. Fails when p99
 %% regresses by more than 10%.
 compare(Baseline, Current) ->
@@ -124,7 +182,7 @@ compare(Baseline, Current) ->
 %% @doc Print a metrics map.
 report(M) ->
     io:format(
-        "~n=== livery_bench (~p) ===~n"
+        "~n=== livery_bench (~p / ~p) ===~n"
         "connections : ~p~n"
         "duration    : ~p ms~n"
         "requests    : ~p (~p reconnects)~n"
@@ -134,6 +192,7 @@ report(M) ->
         "latency p99 : ~.3f ms~n"
         "latency max : ~.3f ms~n~n",
         [
+            maps:get(server, M, livery),
             maps:get(protocol, M),
             maps:get(connections, M),
             maps:get(duration_ms, M),
@@ -151,27 +210,28 @@ report(M) ->
 %% Listener lifecycle per protocol
 %%====================================================================
 
-ensure_started(h1) -> application:ensure_all_started(h1);
-ensure_started(h2) -> application:ensure_all_started(h2);
-ensure_started(h3) -> application:ensure_all_started(quic).
+ensure_started(livery, h1) -> application:ensure_all_started(h1);
+ensure_started(livery, h2) -> application:ensure_all_started(h2);
+ensure_started(livery, h3) -> application:ensure_all_started(quic);
+ensure_started(cowboy, _Protocol) -> application:ensure_all_started(cowboy).
 
 ref_handler() ->
     fun(_Req) -> livery_resp:json(200, <<"{\"ok\":true}">>) end.
 
-start_listener(h1, Opts) ->
+start_listener(livery, h1, Opts) ->
     livery_h1:start(#{
         port => maps:get(port, Opts, 0),
         stack => [],
         handler => ref_handler()
     });
-start_listener(h2, Opts) ->
+start_listener(livery, h2, Opts) ->
     livery_h2:start(#{
         port => maps:get(port, Opts, 0),
         transport => tcp,
         stack => [],
         handler => ref_handler()
     });
-start_listener(h3, Opts) ->
+start_listener(livery, h3, Opts) ->
     {Cert, Key} = load_certs(),
     livery_h3:start(#{
         port => maps:get(port, Opts, 0),
@@ -180,19 +240,43 @@ start_listener(h3, Opts) ->
         stack => [],
         handler => ref_handler(),
         pool_size => maps:get(pool_size, Opts, 1)
-    }).
+    });
+%% Cowboy serves the same handler over a cleartext listener. The clear
+%% listener speaks HTTP/1.1 and h2c (prior knowledge), so one listener
+%% covers the h1 and h2 clients; restrict `protocols' so each run
+%% exercises exactly the protocol under test.
+start_listener(cowboy, Protocol, Opts) when Protocol =:= h1; Protocol =:= h2 ->
+    Ref = cowboy_ref(Protocol),
+    Dispatch = cowboy_router:compile([{'_', [{"/", bench_cowboy_h, []}]}]),
+    Protocols =
+        case Protocol of
+            h1 -> [http];
+            h2 -> [http2]
+        end,
+    {ok, _} = cowboy:start_clear(
+        Ref,
+        [{port, maps:get(port, Opts, 0)}],
+        #{env => #{dispatch => Dispatch}, protocols => Protocols}
+    ),
+    {ok, Ref}.
 
-listener_port(h1, L) ->
+listener_port(livery, h1, L) ->
     h1:server_port(L);
-listener_port(h2, L) ->
+listener_port(livery, h2, L) ->
     h2:server_port(L);
-listener_port(h3, L) ->
+listener_port(livery, h3, L) ->
     {ok, P} = quic:get_server_port(L),
-    P.
+    P;
+listener_port(cowboy, _Protocol, Ref) ->
+    ranch:get_port(Ref).
 
-stop_listener(h1, L) -> livery_h1:stop(L);
-stop_listener(h2, L) -> livery_h2:stop(L);
-stop_listener(h3, L) -> livery_h3:stop(L).
+stop_listener(livery, h1, L) -> livery_h1:stop(L);
+stop_listener(livery, h2, L) -> livery_h2:stop(L);
+stop_listener(livery, h3, L) -> livery_h3:stop(L);
+stop_listener(cowboy, _Protocol, Ref) -> cowboy:stop_listener(Ref).
+
+cowboy_ref(h1) -> bench_cowboy_h1;
+cowboy_ref(h2) -> bench_cowboy_h2.
 
 %% Reuse the vendored self-signed test certs for the H3 listener.
 load_certs() ->

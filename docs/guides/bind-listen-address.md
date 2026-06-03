@@ -1,0 +1,89 @@
+# How to bind to a specific address or IPv6
+
+## Problem
+
+By default a listener binds the IPv4 wildcard, accepting connections
+on every interface. You want to pin it to one address, or serve over
+IPv6.
+
+## Solution
+
+Every listener accepts two options, on `start_service/1`,
+`start_listener/2`, and each adapter's `start/1`:
+
+- `ip => inet:ip_address()` — the bind address. An IPv6 8-tuple
+  selects the IPv6 family automatically.
+- `inet6 => true` — bind the IPv6 wildcard (`::`) when you do not
+  want to name a specific address.
+
+They work the same across all three protocols (HTTP/1.1, HTTP/2,
+and HTTP/3 over QUIC).
+
+### IPv6 on every protocol
+
+```erlang
+{ok, Pid} = livery:start_service(#{
+    http  => #{port => 8080, inet6 => true},
+    https => #{port => 8443, inet6 => true, cert => Cert, key => Key},
+    http3 => #{port => 8443, inet6 => true, cert => Cert, key => Key},
+    router => Router
+}).
+```
+
+### A specific address
+
+```erlang
+%% IPv4 loopback only
+{ok, _} = livery:start_listener(livery_h1, #{
+    port => 8080,
+    ip => {127, 0, 0, 1},
+    stack => Stack,
+    handler => Handler
+}).
+
+%% A specific IPv6 address (family inferred from the 8-tuple)
+{ok, _} = livery:start_listener(livery_h3, #{
+    port => 8443,
+    ip => {0, 0, 0, 0, 0, 0, 0, 1},
+    cert => Cert, key => Key,
+    stack => Stack, handler => Handler
+}).
+```
+
+## Dual-stack vs IPv6-only
+
+Binding `inet6` gives you whatever the OS default for v6 sockets is.
+On most systems that is dual-stack (the socket also accepts IPv4 via
+v4-mapped addresses); some default to v6-only. To be explicit, pass
+the underlying socket option through the adapter's lower-level opts:
+
+- HTTP/1.1 and HTTP/2: `ssl_opts => [{ipv6_v6only, true}]` (TLS) or
+  rely on the TCP listener's `inet6` family for cleartext.
+- HTTP/3: `quic_opts => #{extra_socket_opts => [{ipv6_v6only, true}]}`.
+
+To serve both families predictably, start one listener per family on
+the same port.
+
+## WebSockets and WebTransport
+
+There is nothing extra to configure. WebSockets (HTTP Upgrade on
+HTTP/1.1, extended CONNECT on HTTP/2 and HTTP/3) and WebTransport
+upgrade in place on the adapter's existing stream, so they inherit the
+listener's bind address and family. Bind the listener to IPv6 and a
+`wss://[::1]/...` client connects over IPv6.
+
+## Notes
+
+- `ip` and `inet6` are translated to the wire libraries the same way
+  everywhere by `livery_inet:socket_addr_opts/1`: an IPv6 `ip` tuple
+  or `inet6 => true` selects the `inet6` family, and `ip` sets the
+  bind address.
+- For HTTP/3 the options fold into the QUIC listener's
+  `extra_socket_opts`; any `extra_socket_opts` you set yourself are
+  preserved.
+- `livery_service:which_listeners/1` reports the bound ports.
+
+## See also
+
+- Concept: [Adapters](../concepts/adapters.md)
+- Reference: `livery`, `livery_service`

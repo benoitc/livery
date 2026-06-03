@@ -35,8 +35,7 @@ jobs:
           path: |
             _build
             ~/.cache/rebar3
-          key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.lock') }}
-          restore-keys: build-ubuntu-24.04-otp-28-
+          key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.config') }}
       - run: rebar3 lint
 
   xref:
@@ -55,8 +54,7 @@ jobs:
           path: |
             _build
             ~/.cache/rebar3
-          key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.lock') }}
-          restore-keys: build-ubuntu-24.04-otp-28-
+          key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.config') }}
       - run: rebar3 xref
 
   dialyzer:
@@ -76,7 +74,7 @@ jobs:
             _build/*_plt
             _build/*/rebar3_*_plt
             ~/.cache/rebar3
-          key: plt-otp-28-${{ hashFiles('rebar.lock') }}
+          key: plt-otp-28-${{ hashFiles('rebar.config') }}
           restore-keys: plt-otp-28-
       - run: rebar3 dialyzer
 
@@ -93,6 +91,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: erlef/setup-beam@v1
+        env:
+          # setup-beam cannot map the arm runner's ImageOS
+          # (ubuntu24-arm64); set it explicitly per matrix OS.
+          ImageOS: ${{ fromJSON('{"ubuntu-24.04":"ubuntu24","ubuntu-24.04-arm":"ubuntu24","macos-14":"macos14","macos-15":"macos15"}')[matrix.os] }}
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: '3.25.0'
@@ -104,8 +106,7 @@ jobs:
           path: |
             _build
             ~/.cache/rebar3
-          key: build-${{ matrix.os }}-otp-${{ matrix.otp }}-${{ hashFiles('rebar.lock') }}
-          restore-keys: build-${{ matrix.os }}-otp-${{ matrix.otp }}-
+          key: build-${{ matrix.os }}-otp-${{ matrix.otp }}-${{ hashFiles('rebar.config') }}
       - run: rebar3 compile
 
   eunit:
@@ -130,8 +131,7 @@ jobs:
           path: |
             _build
             ~/.cache/rebar3
-          key: build-${{ matrix.os }}-otp-28-${{ hashFiles('rebar.lock') }}
-          restore-keys: build-${{ matrix.os }}-otp-28-
+          key: build-${{ matrix.os }}-otp-28-${{ hashFiles('rebar.config') }}
       - run: rebar3 eunit
 
   ct:
@@ -156,6 +156,5 @@ jobs:
           path: |
             _build
             ~/.cache/rebar3
-          key: build-${{ matrix.os }}-otp-28-${{ hashFiles('rebar.lock') }}
-          restore-keys: build-${{ matrix.os }}-otp-28-
+          key: build-${{ matrix.os }}-otp-28-${{ hashFiles('rebar.config') }}
       - run: rebar3 ct

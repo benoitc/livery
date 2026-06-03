@@ -50,6 +50,10 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
 -type listen_opts() :: #{
     name => atom(),
     port => inet:port_number(),
+    %% Bind address. An IPv6 8-tuple selects the inet6 family.
+    ip => inet:ip_address(),
+    %% Bind the IPv6 wildcard (`::') when no explicit `ip' is given.
+    inet6 => boolean(),
     cert := binary(),
     key := term(),
     settings => map(),
@@ -251,12 +255,12 @@ build_h3_opts(Opts, Stack, Handler) ->
     Base = #{
         cert => maps:get(cert, Opts),
         key => maps:get(key, Opts),
+        quic_opts => quic_opts(Opts),
         handler => make_handler_fun(Stack, Handler, MaxBody)
     },
     copy_keys(
         [
             settings,
-            quic_opts,
             stream_type_handler,
             h3_datagram_enabled,
             connection_handler,
@@ -268,6 +272,20 @@ build_h3_opts(Opts, Stack, Handler) ->
         Opts,
         Base
     ).
+
+%% Fold the `ip'/`inet6' bind options into `quic_opts.extra_socket_opts'.
+%% An IPv6 `ip' tuple (or `inet6 => true') selects the inet6 family;
+%% caller-supplied `extra_socket_opts' are preserved.
+-spec quic_opts(listen_opts()) -> map().
+quic_opts(Opts) ->
+    QuicOpts = maps:get(quic_opts, Opts, #{}),
+    case livery_inet:socket_addr_opts(Opts) of
+        [] ->
+            QuicOpts;
+        Addr ->
+            Extra = maps:get(extra_socket_opts, QuicOpts, []),
+            QuicOpts#{extra_socket_opts => Addr ++ Extra}
+    end.
 
 -spec copy_keys([atom()], map(), map()) -> map().
 copy_keys([], _Src, Dst) ->

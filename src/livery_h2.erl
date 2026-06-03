@@ -42,6 +42,7 @@ in `capabilities/1`.
     stop/1,
     send_headers/4,
     send_data/3,
+    send_full/5,
     send_trailers/2,
     reset/2,
     peer_info/1,
@@ -55,6 +56,10 @@ in `capabilities/1`.
 
 -type listen_opts() :: #{
     port => inet:port_number(),
+    %% Bind address. An IPv6 8-tuple selects the inet6 family.
+    ip => inet:ip_address(),
+    %% Bind the IPv6 wildcard (`::') when no explicit `ip' is given.
+    inet6 => boolean(),
     transport => tcp | ssl,
     cert => binary() | string(),
     key => binary() | string(),
@@ -122,6 +127,20 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
 send_data({Conn, StreamId}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
     h2:send_data(Conn, StreamId, iolist_to_binary(IoData), EndStream).
+
+%% Coalesced full response: HEADERS + DATA in one h2 call (and one
+%% socket write). h2:respond/5 falls back to the granular path itself
+%% when it cannot coalesce (oversized headers/body).
+-spec send_full(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    iodata(),
+    livery_adapter:send_opts()
+) ->
+    livery_adapter:send_result().
+send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
+    h2:respond(Conn, StreamId, Status, Headers, iolist_to_binary(IoData)).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
@@ -232,6 +251,8 @@ build_h2_opts(Opts, Stack, Handler) ->
     },
     copy_keys(
         [
+            ip,
+            inet6,
             cert,
             key,
             cacerts,

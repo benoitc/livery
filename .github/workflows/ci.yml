@@ -91,6 +91,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: erlef/setup-beam@v1
+        env:
+          # setup-beam cannot map the arm runner's ImageOS
+          # (ubuntu24-arm64); set it explicitly per matrix OS.
+          ImageOS: ${{ fromJSON('{"ubuntu-24.04":"ubuntu24","ubuntu-24.04-arm":"ubuntu24","macos-14":"macos14","macos-15":"macos15"}')[matrix.os] }}
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: '3.25.0'

@@ -21,6 +21,7 @@
     json_response/1,
     empty_response/1,
     binding_via_routed_handler/1,
+    read_query_string/1,
     streaming_chunked_response/1,
     sse_response/1,
     echo_buffered_body/1,
@@ -39,6 +40,7 @@ all() ->
         json_response,
         empty_response,
         binding_via_routed_handler,
+        read_query_string,
         streaming_chunked_response,
         sse_response,
         echo_buffered_body,
@@ -107,6 +109,12 @@ binding_via_routed_handler(Config) ->
     %% No router yet; emulate by reading the path inside the handler.
     {ok, 200, _, Body} = get(Config, <<"/hi/alice">>),
     ?assertEqual(<<"hello, alice">>, Body).
+
+%% The query string survives the H1 transport: livery_ext:query/2 reads
+%% the values (URL-decoded) the handler asked for.
+read_query_string(Config) ->
+    {ok, 200, _, Body} = get(Config, <<"/search?q=hello%20world&page=2">>),
+    ?assertEqual(<<"hello world|2">>, Body).
 
 streaming_chunked_response(Config) ->
     {ok, 200, _, Body} = get(Config, <<"/">>),
@@ -185,6 +193,12 @@ handler_for(binding_via_routed_handler) ->
             _ ->
                 livery_resp:text(404, <<>>)
         end
+    end;
+handler_for(read_query_string) ->
+    fun(R) ->
+        Q = livery_ext:query(<<"q">>, R),
+        Page = livery_ext:query(<<"page">>, R),
+        livery_resp:text(200, [Q, <<"|">>, Page])
     end;
 handler_for(streaming_chunked_response) ->
     Producer = fun(Emit) ->

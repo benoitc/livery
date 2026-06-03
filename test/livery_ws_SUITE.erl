@@ -26,7 +26,8 @@
     h1_rejects_request_without_upgrade_headers/1,
     h2_echo_text_frame/1,
     h2_rejects_plain_get/1,
-    h3_echo_text_frame/1
+    h3_echo_text_frame/1,
+    h1_echo_text_frame_ipv6/1
 ]).
 
 %%====================================================================
@@ -42,6 +43,7 @@ suite() ->
 all() ->
     [
         h1_echo_text_frame,
+        h1_echo_text_frame_ipv6,
         h1_rejects_request_without_upgrade_headers,
         h2_echo_text_frame,
         h2_rejects_plain_get,
@@ -84,6 +86,24 @@ init_per_testcase(TC, Config) when
         {port, h2:server_port(Listener)}
         | Config
     ];
+init_per_testcase(h1_echo_text_frame_ipv6, Config) ->
+    case ipv6_loopback_available() of
+        false ->
+            {skip, no_ipv6_loopback};
+        true ->
+            {ok, Listener} = livery_h1:start(#{
+                port => 0,
+                ip => {0, 0, 0, 0, 0, 0, 0, 1},
+                stack => [],
+                handler => fun ws_handler/1
+            }),
+            [
+                {adapter, h1},
+                {listener, Listener},
+                {port, h1:server_port(Listener)}
+                | Config
+            ]
+    end;
 init_per_testcase(h3_echo_text_frame, Config) ->
     {ok, Listener} = livery_h3:start(#{
         port => 0,
@@ -120,6 +140,15 @@ end_per_testcase(_TC, Config) ->
 ws_handler(R) ->
     livery_ws:upgrade(R, livery_ws_echo_handler, #{}).
 
+ipv6_loopback_available() ->
+    case gen_tcp:listen(0, [inet6, {ip, {0, 0, 0, 0, 0, 0, 0, 1}}]) of
+        {ok, S} ->
+            ok = gen_tcp:close(S),
+            true;
+        {error, _} ->
+            false
+    end.
+
 %%====================================================================
 %% H1
 %%====================================================================
@@ -131,6 +160,22 @@ h1_echo_text_frame(Config) ->
         integer_to_binary(Port),
         <<"/">>
     ]),
+    ws_echo_roundtrip(Url).
+
+%% Same echo round-trip over an IPv6-bound listener (`ip => ::1'),
+%% proving the listen-address options carry through to the WS upgrade.
+%% The listener is bound v6 in init_per_testcase, which skips the case
+%% on a host without an IPv6 loopback.
+h1_echo_text_frame_ipv6(Config) ->
+    Port = ?config(port, Config),
+    Url = iolist_to_binary([
+        <<"ws://[::1]:">>,
+        integer_to_binary(Port),
+        <<"/">>
+    ]),
+    ws_echo_roundtrip(Url).
+
+ws_echo_roundtrip(Url) ->
     Self = self(),
     {ok, Sess} = ws_client:connect(Url, #{
         handler => livery_ws_client_capture,

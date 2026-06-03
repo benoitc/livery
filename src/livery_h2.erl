@@ -55,6 +55,10 @@ in `capabilities/1`.
 
 -type listen_opts() :: #{
     port => inet:port_number(),
+    %% Bind address. An IPv6 8-tuple selects the inet6 family.
+    ip => inet:ip_address(),
+    %% Bind the IPv6 wildcard (`::') when no explicit `ip' is given.
+    inet6 => boolean(),
     transport => tcp | ssl,
     cert => binary() | string(),
     key => binary() | string(),
@@ -232,6 +236,8 @@ build_h2_opts(Opts, Stack, Handler) ->
     },
     copy_keys(
         [
+            ip,
+            inet6,
             cert,
             key,
             cacerts,

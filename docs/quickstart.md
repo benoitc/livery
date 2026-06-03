@@ -86,6 +86,7 @@ will emit one entry via `logger:log/2`, and any inbound body over
 ## What's next
 
 - Learn the model: [Tutorials](tutorials/your-first-service.md).
+- See it all together on a real listener: [Build a complete service](tutorials/build-a-complete-service.md).
 - Solve a specific task: [How-to guides](README.md#how-to-guides).
 - Bind a specific address or serve over IPv6: [Bind to an address or IPv6](guides/bind-listen-address.md).
 - Migrate an existing service: [Migrate from Cowboy](guides/migrate-from-cowboy.md).

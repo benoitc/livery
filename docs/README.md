@@ -30,6 +30,7 @@ Step-by-step, learning-oriented.
 - [Compose a middleware stack](tutorials/middleware-stack.md)
 - [Stream a response](tutorials/streaming-responses.md)
 - [Test your handlers](tutorials/testing-handlers.md)
+- [Build a complete service](tutorials/build-a-complete-service.md)
 
 ## How-to guides
 

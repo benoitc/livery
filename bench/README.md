@@ -32,18 +32,18 @@ protocols and returns `[{Protocol, Metrics}]`.
   p50_us => _, p90_us => _, p99_us => _, max_us => _}
 ```
 
-`reconnects` counts connections re-established mid-run. For HTTP/2
-this is expected: the wire library caps streams at 100 per
-connection (a DoS guard), so the harness cycles the connection and
-keeps going. H1/H3 keep one connection per worker and report 0.
+`reconnects` counts connections re-established mid-run. All three
+protocols keep one connection per worker and report 0 under steady
+load; a non-zero count means requests were failing and the worker had
+to reconnect.
 
 ## Indicative numbers (loopback, 100 conns, 5 s)
 
 | Protocol | req/s | p50 | p99 |
 |---|---|---|---|
-| H1       | ~62k  | 2.0 ms | 4.3 ms |
-| H2 (h2c) | ~48k  | 1.5 ms | 2.4 ms |
-| H3       | ~12k  | 8.2 ms | 10.8 ms |
+| H1       | ~79k  | 1.0 ms | 4.7 ms |
+| H2 (h2c) | ~75k  | 1.3 ms | 2.8 ms |
+| H3       | ~16k  | 5.8 ms | 6.6 ms |
 
 Loopback, single host (Apple silicon); absolute numbers are
 host-specific. Use them only as a same-host before/after baseline,

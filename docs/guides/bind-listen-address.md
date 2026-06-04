@@ -19,6 +19,24 @@ Every listener accepts two options, on `start_service/1`,
 They work the same across all three protocols (HTTP/1.1, HTTP/2,
 and HTTP/3 over QUIC).
 
+### What the protocol keys mean
+
+Each key in `start_service/1` is one adapter serving one protocol:
+
+| Key | Protocol | Transport |
+|---|---|---|
+| `http` | HTTP/1.1 | cleartext TCP |
+| `https` | HTTP/2 | TLS (needs `cert`/`key`) |
+| `http3` | HTTP/3 | QUIC (needs `cert`/`key`) |
+
+So `http` is HTTP/1.1 only, *not* HTTP/1.1 plus HTTP/2. To serve more
+than one protocol, list more than one key, which is what the examples
+below do. (The transport is the default per key; `http` and `https` also
+accept a `transport` override if you ever want HTTP/1.1 over TLS or
+cleartext HTTP/2.) Add `alt_svc => advertise` to the service map to put
+an `Alt-Svc` header on the H1 and H2 responses so capable clients can
+upgrade to H3.
+
 ### IPv6 on every protocol
 
 ```erlang

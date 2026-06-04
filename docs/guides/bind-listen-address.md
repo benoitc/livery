@@ -31,11 +31,22 @@ Each key in `start_service/1` is one adapter serving one protocol:
 
 So `http` is HTTP/1.1 only, *not* HTTP/1.1 plus HTTP/2. To serve more
 than one protocol, list more than one key, which is what the examples
-below do. (The transport is the default per key; `http` and `https` also
-accept a `transport` override if you ever want HTTP/1.1 over TLS or
-cleartext HTTP/2.) Add `alt_svc => advertise` to the service map to put
-an `Alt-Svc` header on the H1 and H2 responses so capable clients can
-upgrade to H3.
+below do.
+
+The transport shown is the default per key, but `http` and `https` take
+a `transport` override. The useful one is **h2c**, HTTP/2 over cleartext
+(no TLS): it is the `https` adapter with `transport => tcp` and no
+`cert`/`key`.
+
+```erlang
+%% HTTP/2 cleartext (h2c) on a specific address, no certificates
+https => #{port => 8080, ip => Addr, transport => tcp}
+```
+
+You can likewise run HTTP/1.1 over TLS by giving the `http` map a
+`transport => ssl` with `cert`/`key`. Add `alt_svc => advertise` to the
+service map to put an `Alt-Svc` header on the H1 and H2 responses so
+capable clients can upgrade to H3.
 
 ### IPv6 on every protocol
 

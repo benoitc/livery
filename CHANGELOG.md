@@ -7,14 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-04
+
+Closes the structural gap with Axum + Tower + Hyper: router composition,
+first-class shared state, and a composable HTTP client that mirrors the
+middleware model outbound, including load balancing across endpoints.
+
 ### Added
 
+- Router composition. `livery_router:nest/2,3` mounts a sub-router under a
+  path prefix and `livery_router:merge/1,2` combines routers, so an area
+  (for example an MCP mount) can be assembled on its own and grafted in.
+- First-class service config. `livery:start_service/1` takes a `config`
+  map shared by every handler and middleware, read with
+  `livery_req:config/1,2,3` (the `with_state` analogue).
+- Composable HTTP client (`livery_client`): the outbound twin of the
+  middleware. Build a client with a transport adapter, base URL, default
+  headers, and a layer stack, then call it. Ships timeout, retry,
+  concurrency-limit, and circuit-breaker layers, streamed request and
+  response bodies, and a `livery_client_adapter` behaviour (default
+  `livery_client_hackney`, covering HTTP/1.1, HTTP/2, and HTTP/3).
+- Client load balancing. A `livery_client:balance/1` layer spreads
+  requests across a pool of endpoints with power-of-two-choices or
+  round-robin selection, passive outlier ejection, and lazy half-open
+  recovery. Pools are seeded from a static list or a
+  `livery_client_discover` provider and can be changed at runtime with
+  `add_endpoint/2` and `remove_endpoint/2`.
+- Bind to a specific listen address, including IPv6 (`livery_inet`), and
+  reduced per-request overhead.
 - Cowboy cutover validation. `examples/livery_example_migration.erl`
   expresses the common Cowboy patterns (plain handler, REST resource,
   SSE, a `cowboy_loop`-style streaming endpoint, WebSocket echo) in
   Livery, and `test/livery_cowboy_parity_SUITE.erl` runs that handler set
   behind both a live Cowboy listener and Livery, diffing the observable
   behaviour over H1, then drives the same Livery handlers over H2 and H3.
+
+### Changed
+
+- Wire dependencies moved to hex and bumped: `quic` 1.6.3, `h2` 0.8.0,
+  `webtransport` 0.3.1, `hackney` 4.2.0, `instrument` 1.1.3.
+
+### Fixed
+
+- H1 query string handling.
+- Low-severity security hardening across the adapters.
 
 ## [0.1.0] - 2026-05-26
 
@@ -89,4 +125,5 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.0]: https://github.com/benoitc/livery/releases/tag/v0.2.0
 [0.1.0]: https://github.com/benoitc/livery/releases/tag/v0.1.0

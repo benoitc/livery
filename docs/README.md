@@ -30,6 +30,7 @@ Step-by-step, learning-oriented.
 - [Compose a middleware stack](tutorials/middleware-stack.md)
 - [Stream a response](tutorials/streaming-responses.md)
 - [Test your handlers](tutorials/testing-handlers.md)
+- [Call another service](tutorials/call-a-service.md)
 - [Build a complete service](tutorials/build-a-complete-service.md)
 
 ## How-to guides
@@ -65,6 +66,9 @@ solution.
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
 - [Serve MCP tools](guides/serve-mcp-tools.md)
 - [Serve WebTransport](guides/serve-webtransport.md)
+
+**Calling out**
+- [Make outbound HTTP requests](guides/make-http-requests.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

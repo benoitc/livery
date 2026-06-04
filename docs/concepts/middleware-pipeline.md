@@ -177,8 +177,19 @@ The pipeline is built per request as a chain of closures: each `Next` is
 per-request overhead is a few calls plus the real work. Keep stacks under
 about ten entries.
 
+## Outbound: the same model, the other direction
+
+The same composable model runs in the other direction. `livery_client`
+is the outbound twin of this pipeline: you stack layers (timeout, retry,
+circuit breaker, concurrency) around an HTTP request the same way you
+stack middleware around a handler, and each layer is the same
+`call(Request, Next, State)` shape, returning `{ok, Response} |
+{error, _}`. See
+[Make outbound HTTP requests](../guides/make-http-requests.md).
+
 ## See also
 
 - Tutorial: [Compose a middleware stack](../tutorials/middleware-stack.md)
 - Guide: [Write a custom middleware](../guides/custom-middleware.md)
+- Guide: [Make outbound HTTP requests](../guides/make-http-requests.md)
 - Reference: `livery_middleware`, `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`

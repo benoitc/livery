@@ -30,7 +30,28 @@ and HTTP/3 over QUIC).
 }).
 ```
 
-### A specific address
+### A specific address on every protocol
+
+To bind all three adapters to one address, put the same `ip` in each
+protocol's map. The three listeners share the one `router` (and
+middleware); only the bind address and ports differ.
+
+```erlang
+Addr = {192, 168, 1, 10},          %% an IPv6 8-tuple works the same way
+{ok, Pid} = livery:start_service(#{
+    http  => #{port => 8080, ip => Addr},
+    https => #{port => 8443, ip => Addr, cert => Cert, key => Key},
+    http3 => #{port => 8443, ip => Addr, cert => Cert, key => Key},
+    router => Router
+}).
+```
+
+HTTP/2 (over TLS) and HTTP/3 (over QUIC) can share the same port number
+because one is TCP and the other is UDP; HTTP/1.1 is cleartext on its
+own port. Each map also accepts `inet6 => true` instead of a specific
+`ip` to bind the IPv6 wildcard.
+
+### A specific address on a single listener
 
 ```erlang
 %% IPv4 loopback only
@@ -49,6 +70,40 @@ and HTTP/3 over QUIC).
     stack => Stack, handler => Handler
 }).
 ```
+
+### What `handler` and `stack` are
+
+A single-protocol listener takes two more options that say what to run
+for each request:
+
+- `handler` is the function that turns a request into a response: a
+  `fun((Req) -> Resp)`, or a `{Module, Function}` pair. Usually you do
+  not write this by hand. You compile routes and let
+  `livery:router_handler/1` build it for you:
+
+  ```erlang
+  Router  = livery_router:compile([{<<"GET">>, <<"/">>, {hello, index}}]),
+  Handler = livery:router_handler(Router).
+  ```
+
+  `livery:start_service/1` does this step for you, which is why its
+  examples above pass `router => Router` instead of a `handler`. With a
+  single adapter's `start/1` you pass the `handler` yourself. See
+  [Routing](../concepts/routing.md).
+
+- `stack` is the middleware stack: an ordered list of cross-cutting
+  steps (request id, logging, body limit, auth) that run around the
+  handler. `[]` means none. For example:
+
+  ```erlang
+  Stack = [{livery_request_id, undefined}, {livery_access_log, #{}}].
+  ```
+
+  See [The middleware pipeline](../concepts/middleware-pipeline.md).
+
+The bind options (`ip`, `inet6`) are independent of these: they decide
+*where* the listener accepts connections, while `handler` and `stack`
+decide *what happens* to each request.
 
 ## Dual-stack vs IPv6-only
 

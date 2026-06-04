@@ -11,9 +11,9 @@ IPv6.
 Every listener accepts two options, on `start_service/1`,
 `start_listener/2`, and each adapter's `start/1`:
 
-- `ip => inet:ip_address()` — the bind address. An IPv6 8-tuple
+- `ip => inet:ip_address()` - the bind address. An IPv6 8-tuple
   selects the IPv6 family automatically.
-- `inet6 => true` — bind the IPv6 wildcard (`::`) when you do not
+- `inet6 => true` - bind the IPv6 wildcard (`::`) when you do not
   want to name a specific address.
 
 They work the same across all three protocols (HTTP/1.1, HTTP/2,
@@ -47,6 +47,98 @@ You can likewise run HTTP/1.1 over TLS by giving the `http` map a
 `transport => ssl` with `cert`/`key`. Add `alt_svc => advertise` to the
 service map to put an `Alt-Svc` header on the H1 and H2 responses so
 capable clients can upgrade to H3.
+
+### Starting an adapter: on its own, or as a service
+
+There are two ways to bring an adapter up, and the bind options work the
+same in both.
+
+**On its own**, with `livery:start_listener/2`. You pass the adapter
+module, its options, and the `stack` and `handler` yourself. You get back
+the listener handle and you own its lifecycle:
+
+```erlang
+{ok, Ref} = livery:start_listener(livery_h1, #{
+    port => 8080,
+    ip => {127, 0, 0, 1},
+    stack => Stack,
+    handler => Handler
+}),
+%% ... later ...
+ok = livery:stop_listener({livery_h1, Ref}).
+```
+
+**As a service**, with `livery:start_service/1`. The service starts the
+adapters for you, one per protocol key, sharing one `router` (or
+`handler`) and one middleware stack, and stops them together. It is a
+supervising process, so you also get `livery_service:which_listeners/1`
+and graceful `livery:drain/2`. This is the usual choice.
+
+The map can hold any subset of the keys, including just one, so
+`start_service/1` is also the managed way to run a *single* adapter. The
+difference from `start_listener/2` is not the number of adapters: it is
+that the service supervises them and shares the router and stack, whereas
+`start_listener/2` is a bare listener whose handle you hold yourself.
+
+```erlang
+%% A single adapter (H1), but managed as a service:
+{ok, Pid} = livery:start_service(#{
+    http   => #{port => 8080, ip => {127, 0, 0, 1}},
+    router => Router
+}).
+```
+
+### Can I run several adapters?
+
+Yes, in two senses.
+
+- **Several protocols at once.** A single service already runs more than
+  one adapter: give it `http`, `https`, and `http3` and it brings up H1,
+  H2, and H3 together (the examples below do this).
+- **Several listeners of the same kind.** To bind, say, HTTP/1.1 on two
+  different addresses, call `start_listener/2` once per listener and keep
+  each handle. Each listener is independent.
+
+```erlang
+{ok, Lan} = livery:start_listener(livery_h1, #{
+    port => 8080, ip => {10, 0, 0, 5}, stack => Stack, handler => Handler
+}),
+{ok, Local} = livery:start_listener(livery_h1, #{
+    port => 8080, ip => {127, 0, 0, 1}, stack => Stack, handler => Handler
+}).
+```
+
+A `start_service/1` map holds one entry per protocol, so for several
+listeners of the same protocol use `start_listener/2` (or run more than
+one service).
+
+### Custom adapters
+
+`start_service/1` and `livery:start_listener/2` manage only the three
+built-in adapters: `start_service/1` maps `http`/`https`/`http3` to
+`livery_h1`/`livery_h2`/`livery_h3`, and `start_listener/2` accepts those
+three modules (anything else returns `{error, unknown_adapter}`).
+
+A custom adapter, any module implementing the `livery_adapter` behaviour,
+is not registered with either entry point. You start it through its own
+start function, and it owns its listener and lifecycle:
+
+```erlang
+%% A custom adapter exposes its own start; it is not passed to
+%% livery:start_listener/2.
+{ok, Listener} = my_adapter:start(#{
+    port => 8080,
+    ip => {127, 0, 0, 1},
+    stack => Stack,
+    handler => Handler
+}).
+```
+
+The bind options are a convention, not magic: a custom adapter honours
+`ip`/`inet6` by running them through `livery_inet:socket_addr_opts/1`
+(the same helper the built-ins use) and handing the result to its wire
+library. See [Adapters](../concepts/adapters.md) for the behaviour and
+`examples/livery_example_adapter.erl` for a complete, runnable one.
 
 ### IPv6 on every protocol
 

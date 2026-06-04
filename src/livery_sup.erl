@@ -36,4 +36,12 @@ init([]) ->
         type => worker,
         modules => [livery_ratelimit_store]
     },
-    {ok, {SupFlags, [ReqSup, RateLimitStore]}}.
+    CircuitStore = #{
+        id => livery_client_circuit_store,
+        start => {livery_client_circuit_store, start_link, []},
+        restart => permanent,
+        shutdown => 5000,
+        type => worker,
+        modules => [livery_client_circuit_store]
+    },
+    {ok, {SupFlags, [ReqSup, RateLimitStore, CircuitStore]}}.

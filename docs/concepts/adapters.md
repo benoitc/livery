@@ -118,6 +118,14 @@ Every adapter takes the same `ip => inet:ip_address()` and
 `livery_inet:socket_addr_opts/1`. See
 [Bind to an address or IPv6](../guides/bind-listen-address.md).
 
+## The client adapter, its dual
+
+The same idea runs outbound. `livery_client_adapter` is the dual of this
+behaviour: it owns the wire for an outgoing request, while the client's
+layers (timeout, retry, circuit breaker) own the policy above it. The
+default `livery_client_hackney` covers HTTP/1.1, HTTP/2, and HTTP/3. See
+[Make outbound HTTP requests](../guides/make-http-requests.md).
+
 ## See also
 
 - Concept: [Architecture](architecture.md)

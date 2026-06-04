@@ -98,6 +98,10 @@ build_paths(Routes) ->
 
 add_route({Method, Path, _Handler}, Acc) ->
     add_route({Method, Path, ignore, #{}}, Acc);
+%% `livery_router:routes/1' yields `undefined' Meta for routes with none
+%% (the `compile/1' default); treat it as an empty map.
+add_route({Method, Path, Handler, undefined}, Acc) ->
+    add_route({Method, Path, Handler, #{}}, Acc);
 add_route({Method, Path, _Handler, Meta}, Acc) ->
     {Template, PathParams} = template(Path),
     Operation = operation(Meta, PathParams),

@@ -106,6 +106,23 @@ service-level stack:
  #{middleware => [{my_api_key, #{keys => [<<"s3cret">>]}}]}}
 ```
 
+## Composing routers
+
+A router is a value, so you can build it in pieces and join them. This is
+how you keep a self-contained feature's routes together and stitch them
+in, the way Axum's `nest`/`merge` work:
+
+- `livery_router:merge/2` puts two routers side by side (the later one
+  wins on a clash).
+- `livery_router:nest/3` mounts a sub-router under a prefix, so
+  `livery_mcp:router()` (at `/mcp`) can land at `/ai/mcp`.
+- `livery_router:layer/2` wraps a whole router in a middleware stack, the
+  easy way to guard a mounted subtree.
+- `livery_router:routes/1` reconstructs the flat route list from any
+  router, composed or not (the inverse of `compile/1`).
+
+See [Mount a router on a service](../guides/mount-a-router.md).
+
 ## Performance
 
 The trie allocates nothing on a lookup besides the bindings map, and

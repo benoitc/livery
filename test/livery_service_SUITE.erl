@@ -21,6 +21,7 @@
     alt_svc_advertised_on_h1_and_h2_only/1,
     which_listeners_reports_all_three/1,
     router_service_dispatches_routes/1,
+    config_is_readable_in_handler/1,
     service_without_handler_or_router_fails/1,
     stop_accepting_refuses_new_connections/1,
     drain_lets_inflight_finish/1,
@@ -37,6 +38,7 @@ all() ->
         alt_svc_advertised_on_h1_and_h2_only,
         which_listeners_reports_all_three,
         router_service_dispatches_routes,
+        config_is_readable_in_handler,
         service_without_handler_or_router_fails,
         stop_accepting_refuses_new_connections,
         drain_lets_inflight_finish,
@@ -137,6 +139,39 @@ router_service_dispatches_routes(_Config) ->
         {405, _} = http_delete(Port, <<"/">>)
     after
         livery:stop_service(Pid)
+    end.
+
+config_is_readable_in_handler(_Config) ->
+    %% A handler reads the service config over a real H1 listener, and a
+    %% per-listener config overrides the service-wide one.
+    Handler = fun(Req) ->
+        livery_resp:text(200, atom_to_binary(livery_req:config(db, Req), utf8))
+    end,
+    %% Service-wide config reaches the handler.
+    {ok, P1} = livery:start_service(#{
+        http => #{port => 0}, config => #{db => service_db}, handler => Handler
+    }),
+    try
+        ?assertEqual(
+            {200, <<"service_db">>},
+            http_get(maps:get(h1, livery:which_listeners(P1)), <<"/">>)
+        )
+    after
+        livery:stop_service(P1)
+    end,
+    %% A per-listener config wins over the service-wide one.
+    {ok, P2} = livery:start_service(#{
+        http => #{port => 0, config => #{db => listener_db}},
+        config => #{db => service_db},
+        handler => Handler
+    }),
+    try
+        ?assertEqual(
+            {200, <<"listener_db">>},
+            http_get(maps:get(h1, livery:which_listeners(P2)), <<"/">>)
+        )
+    after
+        livery:stop_service(P2)
     end.
 
 service_without_handler_or_router_fails(_Config) ->

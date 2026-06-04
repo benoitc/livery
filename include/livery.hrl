@@ -23,7 +23,8 @@
     disc_ref = undefined :: reference() | undefined,
     req_id = <<>> :: binary(),
     started_at = undefined :: integer() | undefined,
-    meta = #{} :: map()
+    meta = #{} :: map(),
+    config = undefined :: term()
 }).
 
 -record(livery_resp, {

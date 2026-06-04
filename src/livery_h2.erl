@@ -67,6 +67,8 @@ in `capabilities/1`.
     acceptors => pos_integer(),
     enable_connect_protocol => boolean(),
     max_body => non_neg_integer() | infinity,
+    %% Shared service config, readable in handlers via livery_req:config/1.
+    config => term(),
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.
@@ -247,7 +249,7 @@ build_h2_opts(Opts, Stack, Handler) ->
     MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
     Base = #{
         transport => Transport,
-        handler => make_handler_fun(Stack, Handler, MaxBody)
+        handler => make_handler_fun(Stack, Handler, MaxBody, maps:get(config, Opts, undefined))
     },
     copy_keys(
         [
@@ -276,7 +278,8 @@ copy_keys([K | Rest], Src, Dst) ->
 -spec make_handler_fun(
     livery_middleware:stack(),
     livery_middleware:handler(),
-    non_neg_integer() | infinity
+    non_neg_integer() | infinity,
+    term()
 ) ->
     fun(
         (
@@ -287,7 +290,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h2:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler, MaxBody) ->
+make_handler_fun(Stack, Handler, MaxBody, Config) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -297,7 +300,8 @@ make_handler_fun(Stack, Handler, MaxBody) ->
             Headers,
             Stack,
             Handler,
-            MaxBody
+            MaxBody,
+            Config
         )
     end.
 
@@ -309,9 +313,10 @@ make_handler_fun(Stack, Handler, MaxBody) ->
     h2:headers(),
     livery_middleware:stack(),
     livery_middleware:handler(),
-    non_neg_integer() | infinity
+    non_neg_integer() | infinity,
+    term()
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody) ->
+dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config) ->
     BodyRef = make_ref(),
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
@@ -326,7 +331,8 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody)
     Req1 = Req#livery_req{
         raw_query = RawQuery,
         notifier_pid = Translator,
-        disc_ref = DiscRef
+        disc_ref = DiscRef,
+        config = Config
     },
     case
         livery_req_sup:start_request(#{

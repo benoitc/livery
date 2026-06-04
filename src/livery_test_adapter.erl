@@ -236,7 +236,7 @@ capabilities(_) ->
 %%====================================================================
 
 -spec build_req(map(), stream(), map()) -> livery_req:req().
-build_req(Spec, Stream, _Opts) ->
+build_req(Spec, Stream, Opts) ->
     Defaults = #{
         protocol => h1,
         method => <<"GET">>,
@@ -244,7 +244,10 @@ build_req(Spec, Stream, _Opts) ->
     },
     Fields = maps:merge(Defaults, Spec),
     Req = livery_req:new(Fields),
-    Req#livery_req{adapter = ?MODULE, stream = Stream}.
+    %% `config' may come from the request spec or the run/4 opts (spec wins),
+    %% mirroring a per-listener config on the real adapters.
+    Config = maps:get(config, Fields, maps:get(config, Opts, undefined)),
+    Req#livery_req{adapter = ?MODULE, stream = Stream, config = Config}.
 
 -spec update(listener(), reference(), fun((#captured{}) -> #captured{})) -> ok.
 update(Tab, Ref, F) ->

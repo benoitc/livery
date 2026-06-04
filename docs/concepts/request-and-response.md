@@ -137,6 +137,21 @@ profile(Req) ->
     livery_resp:json(200, json:encode(User)).
 ```
 
+## Config vs meta
+
+These two look similar but do opposite jobs, so keep them straight:
+
+- **`config`** is service-wide and set once at startup: a DB pool, a
+  cache, settings. The same value for every request, read-only, via
+  `livery_req:config/1`. See
+  [Share config across handlers](../guides/share-config.md).
+- **`meta`** is per-request scratch a middleware writes for this one
+  request: the authenticated user, a trace id, a parsed body, via
+  `livery_req:set_meta/3` and `meta/2`.
+
+If you find yourself putting a database pool in `meta`, you want
+`config`; if you put the current user in `config`, you want `meta`.
+
 ## Extractors
 
 `livery_ext` is a thin typed layer over the accessors. It returns a value

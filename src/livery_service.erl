@@ -62,10 +62,15 @@ in-flight requests finish, use `livery:drain/1,2`.
     handler => livery_middleware:handler(),
     router => livery_router:router(),
     middleware => livery_middleware:stack(),
+    %% Shared service config, readable in handlers via livery_req:config/1.
+    %% A per-listener `config' (in the http/https/http3 map) overrides it.
+    config => term(),
     alt_svc => advertise | none
 }.
 
 -type listener_opts() :: #{
+    %% HTTP/3 listener name (atom); auto-derived from the port if absent.
+    name => atom(),
     port => inet:port_number(),
     %% Bind address. An IPv6 8-tuple selects the inet6 family.
     ip => inet:ip_address(),
@@ -76,7 +81,9 @@ in-flight requests finish, use `livery:drain/1,2`.
     cacerts => [binary()],
     acceptors => pos_integer(),
     settings => map(),
-    quic_opts => map()
+    quic_opts => map(),
+    %% Per-listener config; overrides the service-wide `config'.
+    config => term()
 }.
 
 -record(state, {
@@ -216,7 +223,7 @@ maybe_start_h1(Opts, Stack, Handler) ->
         {ok, ListenOpts} ->
             ListenOpts1 = maps:merge(
                 ListenOpts,
-                #{stack => Stack, handler => Handler}
+                #{stack => Stack, handler => Handler, config => listener_config(Opts, ListenOpts)}
             ),
             {ok, Ref} = livery_h1:start(ListenOpts1),
             {Ref, h1:server_port(Ref)};
@@ -232,6 +239,7 @@ maybe_start_h2(Opts, Stack, Handler) ->
                 #{
                     stack => Stack,
                     handler => Handler,
+                    config => listener_config(Opts, ListenOpts),
                     transport => maps:get(
                         transport,
                         ListenOpts,
@@ -251,7 +259,11 @@ maybe_start_h3(Opts, Stack, Handler) ->
             ListenOpts1 = ensure_h3_name(
                 maps:merge(
                     ListenOpts,
-                    #{stack => Stack, handler => Handler}
+                    #{
+                        stack => Stack,
+                        handler => Handler,
+                        config => listener_config(Opts, ListenOpts)
+                    }
                 )
             ),
             {ok, Name} = livery_h3:start(ListenOpts1),
@@ -260,6 +272,11 @@ maybe_start_h3(Opts, Stack, Handler) ->
         error ->
             undefined
     end.
+
+%% A per-listener `config' overrides the service-wide one.
+-spec listener_config(service_opts(), listener_opts()) -> term().
+listener_config(Opts, ListenOpts) ->
+    maps:get(config, ListenOpts, maps:get(config, Opts, undefined)).
 
 %% `quic_h3' registers the listener under an atom name. Derive a stable
 %% one from the bound port so restarting a service reuses the same

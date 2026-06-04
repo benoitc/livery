@@ -22,24 +22,6 @@ runtime. WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP,
 and OpenTelemetry-style observability are built-in modules. It is
 written in the spirit of Axum + Tower + Hyper, on Erlang/OTP.
 
-```erlang
-Router = livery_router:compile([
-    {<<"GET">>, <<"/">>, fun(_Req) ->
-        livery_resp:text(200, <<"hello from livery">>)
-    end},
-    {<<"GET">>, <<"/users/:id">>, {users, show}}
-]),
-
-livery:start_service(#{
-    http  => #{port => 80, redirect => https},
-    https => #{port => 443, cert => Cert, key => Key, alpn => [h2, http1]},
-    http3 => #{port => 443, cert => Cert, key => Key},
-    router => Router,
-    middleware => [{livery_request_id, undefined}, {livery_access_log, #{}}],
-    alt_svc => advertise
-}).
-```
-
 ## Install
 
 ```erlang
@@ -47,12 +29,107 @@ livery:start_service(#{
 {deps, [{livery, {git, "https://github.com/benoitc/livery.git", {branch, "main"}}}]}.
 ```
 
+## Hello, world
+
+A handler takes a request value and returns a response value. Compile a
+router, start a service, and you are serving:
+
+```erlang
+Router = livery_router:compile([
+    {<<"GET">>, <<"/">>, fun(_Req) -> livery_resp:text(200, <<"hello">>) end}
+]),
+{ok, _Pid} = livery:start_service(#{http => #{port => 8080}, router => Router}).
+```
+
+```console
+$ curl localhost:8080/
+hello
+```
+
+Run it now: `rebar3 shell`, paste the two expressions, then `curl`.
+
+## Route, with path params and JSON
+
+```erlang
+show_user(Req) ->
+    Id = livery_req:binding(<<"id">>, Req),
+    livery_resp:json(200, json:encode(#{id => Id, name => <<"Ada">>})).
+
+Router = livery_router:compile([
+    {<<"GET">>,  <<"/users/:id">>, fun show_user/1},
+    {<<"POST">>, <<"/users">>,     {users, create}}   %% {Module, Function}
+]).
+```
+
+## Stack middleware (Tower/Axum style)
+
+Middleware is a continuation over immutable values: `call(Req, Next,
+State)`. Attach it service-wide or per route.
+
+```erlang
+livery:start_service(#{
+    http   => #{port => 8080},
+    router => Router,
+    middleware => [
+        {livery_request_id, undefined},
+        {livery_access_log, #{}},
+        {livery_body_limit, #{max => 1048576}}
+    ]
+}).
+```
+
+## One service, three protocols
+
+The same router and middleware over H1, H2, and H3, advertising H3 via
+`Alt-Svc`:
+
+```erlang
+livery:start_service(#{
+    http   => #{port => 80},
+    https  => #{port => 443, cert => Cert, key => Key},
+    http3  => #{port => 443, cert => Cert, key => Key},
+    router => Router,
+    alt_svc => advertise
+}).
+```
+
+Need just one protocol? `livery:start_listener(livery_h1, #{port => 8080,
+router => Router})`.
+
+## Call other services
+
+The client mirrors the middleware model outbound: stack timeouts, retries,
+a circuit breaker, or load balancing around a request.
+
+```erlang
+Client = livery_client:new(#{
+    base_url => <<"https://api.example.com">>,
+    stack    => [livery_client:timeout(5000), livery_client:retry(#{max => 3})]
+}),
+{ok, Resp} = livery_client:get(Client, <<"/health">>),
+200 = livery_client:status(Resp).
+```
+
+## Stream a response
+
+```erlang
+events(_Req) ->
+    livery_resp:sse(200, fun(Emit) ->
+        Emit(#{event => <<"tick">>, data => <<"1">>}),
+        Emit(#{event => <<"tick">>, data => <<"2">>})
+    end).
+```
+
+Chunked bodies, NDJSON, file responses with byte ranges, WebSocket and
+WebTransport over H2/H3 work the same way.
+
 ## Features
 
 - **One handler, three wires** — write a handler once; serve it over
   H1, H2, and H3 with shared routing, middleware, and Alt-Svc upgrade.
 - **Tower-style middleware** — value-based `call(Req, Next, State)`
-  pipelines, composable per service or per route.
+  pipelines, composable per service or per route, in both directions
+  (server-inbound and the outbound `livery_client`).
 - **Streaming** — chunked, SSE, NDJSON, WebSocket and WebTransport
   over H2/H3, and file responses with byte ranges.
 - **OpenAPI** — generate a 3.1 document from routes, serve Redoc or
@@ -65,7 +142,11 @@ livery:start_service(#{
 ## Documentation
 
 Full guides, tutorials, and the generated API reference live at
-**<https://benoitc.github.io/livery/>**. For contributors, see
+**<https://benoitc.github.io/livery/>**. The same content is in the repo
+under [`docs/`](docs/README.md): start with the
+[Quickstart](docs/quickstart.md), then the
+[tutorials](docs/README.md#tutorials) and
+[how-to guides](docs/README.md#how-to-guides). For contributors, see
 [AGENTS.md](AGENTS.md).
 
 ## License

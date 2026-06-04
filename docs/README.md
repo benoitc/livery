@@ -69,6 +69,7 @@ solution.
 
 **Calling out**
 - [Make outbound HTTP requests](guides/make-http-requests.md)
+- [Load-balance outbound requests](guides/load-balance-requests.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

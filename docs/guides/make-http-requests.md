@@ -182,6 +182,13 @@ Body = {stream, fun() -> next_chunk() end},   %% {ok, Chunk, NextFun} | eof
 A streamed (one-shot) request body is never retried, since its chunks
 are already gone once sent; put `retry` on buffered calls.
 
+## Spread load across endpoints
+
+When the service you call has several replicas, swap the single
+`base_url` for a `balance` layer over a pool: it picks a replica per
+request, leans away from loaded or failing ones, and fails over for you.
+See [Load-balance outbound requests](load-balance-requests.md).
+
 ## Protocols and the transport
 
 The default transport is `livery_client_hackney`, and hackney 4.2 speaks

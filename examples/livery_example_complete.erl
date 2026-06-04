@@ -30,6 +30,8 @@
 
 %% service lifecycle
 -export([start/0, start/1, start_tls/1, stop/1, router/0, handler/0]).
+%% reusable pieces (handy for embedding the service in a test harness)
+-export([base_stack/0, ensure_table/0]).
 %% route handlers
 -export([list_notes/1, create_note/1, show_note/1, delete_note/1, events/1, ws/1]).
 %% ws_handler callbacks
@@ -103,7 +105,8 @@ router() ->
         {<<"GET">>, <<"/notes/:id">>, {?MODULE, show_note}},
         {<<"DELETE">>, <<"/notes/:id">>, {?MODULE, delete_note}},
         {<<"GET">>, <<"/events">>, {?MODULE, events}},
-        {<<"GET">>, <<"/ws">>, {?MODULE, ws}}
+        %% Any method: H1 upgrades with a GET, H2/H3 with extended CONNECT.
+        {'_', <<"/ws">>, {?MODULE, ws}}
     ]).
 
 %%====================================================================

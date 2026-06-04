@@ -16,7 +16,8 @@ src/        Erlang sources (livery, livery_req, livery_resp,
             livery_ws*, livery_wt, livery_mcp, livery_auth*,
             livery_openapi*, livery_instrument_*, ...)
 include/    Shared records (livery.hrl)
-test/       EUnit + Common Test (incl. the cross-adapter parity SUITE)
+test/       EUnit + Common Test (incl. the cross-adapter parity SUITE
+            and livery_e2e_SUITE, a full journey over H1/H2/H3)
 bench/      Load/latency harness (separate `bench` rebar profile)
 examples/   Runnable example apps (`examples` rebar profile)
 docs/       Diataxis docs (tutorials/guides/concepts) + design notes

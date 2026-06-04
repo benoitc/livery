@@ -8,13 +8,24 @@ Livery is a BEAM-native web framework that serves one handler set
 over HTTP/1.1, HTTP/2, and HTTP/3 from a single service runtime
 (the spirit of Axum + Tower + Hyper on the BEAM). The wire layer is
 delegated to sibling hex libraries; Livery owns the developer
-surface. One OTP application, flat layout:
+surface. One OTP application; core runtime stays at the `src/` top
+level, with subsystems grouped into domain subdirectories (rebar3
+compiles `src/` recursively):
 
 ```
-src/        Erlang sources (livery, livery_req, livery_resp,
-            livery_router, livery_middleware, livery_h1/h2/h3,
-            livery_ws*, livery_wt, livery_mcp, livery_auth*,
-            livery_openapi*, livery_instrument_*, ...)
+src/            Core runtime, flat: livery, livery_req, livery_resp,
+                livery_router, livery_service, livery_h1/h2/h3,
+                livery_ws*, livery_wt, livery_mcp, livery_openapi,
+                livery_static, livery_metrics, ... (+ livery.app.src)
+src/client/     Outbound HTTP client: livery_client + its layers,
+                stores, adapter, and discovery
+src/middleware/ livery_middleware framework + cross-cutting middlewares
+                (request_id, access_log, cors, etag, timeout, ratelimit
+                (+ store), concurrency, security_headers, alt_svc,
+                instrument_*, openapi_validate, body_limit)
+src/auth/       Auth middlewares + helpers (bearer, introspect, session,
+                jwks, oidc, livery_auth)
+src/codec/      Content-coding subsystem (livery_compress + codecs)
 include/    Shared records (livery.hrl)
 test/       EUnit + Common Test (incl. the cross-adapter parity SUITE
             and livery_e2e_SUITE, a full journey over H1/H2/H3)

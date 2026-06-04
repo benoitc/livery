@@ -123,8 +123,11 @@ Every adapter takes the same `ip => inet:ip_address()` and
 The same idea runs outbound. `livery_client_adapter` is the dual of this
 behaviour: it owns the wire for an outgoing request, while the client's
 layers (timeout, retry, circuit breaker) own the policy above it. The
-default `livery_client_hackney` covers HTTP/1.1, HTTP/2, and HTTP/3. See
-[Make outbound HTTP requests](../guides/make-http-requests.md).
+default `livery_client_hackney` covers HTTP/1.1, HTTP/2, and HTTP/3. When
+the target is a pool of replicas, a `balance` layer spreads requests
+across them and `livery_client_discover` resolves the endpoint set. See
+[Make outbound HTTP requests](../guides/make-http-requests.md) and
+[Load-balance outbound requests](../guides/load-balance-requests.md).
 
 ## See also
 

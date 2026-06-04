@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-04
+
+Maintenance release: tests, docs, and internal layout. No API or
+behaviour change.
+
+### Added
+
+- End-to-end test suite (`livery_e2e_SUITE`): boots the example notes
+  service over H1, H2, and H3 and runs the same CRUD + middleware + SSE +
+  WebSocket journey against each protocol.
+
+### Changed
+
+- Source tree grouped into domain subdirectories (`src/client`,
+  `src/middleware`, `src/auth`, `src/codec`); the core runtime stays flat
+  in `src/`. Pure relocation, no module renamed.
+- README rewritten around runnable snippets.
+- The example service registers its `/ws` route for any method, so the
+  WebSocket upgrade works over H2/H3 extended CONNECT as documented.
+
 ## [0.2.0] - 2026-06-04
 
 Closes the structural gap with Axum + Tower + Hyper: router composition,
@@ -125,5 +145,6 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.1]: https://github.com/benoitc/livery/releases/tag/v0.2.1
 [0.2.0]: https://github.com/benoitc/livery/releases/tag/v0.2.0
 [0.1.0]: https://github.com/benoitc/livery/releases/tag/v0.1.0

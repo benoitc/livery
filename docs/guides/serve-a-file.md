@@ -2,8 +2,10 @@
 
 ## Problem
 
-You want to send a file from disk as the response body without
-reading it all into memory first.
+You have a file on disk and you want to send it back as the
+response. Maybe it is a stylesheet, a PDF, a download. You do not
+want to read the whole thing into memory first, especially when it
+is large. Livery can stream it straight off the disk for you.
 
 ## Solution
 
@@ -11,11 +13,12 @@ reading it all into memory first.
 livery_resp:file(200, <<"/var/www/index.html">>).
 ```
 
-Livery streams the file in 64 KiB chunks straight to the wire on
-H1, H2, and H3. `Content-Length` is set from the file size unless
-your handler already set it.
+That is all. Livery streams the file in 64 KiB chunks straight to
+the wire on H1, H2, and H3, and sets `Content-Length` from the file
+size unless your handler already set it.
 
-Set the content type yourself; Livery does not guess it:
+One thing it will not do for you is guess the content type, so set
+it yourself:
 
 ```erlang
 fun(_Req) ->
@@ -26,9 +29,10 @@ end.
 
 ## Serve a byte range
 
+Sometimes you only want part of the file, say to resume a download.
 Pass `{Offset, Length}` to send a slice. `Length` may be `eof` to
-read to the end of the file. Livery adds a `Content-Range` header
-and `Content-Length` for the slice:
+read to the end. Livery adds a `Content-Range` header and the right
+`Content-Length` for the slice:
 
 ```erlang
 %% bytes 1024-2047 of the file
@@ -38,16 +42,18 @@ livery_resp:file(206, Path, {1024, 1024}).
 livery_resp:file(206, Path, {1024, eof}).
 ```
 
-Set the status to `206` yourself when you serve a partial range.
+Remember to set the status to `206` yourself when you serve a
+partial range.
 
 ## Security: never pass unsanitised paths
 
-`livery_resp:file/2,3` serves exactly the path you give it; Livery
-does not confine it to a directory. If you build the path from
-request data (a path parameter, query string, header), an attacker
-can use `..` to escape your intended root and read arbitrary files.
+Here is the catch. `livery_resp:file/2,3` serves exactly the path
+you give it and nothing more; it does not confine it to a directory.
+So if you build the path from request data (a path parameter, a
+query string, a header), an attacker can slip in `..` to climb out
+of your intended root and read arbitrary files.
 
-Confine it yourself before serving:
+The fix is to confine the path yourself before serving:
 
 ```erlang
 serve_asset(Req) ->
@@ -62,7 +68,8 @@ serve_asset(Req) ->
     end.
 ```
 
-Prefer an allowlist of known filenames where you can.
+And when you can, prefer an allowlist of known filenames. It is the
+simplest thing that cannot go wrong.
 
 ## Error handling
 

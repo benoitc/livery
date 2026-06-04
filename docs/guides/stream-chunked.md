@@ -2,13 +2,15 @@
 
 ## Problem
 
-You need to emit response body bytes incrementally rather than
-buffering the whole payload in memory.
+The response is too big, or too slow to produce, to build up in
+memory first - a large file, a report you generate as you go, a feed
+of events. You want to send the bytes out in pieces, as they become
+ready, and let the client start reading right away.
 
 ## Solution
 
-`livery_resp:stream/3` takes a status, headers, and a producer fun
-that drives chunk emission:
+`livery_resp:stream/3` takes a status, some headers, and a producer
+fun. The fun gets an `Emit` and calls it once per chunk:
 
 ```erlang
 download(_Req) ->
@@ -33,13 +35,14 @@ emit_chunks(F, Emit) ->
     end.
 ```
 
-The producer runs in the per-request process. It returns when there
-is nothing more to emit.
+The producer runs in the per-request process, and you simply return
+from it when there is nothing left to emit.
 
 ## Stream from a message source
 
-The producer is free to `receive`. Subscribe to a publisher and
-forward events:
+Because the producer is an ordinary process, it is free to
+`receive`. That makes it easy to subscribe to a publisher and
+forward whatever comes in:
 
 ```erlang
 follow(_Req) ->
@@ -59,8 +62,9 @@ loop(Ref, Emit) ->
 
 ## Detect disconnect
 
-`Emit/1` returns the adapter's send result. On client disconnect
-the H1/H2/H3 adapters return `{error, closed}`. Break out:
+`Emit/1` hands back the adapter's send result. When the client hangs
+up, the H1/H2/H3 adapters return `{error, closed}`, which is your cue
+to stop and clean up:
 
 ```erlang
 case Emit(Chunk) of
@@ -69,12 +73,12 @@ case Emit(Chunk) of
 end.
 ```
 
-The test adapter always returns `ok`.
+(The test adapter always returns `ok`, so it never trips this path.)
 
 ## NDJSON
 
-`livery_resp:ndjson/2` does the JSON encoding and the `\n` framing
-for you:
+Streaming a sequence of JSON objects? `livery_resp:ndjson/2` handles
+both the encoding and the `\n` framing for you:
 
 ```erlang
 livery_resp:ndjson(200, fun(Emit) ->
@@ -83,10 +87,9 @@ livery_resp:ndjson(200, fun(Emit) ->
 end).
 ```
 
-Each `Emit(Term)` calls `json:encode(Term)` and appends a literal
-`\n` to one chunk. Content-Type defaults to
-`application/x-ndjson`. For pre-encoded bytes, drop down to
-`stream/3`.
+Each `Emit(Term)` calls `json:encode(Term)` and tacks a literal `\n`
+onto the chunk. Content-Type defaults to `application/x-ndjson`. If
+your bytes are already encoded, just drop down to `stream/3`.
 
 ## See also
 

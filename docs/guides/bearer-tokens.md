@@ -2,8 +2,10 @@
 
 ## Problem
 
-Your handler or auth middleware needs the bearer token from the
-`Authorization` header.
+A client sends you a token in the `Authorization` header, and you
+need to pull it out cleanly before you can verify it. The header has
+a scheme prefix, the casing varies between clients, and you would
+rather not parse it by hand in every handler.
 
 ## Solution
 
@@ -44,13 +46,14 @@ call(Req, Next, _State) ->
 verify(_Token) -> {ok, #{}}.
 ```
 
-Place it in the stack after `livery_request_id` and
-`livery_access_log` so the audit log records the failed attempt.
+Put it in the stack after `livery_request_id` and
+`livery_access_log`, so a failed attempt still lands in your audit
+log.
 
 ## Non-bearer schemes
 
-`livery_ext:bearer_token/1` only matches the bearer scheme. For
-Basic auth, read the header directly and decode:
+`livery_ext:bearer_token/1` only matches the bearer scheme. If you
+need Basic auth instead, read the header yourself and decode it:
 
 ```erlang
 case livery_req:header(<<"authorization">>, Req) of
@@ -59,7 +62,8 @@ case livery_req:header(<<"authorization">>, Req) of
 end.
 ```
 
-OIDC, JWKS rotation, and JWT verification ship as `livery_auth`.
+And when you need the real machinery - OIDC, JWKS rotation, JWT
+verification - it all ships as `livery_auth`.
 
 ## See also
 

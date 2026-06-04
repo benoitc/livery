@@ -2,8 +2,11 @@
 
 ## Problem
 
-Your client uses the EventSource API (or any RFC 8895 compatible
-consumer) and expects `text/event-stream` framing.
+You want to push a stream of updates to the browser - a live
+counter, a progress feed, notifications - and the client is reading
+them with the EventSource API (or any RFC 8895 consumer). That means
+it expects `text/event-stream` framing, and you want Livery to do
+the framing so you can just emit events.
 
 ## Solution
 
@@ -17,8 +20,8 @@ events(_Req) ->
 ```
 
 `livery_resp:sse/2` sets `content-type: text/event-stream` and
-`cache-control: no-cache`. The producer fun runs in the per-request
-process and drives `Emit` with one event at a time.
+`cache-control: no-cache` for you. Your producer fun runs in the
+per-request process and drives `Emit`, one event at a time.
 
 ## Event shape
 
@@ -48,9 +51,9 @@ Emit(<<"plain">>).
 %%
 ```
 
-Multi-line data is fine: pass an iolist whose bytes contain `\n`
-and Livery emits each line with its own `data:` prefix when you use
-the helper. For multi-line, use `iolist` of lines:
+Multi-line data is fine. Pass an iolist whose bytes contain `\n` and
+Livery gives each line its own `data:` prefix. Just hand it an
+`iolist` of lines:
 
 ```erlang
 Emit(#{data => [<<"line 1">>, <<"\nline 2">>]}).
@@ -58,8 +61,9 @@ Emit(#{data => [<<"line 1">>, <<"\nline 2">>]}).
 
 ## Heartbeats
 
-To keep idle connections alive through proxies, emit a comment line
-periodically (a line beginning with `:`):
+Idle connections have a habit of being dropped by proxies. To keep
+yours alive, emit a comment line every so often (a line that begins
+with `:`):
 
 ```erlang
 loop(Emit) ->
@@ -73,9 +77,10 @@ loop(Emit) ->
 
 ## Disconnect detection
 
-`Emit` returns `{error, closed}` once the client disconnects (the
-H1/H2/H3 adapters surface this; the test adapter always returns
-`ok`).
+When the client goes away, `Emit` tells you: it returns
+`{error, closed}` once the connection is gone. The H1/H2/H3 adapters
+surface this; the test adapter always returns `ok`. Watch for it so
+you can stop producing and clean up.
 
 ```erlang
 loop(Emit) ->

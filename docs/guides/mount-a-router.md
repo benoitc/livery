@@ -2,13 +2,16 @@
 
 ## Problem
 
-You have several routes and want the service to dispatch by
-method and path — with path-parameter binding and automatic
-404/405 — instead of writing one big handler.
+Your service has grown past a single endpoint. Now you have a handful
+of routes, and stuffing them all into one giant handler that switches
+on method and path is no fun. You want the service to do the
+dispatching for you - by method and path, with path parameters bound
+automatically and sensible 404/405 responses handled out of the box.
 
 ## Solution
 
-Compile a router and pass it to `start_service/1` as `router`:
+Compile a router and hand it to `start_service/1` under the `router`
+key:
 
 ```erlang
 Router = livery_router:compile([
@@ -25,9 +28,9 @@ Router = livery_router:compile([
 }).
 ```
 
-Each route handler is a normal handler — `fun(Req) -> Resp` or
-`{Module, Function}` — and receives the request with path
-parameters already bound:
+Each route handler is just a normal handler - a `fun(Req) -> Resp` or
+a `{Module, Function}` pair - and it receives the request with the
+path parameters already bound for you:
 
 ```erlang
 show(Req) ->
@@ -35,9 +38,10 @@ show(Req) ->
     livery_resp:json(200, lookup(Id)).
 ```
 
-`start_service/1` takes **exactly one** of `router` or `handler`.
-Use `handler` for a single catch-all; use `router` for dispatch.
-The service-level `middleware` stack wraps every route.
+A small rule to keep in mind: `start_service/1` takes **exactly one**
+of `router` or `handler`. Reach for `handler` when you genuinely want
+a single catch-all, and `router` whenever you want dispatch. Either
+way, the service-level `middleware` stack wraps every route.
 
 ## What you get for free
 
@@ -48,9 +52,10 @@ The service-level `middleware` stack wraps every route.
 
 ## Per-route middleware
 
-A route's optional `Meta` map (the fourth tuple element) may carry
-a `middleware` stack that runs only for that route, inside any
-service-level stack:
+Not every route needs the same treatment. A route's optional `Meta`
+map (the fourth element of the tuple) can carry its own `middleware`
+stack that runs for that route alone, nested inside any service-level
+stack:
 
 ```erlang
 Auth = {my_auth, #{required => true}},
@@ -60,13 +65,14 @@ Router = livery_router:compile([
 ]).
 ```
 
-`/private` runs `Auth` before its handler; `/public` does not.
-Nesting is service stack (outermost) → route match → route stack →
-handler.
+So `/private` runs `Auth` before its handler, and `/public` skips it
+entirely. The nesting, from the outside in, is: service stack → route
+match → route stack → handler.
 
 ## Customising 404 / 405
 
-To control the fallbacks, build the handler yourself with
+The default 404 and 405 are fine for most services, but when you want
+your own (a problem+json body, say), build the handler yourself with
 `livery:router_handler/2` and pass it as `handler`:
 
 ```erlang
@@ -79,8 +85,9 @@ livery:start_service(#{http => #{port => 8080}, handler => H}).
 
 ## Using a router without the service
 
-`livery:router_handler/1` returns a plain handler fun, so you can
-also use it with a single listener or drive it directly in tests:
+A router is not tied to a full service. `livery:router_handler/1`
+gives you back a plain handler fun, which you can wire into a single
+listener or drive straight from a test:
 
 ```erlang
 H = livery:router_handler(Router),

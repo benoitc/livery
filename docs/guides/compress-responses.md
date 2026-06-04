@@ -2,8 +2,10 @@
 
 ## Problem
 
-You want responses gzip/deflate-compressed when the client supports it,
-without touching every handler.
+Your responses are bigger than they need to be on the wire, and you
+would like them gzipped or deflated whenever the client can handle
+it. The catch: you do not want to reach into every handler to make
+that happen.
 
 ## Solution
 
@@ -17,18 +19,20 @@ Stack = [
 ```
 
 It reads the request `Accept-Encoding`, picks a codec the client
-accepts, compresses the response body, and sets `Content-Encoding` plus
-`Vary: Accept-Encoding`. A client that sends no `Accept-Encoding` (or
-none the server has) gets the response uncompressed, so any HTTP client
-works: those that advertise gzip decode it transparently, the rest get
+accepts, compresses the body, and sets `Content-Encoding` along with
+`Vary: Accept-Encoding`. A client that sends no `Accept-Encoding`, or
+asks only for codings you do not have, simply gets the response
+uncompressed. So every HTTP client keeps working: the ones that
+advertise gzip decode it transparently, and the rest receive
 identity.
 
 ## What gets compressed
 
-Eligible responses are `{full, _}` bodies at least `min_size` bytes and
-`{chunked, _}` streams, with a compressible `Content-Type` and no
-existing `Content-Encoding`. SSE, file, empty, and upgrade responses
-pass through untouched.
+Livery is selective on purpose. It compresses `{full, _}` bodies of
+at least `min_size` bytes and `{chunked, _}` streams, as long as the
+`Content-Type` is compressible and there is no `Content-Encoding`
+already. SSE, file, empty, and upgrade responses pass through
+untouched.
 
 ```erlang
 {livery_compress, #{
@@ -42,10 +46,11 @@ pass through untouched.
 
 ## Negotiation and server preference
 
-A coding is acceptable when its `Accept-Encoding` q-value is greater
-than zero (`q=0` rejects). Among acceptable codings the SERVER decides
-which to use, in the order of the codec list; client q-weights are only
-an accept/reject filter. Control the order with `codecs`:
+A coding is acceptable when its `Accept-Encoding` q-value is above
+zero (`q=0` is a refusal). Among the codings the client accepts, the
+SERVER picks which one to use, following the order of the codec list;
+the client q-weights act only as an accept-or-reject filter, not a
+ranking. You control the order with `codecs`:
 
 ```erlang
 {livery_compress, #{codecs => [livery_codec_gzip]}}   %% gzip only
@@ -53,13 +58,14 @@ an accept/reject filter. Control the order with `codecs`:
 
 ## Adding more codecs
 
-`livery_compress` negotiates over `livery_codec:registered()`, which is
-`[livery_codec_gzip, livery_codec_deflate]` plus any codec a separate
-app registered. A codec app implements the `livery_codec` behaviour and
-calls `livery_codec:register(Module)` at its own start; it is then
-negotiated automatically (e.g. a future `livery_brotli` advertising
-`br`). The built-ins are always present and cannot be displaced by
-registration.
+`livery_compress` negotiates over `livery_codec:registered()`, which
+is `[livery_codec_gzip, livery_codec_deflate]` plus any codec a
+separate app has registered. To add one, write a module that
+implements the `livery_codec` behaviour and call
+`livery_codec:register(Module)` when your app starts; from then on it
+joins the negotiation automatically (think of a future
+`livery_brotli` advertising `br`). The built-ins are always there and
+registration can never displace them.
 
 ## See also
 

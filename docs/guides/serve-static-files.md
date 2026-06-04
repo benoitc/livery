@@ -2,15 +2,17 @@
 
 ## Problem
 
-You want to serve a directory of files (assets, a built SPA, downloads)
-over HTTP, with correct `Content-Type`, conditional GET, and `Range`
-support - without exposing anything outside the directory.
+You have a whole directory to serve - your built SPA, a folder of
+assets, some downloads - and you want it done properly: the right
+`Content-Type`, conditional GET, `Range` support, and above all no
+way for a request to wander outside that directory. You could hand
+this off to nginx, but you do not have to.
 
 ## Solution
 
 Mount `livery_static:handler/1,2` on a router WILDCARD route. The `*path`
-segment captures the rest of the URL, which the handler maps to a file
-under the root:
+segment captures the rest of the URL, and the handler maps that onto a
+file under the root:
 
 ```erlang
 Router = livery_router:add(
@@ -18,14 +20,14 @@ Router = livery_router:add(
 ).
 ```
 
-`GET /assets/css/app.css` serves `priv/assets/css/app.css` with
-`Content-Type: text/css`, an `ETag`, and (if the client sends `Range`)
-partial content.
+Now `GET /assets/css/app.css` serves `priv/assets/css/app.css` with
+`Content-Type: text/css`, an `ETag`, and, if the client asks for a
+`Range`, partial content. All of that comes for free.
 
 ## Without the router
 
-If you are not using the router, configure a `prefix` to strip from the
-request path:
+Not using the router? Then tell the handler which `prefix` to strip
+from the request path:
 
 ```erlang
 {livery_static, never}  %% NB: it is a handler, not middleware
@@ -64,11 +66,12 @@ livery_static:handler("priv/assets", #{
 
 ## Security
 
-The sub-path is percent-decoded and then confined: any `..` segment,
-absolute path, control byte, or bad escape is rejected with `404`, so a
-request can never traverse out of the root. Only regular files are
-served - directories and symlinks yield `404` - so a symlink inside the
-root cannot be used to escape it.
+This is the part you do not have to worry about. The sub-path is
+percent-decoded and then confined: any `..` segment, absolute path,
+control byte, or bad escape is rejected with `404`, so a request can
+never climb out of the root. Only regular files are served -
+directories and symlinks both yield `404` - so a symlink planted
+inside the root cannot be used to escape it either.
 
 ## See also
 

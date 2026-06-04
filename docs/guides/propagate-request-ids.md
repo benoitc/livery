@@ -2,9 +2,11 @@
 
 ## Problem
 
-Every request should carry a stable id that appears in logs and
-on the response, and that clients can pin to track work
-across services.
+A request comes in, fans out to three services, and something goes
+wrong somewhere. Without a shared id, good luck stitching the logs
+back together. What you want is one stable id per request that shows
+up in your logs, rides back out on the response, and follows the work
+across every service it touches.
 
 ## Solution
 
@@ -44,14 +46,14 @@ my_handler(Req) ->
 ```
 
 When the downstream service also runs Livery with
-`livery_request_id`, it will honor the value and keep the chain
-consistent.
+`livery_request_id`, it sees the header, reuses your value, and the
+chain stays consistent end to end.
 
 ## Place it first
 
-`livery_request_id` should be the outermost entry in the stack so
-every response — including ones produced by short-circuiting
-middleware below it — carries the id.
+Make `livery_request_id` the outermost entry in the stack. That way
+every response carries the id, even the ones produced by
+short-circuiting middleware sitting below it.
 
 ## See also
 

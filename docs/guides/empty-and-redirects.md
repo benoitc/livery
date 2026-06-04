@@ -7,8 +7,10 @@ livery_resp:empty(204).   %% No Content
 livery_resp:empty(304).   %% Not Modified
 ```
 
-`empty/1` sends headers with `end_stream` set; no body bytes are
-emitted on the wire.
+`empty/1` sends the headers with `end_stream` set, and not a single
+body byte goes out on the wire. Handy whenever the status says
+everything: a `204` after a successful delete, a `304` for a cache
+hit.
 
 ## Redirect
 
@@ -17,8 +19,8 @@ livery_resp:redirect(302, <<"/login">>).
 livery_resp:redirect(308, <<"https://example.com/api/v2/items">>).
 ```
 
-The builder sets the `Location` header and an empty body. Pass
-additional headers as a third argument:
+The builder fills in the `Location` header and leaves the body
+empty. Need extra headers? Pass them as a third argument:
 
 ```erlang
 livery_resp:redirect(303, <<"/items/42">>,

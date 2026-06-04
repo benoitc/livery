@@ -2,13 +2,14 @@
 
 ## Problem
 
-You need the fields from an `application/x-www-form-urlencoded` request
-body, or the parameters from the URL query string.
+A classic HTML form just posted to your route, or a link carried a few
+parameters in its query string, and now you want those values as plain
+binaries you can work with. That is exactly what this guide is for.
 
 ## Query string
 
-`livery_ext:query/2` pulls a single decoded parameter from the request
-URI:
+`livery_ext:query/2` pulls one decoded parameter straight out of the
+request URI:
 
 ```erlang
 search(Req) ->
@@ -18,9 +19,10 @@ search(Req) ->
 
 ## Form body (urlencoded)
 
-If the body is already buffered, `livery_ext:form/1` decodes it
-directly. Since adapters stream bodies by default, use `read_form/1,2`,
-which drains the stream (bounded) and decodes:
+If the body is already buffered, `livery_ext:form/1` decodes it on the
+spot. But adapters stream bodies by default, so most of the time you
+want `read_form/1,2`: it drains the stream for you (within bounds) and
+then decodes:
 
 ```erlang
 submit(Req) ->
@@ -35,14 +37,14 @@ submit(Req) ->
     end.
 ```
 
-The `Content-Type` check is case-insensitive and tolerates parameters
-(`Application/X-WWW-Form-Urlencoded; charset=utf-8`). Cap the body with
-`#{max_size => Bytes}` (default 1 MiB) and the per-read wait with
-`#{timeout => Ms}`.
+The `Content-Type` check is case-insensitive and forgiving about extra
+parameters, so `Application/X-WWW-Form-Urlencoded; charset=utf-8` is
+fine. Cap the body with `#{max_size => Bytes}` (1 MiB by default) and
+the per-read wait with `#{timeout => Ms}`.
 
-Decoding handles `%XX` escapes and `+` as space. A malformed escape
-(`%ZZ`) is kept verbatim rather than failing the whole body, matching
-`form/1`.
+Decoding handles `%XX` escapes and reads `+` as a space. A malformed
+escape like `%ZZ` is kept as-is rather than blowing up the whole body,
+just like `form/1` does.
 
 ## See also
 

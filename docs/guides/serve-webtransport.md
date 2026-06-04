@@ -2,8 +2,11 @@
 
 ## Problem
 
-You want to accept WebTransport sessions (bidi/uni streams and
-datagrams) over HTTP/3 (or HTTP/2), served by your Livery handler.
+You need bidirectional streams and datagrams between browser and
+server, the kind of low-latency, multiplexed channel WebSockets
+never quite gave you. That is WebTransport, and it runs over HTTP/3
+(or HTTP/2). This guide shows how to accept those sessions straight
+from a Livery handler.
 
 ## Solution
 
@@ -12,10 +15,11 @@ extended-CONNECT request and hands the stream to the
 `webtransport` library, driven by a handler you implement
 (`webtransport_handler` behaviour).
 
-The listener must advertise the WebTransport settings. Merge
+First, the listener has to advertise the WebTransport settings, or
+the client never gets the chance to upgrade. Merge in
 `webtransport:h3_settings/0` (H3) or `webtransport:h2_settings/0`
-(H2) into the listener options; the adapter forwards the SETTINGS,
-datagram support, and stream routing to the wire library:
+(H2), and the adapter takes care of forwarding the SETTINGS, the
+datagram support, and the stream routing to the wire library:
 
 ```erlang
 Handler = fun(Req) -> livery_wt:upgrade(Req, my_wt_handler, #{}) end,
@@ -25,13 +29,15 @@ Opts = maps:merge(webtransport:h3_settings(), #{
 {ok, _} = livery_h3:start(Opts).
 ```
 
-WebTransport runs over H3 and H2 (RFC 9220 extended CONNECT). On
-H1, `upgrade/3` returns `501`.
+WebTransport lives on H3 and H2 (RFC 9220 extended CONNECT). There
+is no such thing over plain H1, so there `upgrade/3` simply returns
+`501`.
 
 ## Implement the session handler
 
-`my_wt_handler` implements the `webtransport_handler` behaviour
-(from `erlang-webtransport`). An echo handler:
+The actual session logic goes in `my_wt_handler`, which implements
+the `webtransport_handler` behaviour (from `erlang-webtransport`).
+Here is an echo handler to get you started:
 
 ```erlang
 -module(my_wt_handler).
@@ -51,9 +57,9 @@ handle_datagram(Data, State) ->
 
 ## Notes
 
-- On success `upgrade/3` returns the `taken_over` sentinel; the
-  session belongs to the `webtransport` process after that, so do
-  not stack response-mutating middleware after it.
+- On success `upgrade/3` returns the `taken_over` sentinel. From
+  that point the session belongs to the `webtransport` process, so
+  do not stack response-mutating middleware after it.
 - Requires `webtransport` >= 0.2.3 (so `accept/4` works from
   Livery's per-request worker process).
 - See `livery_wt_SUITE` for an end-to-end bidi-stream and datagram

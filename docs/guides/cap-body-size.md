@@ -2,8 +2,9 @@
 
 ## Problem
 
-You want to reject oversized request bodies with a `413` before
-they reach the handler.
+Someone, by accident or on purpose, sends you a giant request body.
+You would like to turn it away with a `413` early, before it ever
+reaches your handler and ties up memory.
 
 ## Solution
 
@@ -16,17 +17,16 @@ Stack = [
 ].
 ```
 
-A buffered body whose size exceeds `max` short-circuits with
-`livery_resp:text(413, <<"payload too large">>)`. The handler is
-not invoked.
+Any buffered body larger than `max` short-circuits with
+`livery_resp:text(413, <<"payload too large">>)`, and your handler
+never runs.
 
 ## Buffered only
 
-`livery_body_limit` inspects `{buffered, IoData}` bodies and uses
-`iolist_size/1`. Streaming bodies (`{stream, _}`) pass through
-unchecked; count bytes in the handler as you drain the reader.
-
-For streaming intake, count bytes manually in the handler:
+One thing to keep in mind: `livery_body_limit` only inspects
+`{buffered, IoData}` bodies, measured with `iolist_size/1`.
+Streaming bodies (`{stream, _}`) pass straight through unchecked, so
+for those you count bytes yourself as you drain the reader:
 
 ```erlang
 consume(R, Acc) when Acc > Max -> too_large();
@@ -39,7 +39,9 @@ consume(R, Acc) ->
 
 ## Different limits per route
 
-Mount the middleware separately per route group when limits differ:
+An upload endpoint and a JSON API rarely want the same ceiling.
+Mount the middleware separately per route group when the limits
+differ:
 
 ```erlang
 UploadStack  = [{livery_body_limit, #{max => 50_000_000}} | Common],

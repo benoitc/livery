@@ -2,14 +2,16 @@
 
 ## Problem
 
-You want responses to carry baseline hardening headers
-(`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
-`Strict-Transport-Security`, optionally `Content-Security-Policy`).
+A security audit (or your own good sense) says every response should
+carry the usual hardening headers: `X-Content-Type-Options`,
+`X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`,
+and maybe a `Content-Security-Policy`. You do not want to set them by
+hand on each handler, you want them applied once, everywhere.
 
 ## Solution
 
-Add `livery_security_headers` to the stack. With no config it applies
-sensible defaults:
+Drop `livery_security_headers` into the stack. With no config at all
+it picks sensible defaults:
 
 ```erlang
 Stack = [
@@ -28,9 +30,9 @@ Defaults emitted:
 
 ## HSTS only on secure requests
 
-`Strict-Transport-Security` is meaningless over plain HTTP, so it is
-emitted only when the request is secure (`scheme` is `https` or TLS
-info is present). Tune or disable it:
+`Strict-Transport-Security` means nothing over plain HTTP, so Livery
+only emits it when the request is actually secure (`scheme` is
+`https`, or TLS info is present). You can tune it or turn it off:
 
 ```erlang
 {livery_security_headers, #{
@@ -42,7 +44,8 @@ info is present). Tune or disable it:
 
 ## Content-Security-Policy is opt-in
 
-A wrong CSP breaks pages, so there is no default. Set it explicitly:
+A wrong CSP will quietly break your pages, so there is no default on
+purpose. When you are ready, set it explicitly:
 
 ```erlang
 {livery_security_headers, #{csp => <<"default-src 'self'">>}}
@@ -50,8 +53,8 @@ A wrong CSP breaks pages, so there is no default. Set it explicitly:
 
 ## Overriding per header
 
-Any key set to a value replaces the default; set it to `false` to drop
-that header entirely:
+Set any key to a value and it replaces the default; set it to
+`false` to drop that header entirely:
 
 ```erlang
 {livery_security_headers, #{
@@ -60,8 +63,9 @@ that header entirely:
 }}
 ```
 
-A header the handler already set on the response is preserved, so a
-handler can override any of these per response.
+And if a handler already set one of these on its response, that
+value is left alone. So a handler always has the final say, per
+response, when it needs one.
 
 ## See also
 

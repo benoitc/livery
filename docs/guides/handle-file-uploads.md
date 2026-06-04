@@ -2,14 +2,17 @@
 
 ## Problem
 
-A client POSTs `multipart/form-data` (a browser form with files, or a
-multimodal request) and you need the fields and uploaded files without
-buffering the whole request in memory.
+A client sends you a `multipart/form-data` POST: a browser form with
+file attachments, say, or a multimodal request. You need the fields
+and the uploaded files, and you would rather not load the whole thing
+into memory while you are at it - a single big upload should not be
+able to fill your RAM.
 
 ## Solution
 
-Use `livery_multipart`. Pull parts one at a time and stream each part's
-body, so a large upload never sits in RAM:
+Reach for `livery_multipart`. You pull the parts one at a time and
+stream each part's body, so a large upload never sits in memory all
+at once:
 
 ```erlang
 upload(Req) ->
@@ -36,15 +39,16 @@ consume(MP, _Name, _File) ->
     end.
 ```
 
-`next_part/2` returns each part's `name`, `filename`, `content_type`,
-and raw `headers` (parsed from `Content-Disposition`). `read_part/2`
-streams that part's bytes; calling `next_part` again skips any unread
-remainder.
+`next_part/2` hands you each part's `name`, `filename`,
+`content_type`, and raw `headers` (parsed from `Content-Disposition`).
+`read_part/2` streams that part's bytes, and if you call `next_part`
+again before you have read it all, the unread remainder is simply
+skipped.
 
 ## Small forms: read everything at once
 
-When the parts are small, `read_all/1,2` collects them into memory under
-the limits:
+When the parts are small, streaming is overkill. `read_all/1,2`
+collects everything into memory for you, still under the limits:
 
 ```erlang
 {ok, Parts} = livery_multipart:read_all(Req),
@@ -53,8 +57,9 @@ the limits:
 
 ## Limits
 
-All buffering is bounded. Override the defaults via the options map on
-`new/2` / `read_all/2`:
+Every bit of buffering is bounded, so you are never at the mercy of
+the client. Tune the defaults through the options map on `new/2` or
+`read_all/2`:
 
 ```erlang
 livery_multipart:read_all(Req, #{
@@ -69,11 +74,12 @@ livery_multipart:read_all(Req, #{
 
 ## Security: sanitize the filename
 
-`filename` is returned exactly as the client sent it and the parser
-never touches the filesystem. A hostile client can send
-`../../etc/passwd`. If you write uploads to disk, confine the path
-yourself (basename + a fixed directory); never join the raw `filename`
-onto a path.
+Here is the thing to remember: `filename` comes back exactly as the
+client sent it, and the parser never touches the filesystem. A
+hostile client is free to send `../../etc/passwd`. So if you write
+uploads to disk, confine the path yourself - take the basename and
+join it onto a fixed directory. Never join the raw `filename` onto a
+path and hope for the best.
 
 ## See also
 

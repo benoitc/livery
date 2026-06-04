@@ -2,15 +2,18 @@
 
 ## Problem
 
-You want to keep a small amount of per-user state (a user id, a
-role) across requests without a server-side session store.
+You want to remember a little something about each user between
+requests - who they are, what role they have - but you would rather
+not stand up a session store, a database table, or a Redis to hold
+it. The trick is to keep that state in the cookie itself, signed so
+the client cannot forge it.
 
 ## Solution
 
-`livery_auth_session` signs a JSON payload with HMAC-SHA256 and
-stores it in a cookie. The payload travels with the client; the
-signature stops it being tampered with. Add the middleware with a
-shared `secret`:
+That is exactly what `livery_auth_session` does. It signs a JSON
+payload with HMAC-SHA256 and tucks it in a cookie. The payload rides
+along with the client, and the signature is what stops anyone
+tampering with it. Add the middleware with a shared `secret`:
 
 ```erlang
 Stack = [
@@ -19,8 +22,9 @@ Stack = [
 ].
 ```
 
-On each request the middleware reads the cookie, verifies it, and
-stores the payload under `meta(session, _)`. Read it in a handler:
+On every request the middleware reads the cookie, verifies the
+signature, and stashes the payload under `meta(session, _)`. Pull it
+back out in a handler:
 
 ```erlang
 fun(Req) ->
@@ -32,14 +36,16 @@ fun(Req) ->
 end.
 ```
 
-A missing cookie is allowed through by default. Set
-`required => true` to reject anonymous requests with `401`. A
-present but tampered or expired cookie is always rejected.
+By default a missing cookie is waved through, so guests are fine.
+Set `required => true` when you want to turn anonymous requests away
+with `401`. Either way, a cookie that is present but tampered with or
+expired is always rejected, no exceptions.
 
 ## Log in: set the cookie
 
-Sign a payload (optionally with `max_age` seconds for expiry) and
-attach the `Set-Cookie` header to your response:
+When someone logs in, sign a payload (add `max_age` in seconds if
+you want it to expire) and attach the `Set-Cookie` header to your
+response:
 
 ```erlang
 login(_Req) ->
@@ -65,10 +71,12 @@ logout(_Req) ->
 
 ## Notes
 
-- Use a long, random `secret` and keep it out of source control.
-- The payload is signed, not encrypted: do not store secrets in it.
-- Rotate the secret by accepting both old and new during a window
-  (verify against each), then drop the old one.
+- Use a long, random `secret`, and keep it out of source control.
+- The payload is signed, not encrypted. Anyone can read it, so never
+  put secrets in there.
+- To rotate the secret, accept both the old and the new one for a
+  while (verify against each), then drop the old one once the last
+  cookies signed with it have aged out.
 
 ## See also
 

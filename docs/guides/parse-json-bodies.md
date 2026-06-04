@@ -2,8 +2,9 @@
 
 ## Problem
 
-Your handler accepts a JSON-encoded request body and needs the
-decoded term.
+A client is sending you JSON, and your handler wants it as a proper
+Erlang term rather than a blob of bytes. This is the everyday case for
+any JSON API, and Livery makes the decode a one-liner.
 
 ## Solution
 
@@ -24,14 +25,15 @@ create_user(Req) ->
     end.
 ```
 
-`livery_ext:json/1` returns `{ok, Term}` or `{error, Reason}`. It
-uses the OTP `json` module (OTP 27+).
+`livery_ext:json/1` hands you back `{ok, Term}` or `{error, Reason}`.
+Under the hood it leans on the OTP `json` module (OTP 27+), so there
+is nothing extra to pull in.
 
 ## Body must be buffered
 
-JSON extraction requires the body to be in
-`#livery_req{body = {buffered, _}}` form. Streaming bodies must be
-drained first via `livery_body:read_all/2`:
+To decode JSON, the body has to be sitting in memory as
+`#livery_req{body = {buffered, _}}`. If you have a streaming body
+instead, drain it first with `livery_body:read_all/2`:
 
 ```erlang
 {stream, Reader} = livery_req:body(Req),
@@ -40,13 +42,14 @@ Req1 = livery_req:set_body({buffered, Bytes}, Req),
 {ok, Term} = livery_ext:json(Req1).
 ```
 
-The H1/H2/H3 adapters can be configured to buffer up to a
-per-route threshold automatically.
+If you would rather not do this by hand, the H1/H2/H3 adapters can
+buffer up to a per-route threshold for you automatically.
 
 ## Cap the size first
 
-JSON parsing on a large body wastes CPU and memory. Put
-`livery_body_limit` upstream:
+Parsing a huge JSON body burns CPU and memory for nothing, and it is
+an easy way for someone to hurt you. Put `livery_body_limit` upstream
+and let it reject oversized bodies before you ever parse them:
 
 ```erlang
 Stack = [

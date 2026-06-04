@@ -2,9 +2,11 @@
 
 ## Problem
 
-A browser app on another origin needs to call your API, so the
-responses must carry Cross-Origin Resource Sharing headers and
-preflight `OPTIONS` requests must be answered.
+Your frontend lives on one origin and your API on another, and the
+browser refuses to let them talk until the API plays by the
+Cross-Origin Resource Sharing rules. That means your responses need
+the right CORS headers, and the preflight `OPTIONS` requests need a
+proper answer.
 
 ## Solution
 
@@ -25,10 +27,10 @@ Stack = [
 ].
 ```
 
-A preflight (`OPTIONS` carrying `Access-Control-Request-Method`) is
-answered directly with `204` and the `Access-Control-Allow-*` headers;
-the handler is never called. A normal request runs the handler, then
-the CORS response headers are added.
+A preflight (an `OPTIONS` carrying `Access-Control-Request-Method`)
+is answered right away with `204` and the `Access-Control-Allow-*`
+headers, and your handler never sees it. A normal request runs the
+handler as usual, and the CORS headers are added on the way out.
 
 ## Origins
 
@@ -38,19 +40,21 @@ origins => [<<"https://a.test">>, <<"https://b.test">>]
 origins => fun(Origin) -> is_tenant_origin(Origin) end
 ```
 
-When the origin is not allowed, no `Access-Control-Allow-Origin` is
-emitted and the browser blocks the response.
+When an origin is not on the list, no `Access-Control-Allow-Origin`
+goes out, and the browser blocks the response for you.
 
 ## Credentials and the wildcard
 
-`Access-Control-Allow-Origin: *` is invalid with credentials. When
-`credentials => true`, `livery_cors` always echoes the request
+Here is a rule that trips people up: `Access-Control-Allow-Origin:
+*` is illegal once credentials are involved. So when you set
+`credentials => true`, `livery_cors` quietly echoes the request
 `Origin` instead of `*` and adds `Access-Control-Allow-Credentials:
-true`.
+true`. You do not have to think about it.
 
 ## Caching is handled for you
 
-`livery_cors` sets `Vary` so shared caches stay correct:
+Shared caches can serve the wrong response to the wrong origin if
+`Vary` is not set right, so `livery_cors` takes care of it:
 
 - `Vary: Origin` is added on every response (allowed, denied, and the
   no-`Origin` passthrough) whenever the output depends on the request

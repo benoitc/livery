@@ -2,9 +2,10 @@
 
 ## Problem
 
-On deploy or scale-down you want to stop a service without cutting
-off requests that are mid-flight — finish them, refuse new ones,
-then close.
+You are deploying a new version, or scaling down a node, and right
+now there are requests in flight. You do not want to drop them on
+the floor. What you want is simple: finish the work already started,
+politely refuse anything new, then close the door.
 
 ## Solution
 
@@ -18,23 +19,23 @@ ok = livery:drain(Pid, #{timeout => 30000}).
 
 `drain/2`:
 
-1. **Stops accepting** — closes the listen sockets so no new
-   connections are taken. Connections already open keep serving.
-2. **Waits** up to `timeout` (default 30s) for the requests already
-   in flight to finish.
+1. **Stops accepting** - it closes the listen sockets, so no new
+   connection is taken. Connections already open keep serving.
+2. **Waits** up to `timeout` (30s by default) for the requests
+   already in flight to finish.
 3. **Stops** the service.
 
-It returns `ok` once everything drained, or `{error, timeout}` if
-the window elapsed with requests still running. Either way the
-service is stopped when `drain/2` returns.
+You get back `ok` once everything has drained, or `{error, timeout}`
+if the window ran out with requests still running. Either way, the
+service is stopped by the time `drain/2` returns.
 
-`livery:stop_service/1` remains the immediate, non-graceful stop —
-it cuts off in-flight requests.
+If you want the brutal version, `livery:stop_service/1` is still
+there: it stops immediately and cuts off in-flight requests.
 
 ## Wiring it into shutdown
 
-Call `drain/2` from your application's `stop/1`, or from a SIGTERM
-handler, before the node halts:
+The natural place to call `drain/2` is your application's `stop/1`,
+or a SIGTERM handler, right before the node halts:
 
 ```erlang
 stop(_State) ->
@@ -42,21 +43,21 @@ stop(_State) ->
     ok.
 ```
 
-Pick a timeout shorter than your orchestrator's kill grace period
-(e.g. Kubernetes `terminationGracePeriodSeconds`) so the drain
-finishes before a hard kill.
+One tip: pick a timeout shorter than your orchestrator's kill grace
+period (Kubernetes `terminationGracePeriodSeconds`, for instance) so
+the drain finishes on its own before a hard kill steps in.
 
 ## Notes
 
-- In-flight requests are counted node-wide (every request runs
-  under one shared supervisor). On a single-service node this is
-  exactly that service's requests; on a multi-service node
-  `drain/2` waits for all of them. `livery_drain:in_flight/0`
-  reports the current count.
-- "Stop accepting" closes the listen socket; it does not send
-  GOAWAY on existing keep-alive connections, so a client reusing
-  an open connection can still send one more request until the
-  drain completes.
+- In-flight requests are counted node-wide, because every request
+  runs under one shared supervisor. On a single-service node that is
+  exactly your service's requests; on a multi-service node `drain/2`
+  waits for all of them. `livery_drain:in_flight/0` tells you the
+  current count.
+- "Stop accepting" closes the listen socket, but it does not send
+  GOAWAY on existing keep-alive connections. So a client reusing an
+  open connection can still slip in one more request until the drain
+  completes.
 
 ## See also
 

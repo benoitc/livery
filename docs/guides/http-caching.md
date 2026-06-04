@@ -2,14 +2,18 @@
 
 ## Problem
 
-You want clients and CDNs to revalidate cheaply: hold a copy, send
-`If-None-Match`, and get a bodyless `304 Not Modified` when nothing
-changed. You also want to set `Cache-Control`.
+You would like clients and CDNs to stop re-downloading things that
+have not changed. The HTTP way to do this is cheap revalidation: a
+client keeps its copy, sends `If-None-Match` on the next request, and
+gets a bodyless `304 Not Modified` when nothing has moved. While you
+are at it, you also want to say how long a response may be cached with
+`Cache-Control`.
 
 ## Solution
 
-Add `livery_etag` to the stack. It gives a strong ETag to cacheable
-`GET`/`HEAD` responses and answers `304` on a matching `If-None-Match`:
+Drop `livery_etag` into the stack. It attaches a strong ETag to
+cacheable `GET`/`HEAD` responses and, when a client comes back with a
+matching `If-None-Match`, answers `304` for you:
 
 ```erlang
 Stack = [
@@ -18,14 +22,16 @@ Stack = [
 ].
 ```
 
-A first request returns `200` with an `ETag`; a later request that sends
-that ETag in `If-None-Match` gets a `304` with no body.
+The first request gets a `200` with an `ETag`; a later request that
+echoes that ETag back in `If-None-Match` gets a `304` and no body.
+That is the whole loop.
 
 ## Setting your own ETag and Cache-Control
 
-The middleware computes an ETag automatically from `{full, _}` bodies
-that don't already have one. A handler can set its own (respected on any
-body type, including `file`/`chunked`):
+By default the middleware computes an ETag for you, from `{full, _}`
+bodies that don't already have one. But you are always free to set
+your own, and it is respected on any body type, including `file` and
+`chunked`:
 
 ```erlang
 show(Req) ->
@@ -49,21 +55,23 @@ show(Req) ->
 }}
 ```
 
-With `auto => false` the middleware only acts on handler-set ETags.
+Flip `auto => false` and the middleware steps back entirely: it only
+acts on ETags you set yourself.
 
 ## Placement relative to compression
 
-Put `livery_etag` OUTSIDE `livery_compress` (earlier in the stack list)
-so the ETag covers the bytes actually sent on the wire:
+Order matters here. Put `livery_etag` OUTSIDE `livery_compress`
+(earlier in the stack list) so the ETag is computed over the bytes
+that actually go out on the wire:
 
 ```erlang
 Stack = [{livery_etag, #{}}, {livery_compress, #{}} | Rest].
 ```
 
-If you place it inside compression, the ETag is computed from the
-uncompressed body; rely on `Vary: Accept-Encoding` (which
-`livery_compress` already sets) so caches keep per-encoding variants
-distinct.
+If you place it inside compression instead, the ETag ends up computed
+from the uncompressed body. That can still work, but then you must
+lean on `Vary: Accept-Encoding` (which `livery_compress` already sets)
+to keep caches from mixing up the per-encoding variants.
 
 ## Notes
 

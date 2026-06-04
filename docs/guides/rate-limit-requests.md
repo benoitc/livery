@@ -2,13 +2,16 @@
 
 ## Problem
 
-You want to throttle how fast each client may call the API and answer
-`429 Too Many Requests` when a client exceeds its allowance.
+One eager client is hammering your API and starving everyone else, or
+you simply want fair quotas per caller. Either way, you want to cap how
+fast each client can call you and reply `429 Too Many Requests` once it
+goes over its share.
 
 ## Solution
 
 Add `livery_ratelimit` with the `limiter/2,3` factory. Each client gets
-a token bucket of `Capacity` tokens that refills at `RefillPerSec`:
+its own token bucket: it holds up to `Capacity` tokens and tops back up
+at `RefillPerSec`:
 
 ```erlang
 Stack = [
@@ -16,17 +19,17 @@ Stack = [
 ].
 ```
 
-A request consumes a token; an empty bucket sheds `429` (the handler is
-not called). "N requests per minute" maps to `limiter(N, N/60)` (burst
-N, sustained N/60).
+Every request spends one token. When the bucket runs dry the request is
+shed with a `429` and your handler never runs. Want "N requests per
+minute"? That is `limiter(N, N/60)`: a burst of N, sustained at N/60.
 
 ## Identifying clients
 
-The client IP is NOT available (the wire libraries do not surface the
-peer address), so the default key is the Authorization bearer token
-(`livery_ext:bearer_token/1`). A request with no token is NOT limited.
-Provide your own `key` fun to throttle by an API-key header or anything
-else:
+Heads up: the client IP is NOT available here, because the wire
+libraries do not surface the peer address. So the default key is the
+Authorization bearer token (`livery_ext:bearer_token/1`), and a request
+with no token is NOT limited at all. To key on something else, an
+API-key header or whatever you like, pass your own `key` fun:
 
 ```erlang
 livery_ratelimit:limiter(60, 1, #{
@@ -34,22 +37,25 @@ livery_ratelimit:limiter(60, 1, #{
 })
 ```
 
-A `key` fun that returns `undefined` skips limiting for that request.
-Keys are SHA-256 hashed before storage, so raw tokens are never kept in
+If your `key` fun returns `undefined`, that request is left alone. Keys
+are SHA-256 hashed before they hit storage, so raw tokens never sit in
 memory.
 
-The bearer-token default gives per-credential quotas, not flood
-protection: a client that rotates tokens gets a fresh bucket each time.
-For flood protection, key on an identity the client cannot freely rotate
-(an authenticated user id, or a forwarded-IP header you trust because you
-sit behind a known proxy). The store also caps its total key count
-(`ratelimit_max_keys`, default 1,000,000) and reaps idle buckets every
-minute, so a distinct-key flood bounds memory regardless of the key.
+One thing to keep in mind: the bearer-token default gives you
+per-credential quotas, not flood protection. A client that keeps
+rotating tokens just keeps getting fresh buckets. For real flood
+protection, key on something the client cannot freely change: an
+authenticated user id, or a forwarded-IP header you trust because you
+know the proxy in front of you. The store also caps how many keys it
+holds (`ratelimit_max_keys`, 1,000,000 by default) and sweeps idle
+buckets every minute, so even a flood of distinct keys keeps memory
+bounded.
 
 ## Headers and options
 
-Allowed responses carry `RateLimit-Limit`, `RateLimit-Remaining`, and
-`RateLimit-Reset`; a `429` adds `Retry-After`. Tune with:
+Allowed responses come back with `RateLimit-Limit`,
+`RateLimit-Remaining`, and `RateLimit-Reset`, and a `429` adds
+`Retry-After` so clients know when to come back. Tune the rest with:
 
 ```erlang
 livery_ratelimit:limiter(100, 10, #{
@@ -60,9 +66,10 @@ livery_ratelimit:limiter(100, 10, #{
 })
 ```
 
-Each `limiter/2,3` call allocates an isolated keyspace, so a global limit
-and tighter per-route limits do not interfere. Pass an explicit `name`
-to deliberately share one budget across several stacks.
+Each `limiter/2,3` call gets its own isolated keyspace, so a global
+limit and tighter per-route limits never step on each other. When you
+actually do want several stacks to share one budget, give them the same
+explicit `name`.
 
 ## Notes
 

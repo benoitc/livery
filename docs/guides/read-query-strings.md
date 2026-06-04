@@ -2,7 +2,9 @@
 
 ## Problem
 
-You need a query string value from the request URL.
+The interesting bits of a request often hang off the URL after the
+`?`: a search term, a page number, a filter. You want those values,
+already decoded, without parsing the query string by hand.
 
 ## Solution
 
@@ -13,12 +15,12 @@ search(Req) ->
     do_search(Q, Page).
 ```
 
-`livery_ext:query/2` returns the first value for the key, or
-`undefined` if it is missing.
+`livery_ext:query/2` gives you the first value for the key, or
+`undefined` when it is not there.
 
 ## Default values
 
-Wrap with a fallback:
+When a parameter is optional, wrap it with a fallback:
 
 ```erlang
 Page = case livery_ext:query(<<"page">>, Req) of
@@ -29,8 +31,8 @@ end.
 
 ## Integer values
 
-`livery_ext:query/2` always returns a binary. Convert at the call
-site:
+`livery_ext:query/2` always hands back a binary, so do the conversion
+yourself at the call site and pick a sensible default if it fails:
 
 ```erlang
 PageInt = try binary_to_integer(Page) catch _:_ -> 1 end.
@@ -38,7 +40,7 @@ PageInt = try binary_to_integer(Page) catch _:_ -> 1 end.
 
 ## URL-decoded
 
-Values are URL-decoded:
+You get values already URL-decoded, no extra step needed:
 
 ```erlang
 %% /search?q=hello%20world&unit=100%25
@@ -48,9 +50,10 @@ Values are URL-decoded:
 
 ## Multiple values for the same key
 
-Today `livery_ext:query/2` returns only the first. To read all
-values, call `livery_req:query/1` to get the raw query string and
-parse it yourself, or open an issue if you need this in `livery_ext`.
+For now `livery_ext:query/2` only gives you the first one. If you need
+them all, grab the raw query string with `livery_req:query/1` and parse
+it yourself, or open an issue if you would like this built into
+`livery_ext`.
 
 ## See also
 

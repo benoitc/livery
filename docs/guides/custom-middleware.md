@@ -2,13 +2,15 @@
 
 ## Problem
 
-You need behaviour that runs before or after every handler in a
-stack: auth, CORS, rate limiting, feature flags, request mutation.
+You have logic that belongs around your handlers rather than inside
+them: checking auth, adding CORS headers, rate limiting, flipping a
+feature flag, tweaking the request before it lands. Middleware is
+where that lives, and writing your own is straightforward.
 
 ## Solution
 
-Implement the `livery_middleware` behaviour. One callback:
-`call(Req, Next, State) -> Resp`.
+Implement the `livery_middleware` behaviour. There is just one
+callback to write: `call(Req, Next, State) -> Resp`.
 
 ```erlang
 -module(my_cors).
@@ -35,7 +37,8 @@ Wire it into a stack as `{my_cors, #{origins => [...]}}`.
 
 ## Sugar helpers
 
-For simple shapes, use the constructors instead of a full module:
+When the job is small, you do not need a whole module. Reach for the
+constructors instead:
 
 ```erlang
 %% Mutate the request, then continue.
@@ -57,17 +60,19 @@ end).
 
 ## Three shapes a middleware can take
 
-1. **Pass-through.** Transform request or response. Always call
-   `Next`. Example: `livery_request_id`, `livery_access_log`.
-2. **Short-circuit.** Skip `Next` and return a response directly.
-   Example: auth failures, rate limit hits.
-3. **Wrapper.** Run `Next` inside `try`/`catch` or a monitor.
-   Example: `livery_middleware:wrap`, `livery_timeout`.
+Almost everything you write falls into one of these:
+
+1. **Pass-through.** Transform the request or the response, and
+   always call `Next`. See `livery_request_id`, `livery_access_log`.
+2. **Short-circuit.** Skip `Next` and answer directly. This is how
+   auth failures and rate limit hits work.
+3. **Wrapper.** Run `Next` inside a `try`/`catch` or a monitor. See
+   `livery_middleware:wrap`, `livery_timeout`.
 
 ## Storing state on the request
 
-Use `livery_req:set_meta/3` to thread values from middleware to
-handler:
+To pass a value from your middleware down to the handler, stash it on
+the request with `livery_req:set_meta/3`:
 
 ```erlang
 call(Req, Next, _State) ->
@@ -79,9 +84,9 @@ The handler reads it back with `livery_req:meta(user, Req)`.
 
 ## Ordering
 
-The first entry in the stack list is outermost. Put auth before
-business logic. Put request id and error wrappers at the very top
-so every response carries them.
+The first entry in the stack is the outermost one. So put auth ahead
+of your business logic, and keep request id and error wrappers right
+at the top, where they wrap every response.
 
 ## Testing
 

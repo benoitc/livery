@@ -2,13 +2,16 @@
 
 ## Problem
 
-The request body is too large to buffer, or you want to process it
-incrementally as bytes arrive.
+Someone is uploading a file that would never fit comfortably in
+memory, or you simply want to start working on the bytes the moment
+they arrive instead of waiting for the whole thing. For that, you read
+the body as a stream rather than buffering it.
 
 ## Solution
 
-When `livery_req:body/1` returns `{stream, Reader}`, drain it via
-`livery_body:read/2` or `livery_body:read_all/2`:
+When `livery_req:body/1` hands you `{stream, Reader}`, drain it with
+`livery_body:read/2` chunk by chunk, or `livery_body:read_all/2` in one
+go:
 
 ```erlang
 upload(Req) ->
@@ -40,8 +43,9 @@ end.
 
 ## Discard the rest
 
-If the handler decides to short-circuit (auth failure, validation),
-drop the remaining body so the adapter does not stall:
+If your handler bails out early, say auth failed or validation
+tripped, throw away the rest of the body so the adapter does not sit
+there waiting:
 
 ```erlang
 {ok, _R1} = livery_body:discard(R0, 1_000),
@@ -50,15 +54,16 @@ livery_resp:text(401, <<"nope">>).
 
 ## Cap the size
 
-Combine with `livery_body_limit` (buffered only today) or call
-`livery_body:read/2` with a maximum byte count tracked yourself.
+You can pair this with `livery_body_limit` (buffered only for now), or
+keep a running byte count of your own as you call `livery_body:read/2`
+and stop once you have had enough.
 
 ## Backpressure
 
-`livery_body:signal_demand(R, N)` hints the adapter that the handler
-is ready for `N` more bytes. The H1/H2/H3 adapters translate this
-into engine-level window updates. This is a no-op for the test
-adapter; the H1 adapter wires it to `h1`'s read size.
+`livery_body:signal_demand(R, N)` tells the adapter you are ready for
+`N` more bytes. The H1/H2/H3 adapters turn that into engine-level
+window updates. It is a no-op for the test adapter, and on H1 it maps
+to `h1`'s read size.
 
 ## See also
 

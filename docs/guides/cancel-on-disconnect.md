@@ -2,9 +2,10 @@
 
 ## Problem
 
-A request triggers expensive work (an LLM inference, a long query).
-If the client disconnects mid-request, you want to stop that work
-instead of finishing it for nobody.
+A request kicks off expensive work: an LLM inference, a long query,
+a heavy report. Then the client gives up and disconnects halfway
+through. You would rather stop that work right away than keep
+burning resources to produce an answer nobody will read.
 
 ## Solution
 

@@ -2,7 +2,9 @@
 
 ## Problem
 
-You need a header value from the request.
+You want to peek at a header on the incoming request, maybe the
+`Content-Type`, an `Accept`, or some custom flag, and act on it. It is
+about as everyday as it gets, so here is the short version.
 
 ## Solution
 
@@ -12,15 +14,16 @@ ContentType = livery_req:header(<<"content-type">>, Req),
 Accept = livery_req:header(<<"accept">>, Req, <<"*/*">>).
 ```
 
-Header names are matched case-insensitively. Both
-`<<"Content-Type">>` and `<<"content-type">>` work; Livery
-lowercases on ingest so lookups are constant-time after that.
+Header names are matched case-insensitively, so both
+`<<"Content-Type">>` and `<<"content-type">>` work the same. Livery
+lowercases everything on the way in, which keeps lookups
+constant-time afterwards.
 
 ## Repeated headers
 
-`livery_req:headers_all/2` returns every value for the header in
-wire order. Useful for `Set-Cookie`, `Vary`, comma-separated
-lists like `Accept-Encoding`:
+Some headers show up more than once. `livery_req:headers_all/2` gives
+you every value in wire order, which is just what you want for
+`Set-Cookie`, `Vary`, or comma-separated lists like `Accept-Encoding`:
 
 ```erlang
 Accepts = livery_req:headers_all(<<"accept">>, Req).
@@ -35,7 +38,8 @@ livery_req:has_header(<<"x-trace">>, Req)
 
 ## From a middleware
 
-Headers can also be inspected through extractors:
+From inside middleware you can read headers through extractors just as
+easily:
 
 ```erlang
 case livery_ext:header(<<"x-feature-flag">>, Req) of

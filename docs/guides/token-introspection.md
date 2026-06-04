@@ -2,17 +2,19 @@
 
 ## Problem
 
-Your bearer tokens are opaque reference tokens, not self-contained
-JWTs, so you cannot verify them locally. You need to ask the
-authorization server whether a token is still valid (RFC 7662).
+Your bearer tokens are opaque reference strings, not self-contained
+JWTs. There is nothing inside them to verify locally, so the only
+way to know whether a token is still good is to ask the
+authorization server that issued it. That conversation is token
+introspection (RFC 7662).
 
 ## Solution
 
-`livery_auth_introspect` POSTs the token to the introspection
-endpoint, authenticates this resource server with HTTP Basic, and
-trusts the `active` field of the JSON response. On success the
-response (with `scope`, `sub`, `exp`, ...) is stored under
-`meta(user, _)`:
+`livery_auth_introspect` does that round trip for you. It POSTs the
+token to the introspection endpoint, identifies your resource server
+with HTTP Basic, and looks at the `active` field of the JSON it gets
+back. When the token is active, the full response (`scope`, `sub`,
+`exp`, and friends) is stored under `meta(user, _)`:
 
 ```erlang
 Stack = [
@@ -34,9 +36,10 @@ fun(Req) ->
 end.
 ```
 
-A missing token is rejected with `401` unless `required => false`.
-An inactive token (or any transport/decoding failure) is always
-rejected with `401` and a `WWW-Authenticate: Bearer` header.
+A missing token gets a `401`, unless you pass `required => false`.
+An inactive token - or any failure to reach or decode the response -
+is always a `401`, together with a `WWW-Authenticate: Bearer`
+header. When in doubt, the request is turned away.
 
 ## JWT vs. introspection
 
@@ -45,14 +48,16 @@ rejected with `401` and a `WWW-Authenticate: Bearer` header.
 | Self-contained JWT | `livery_auth_bearer` (local verify, no round trip) |
 | Opaque / reference | `livery_auth_introspect` (round trip per request) |
 
-Introspection adds a network call per request. Cache results in
-your own layer if the round trip is too costly.
+Keep in mind that introspection costs a network call on every
+request. If that round trip starts to hurt, cache the results in a
+layer of your own.
 
 ## Custom HTTP client
 
-The call is pluggable. Pass `fetch => fun((Url, Headers, Body) ->
-{ok, Status, Body} | {error, _})` to use your own client or to
-test without a network:
+The HTTP call is pluggable, which is handy both in production and in
+tests. Pass `fetch => fun((Url, Headers, Body) -> {ok, Status, Body}
+| {error, _})` to swap in your own client, or to stub the whole
+thing out so your tests never touch the network:
 
 ```erlang
 #{endpoint => Endpoint,

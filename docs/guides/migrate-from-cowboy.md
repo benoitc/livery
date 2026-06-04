@@ -2,8 +2,10 @@
 
 ## Problem
 
-You have a service running on Cowboy and you want to move it to
-Livery, ideally without rewriting handlers from scratch.
+You have a service happily running on Cowboy, and you want to bring
+it over to Livery. Ideally without throwing away your handlers and
+starting from a blank file. Good news: most of the move is mechanical,
+and a lot of Cowboy ceremony simply disappears.
 
 ## Mapping table
 
@@ -44,7 +46,8 @@ handle(_Req) ->
     livery_resp:json(200, json:encode(#{ok => true})).
 ```
 
-No `init`, no `Opts`, no `Req0/Req1` threading.
+No `init`, no `Opts`, no `Req0`/`Req1` to thread through. The handler
+takes a request and returns a response, and that is the whole story.
 
 ### 2. Convert a streaming `cowboy_loop` handler
 
@@ -84,15 +87,15 @@ loop(Emit) ->
     end.
 ```
 
-The producer fun runs in the per-request process. It can `receive`
-between emits and hibernate during idle stretches the same way
-`cowboy_loop` does, with one function instead of a three-callback
-state machine.
+The producer fun runs in the per-request process, so it can `receive`
+between emits and hibernate during the quiet stretches, exactly like
+`cowboy_loop` did. The difference is that it is one plain function
+instead of a three-callback state machine.
 
 ### 3. Convert the access log stream handler
 
-Cowboy registers a custom `cowboy_stream` handler module for access
-logging. In Livery the equivalent is a middleware:
+For access logging, Cowboy has you register a custom `cowboy_stream`
+handler module. In Livery the same job is just a middleware:
 
 ```erlang
 Stack = [
@@ -127,31 +130,34 @@ Livery:
 }).
 ```
 
-The H1/H2/H3 adapters are wired, so the same handler set serves all
-three protocols from one `start_service/1` call. You can also drive
-handlers in EUnit through `livery_test_adapter:run/3`.
+The H1/H2/H3 adapters are already wired in, so that same handler set
+now serves all three protocols from a single `start_service/1` call.
+And when you want to test a handler in EUnit, you can drive it
+directly through `livery_test_adapter:run/3`.
 
 ## Validated against Cowboy
 
-`examples/livery_example_migration.erl` is the "after" side of this
-guide: a plain handler, a small REST resource, SSE, a streaming
-(`cowboy_loop`) replacement, and a WebSocket echo, all in Livery.
-`test/livery_cowboy_parity_SUITE.erl` runs that exact handler set behind
-both a live Cowboy listener and Livery and diffs the observable behaviour
-(status, content-type, body, framing) over H1, then drives the same
-Livery handlers over H2 and H3 to show the protocol upgrade Cowboy cannot
-give you. The mappings in this guide are enforced by that suite.
+This guide is not hand-waving. `examples/livery_example_migration.erl`
+is the "after" side of it: a plain handler, a small REST resource,
+SSE, a streaming (`cowboy_loop`) replacement, and a WebSocket echo,
+all in Livery. Then `test/livery_cowboy_parity_SUITE.erl` runs that
+exact handler set behind both a live Cowboy listener and Livery, and
+diffs the observable behaviour (status, content-type, body, framing)
+over H1. After that it drives the same Livery handlers over H2 and H3,
+the protocol upgrade Cowboy simply cannot give you. So the mappings in
+this guide are not promises, they are checked by that suite.
 
 ## Cowboy concepts that do not move
 
-- `cowboy_rest`: there is no equivalent. Use plain handlers with
-  `livery_ext` extractors. A REST helper module is not on the
-  current roadmap.
-- `cowboy_req:cast/2`: not needed. The request process owns its
-  state; send a message to `livery_req:engine_pid/1` or use
+A few things will not come across, and it is better to know up front:
+
+- `cowboy_rest`: no equivalent, and none is on the roadmap. Write
+  plain handlers and lean on the `livery_ext` extractors instead.
+- `cowboy_req:cast/2`: you will not miss it. The request process owns
+  its state, so send a message to `livery_req:engine_pid/1`, or use
   application-level pub/sub.
-- `cowboy_stream` custom handlers: replaced by middleware. There is
-  no second extension point.
+- `cowboy_stream` custom handlers: folded into middleware. There is no
+  second extension point, and you will not need one.
 
 ## See also
 

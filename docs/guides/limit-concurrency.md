@@ -2,14 +2,17 @@
 
 ## Problem
 
-A traffic spike can pile up more in-flight requests than your workers
-(or a downstream model) can handle. You want to cap concurrency and shed
-the overflow with `503` instead of collapsing.
+A traffic spike arrives and suddenly there are more in-flight
+requests than your workers - or a downstream model - can possibly
+handle. Left alone, everything slows down together and the whole
+service falls over. The healthier move is to cap concurrency and turn
+the overflow away with a quick `503`, so the requests you do accept
+stay fast.
 
 ## Solution
 
-Add `livery_concurrency` to the stack, built with the `limiter/1`
-factory (which creates the shared counter once):
+Add `livery_concurrency` to the stack, built through the `limiter/1`
+factory (it creates the shared counter once, up front):
 
 ```erlang
 Stack = [
@@ -18,10 +21,11 @@ Stack = [
 ].
 ```
 
-While at or under the limit the request proceeds; over the limit it is
-shed immediately with `503 Service Unavailable` and the handler is never
-called. The counter is a lock-free `atomics` cell shared across request
-processes, so there is no extra process and no lock.
+As long as you are at or under the limit, the request sails through.
+Go over, and it is shed right away with `503 Service Unavailable` and
+your handler is never even called. The counter is a lock-free
+`atomics` cell shared across request processes - no extra process to
+babysit, no lock to contend on.
 
 ## Options
 
@@ -35,8 +39,8 @@ livery_concurrency:limiter(500, #{
 
 ## Global vs per-route
 
-`limiter/1,2` returns a State carrying its own counter, so each call is
-an independent limiter:
+Each call to `limiter/1,2` returns a State carrying its own counter,
+which means every limiter is independent. Use that to your advantage:
 
 ```erlang
 %% one global limit in the service stack
@@ -48,15 +52,16 @@ InferStack = [{livery_concurrency, livery_concurrency:limiter(8)} | Common].
 
 ## Scope and caveats
 
-- A slot is held from admission until the handler RETURNS its response.
-  Body streaming runs after that (outside the middleware stack), so the
-  slot does not cover a long streamed/SSE body. For inference that
-  streams tokens, gate the streaming work yourself if you need to bound
-  active streams.
-- The slot is always released, including when the handler crashes.
-- The limit is approximate under a burst (a request that increments past
-  the limit decrements again), which is the expected behavior for
-  load-shedding.
+- A slot is held from admission until the handler RETURNS its
+  response. Body streaming happens after that, outside the middleware
+  stack, so the slot does not cover a long streamed or SSE body. If
+  you are streaming inference tokens and need to bound the active
+  streams, gate that work yourself.
+- The slot is always released, even when the handler crashes. You
+  cannot leak one.
+- Under a burst the limit is approximate: a request that increments
+  past the limit decrements again on its way out. That is exactly the
+  behavior you want from load-shedding, not a bug.
 
 ## See also
 

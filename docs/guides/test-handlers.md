@@ -2,13 +2,16 @@
 
 ## Problem
 
-You want fast unit tests for a handler or a stack, without binding
-ports, without HTTP clients, without docker.
+You want to test a handler, or a whole middleware stack, and you
+want it to be fast. No binding ports, no HTTP client, no docker -
+just call the thing and check what came back, the way a unit test
+should feel.
 
 ## Solution
 
-`livery_test_adapter:run/3` runs a synthetic request through a
-stack and handler and captures the emitted response.
+`livery_test_adapter:run/3` pushes a synthetic request through your
+stack and handler, then hands you back everything that was emitted
+so you can assert on it.
 
 ```erlang
 ok_test() ->
@@ -23,8 +26,9 @@ ok_test() ->
 
 ## Build a request spec
 
-The spec map accepts any `#livery_req{}` field. Defaults: GET on `/`
-over `h1`.
+The spec map takes any `#livery_req{}` field, so you describe only
+what matters to your test and leave the rest. The defaults are a GET
+on `/` over `h1`.
 
 ```erlang
 #{
@@ -53,9 +57,10 @@ over `h1`.
 
 ## When run/3 is not enough
 
-Spawn through `livery_req_proc` if you need the per-request worker
-semantics: 500-on-crash, body-message routing via mailbox,
-multi-request concurrency.
+Sometimes you need the real per-request worker semantics: the
+500-on-crash behaviour, body messages routed through the mailbox,
+several requests running at once. For that, spawn through
+`livery_req_proc` instead.
 
 ```erlang
 {ok, Pid} = livery_req_proc:start_link(#{
@@ -74,8 +79,9 @@ four test levels and when to use each.
 
 ## Drive body messages
 
-Streaming handlers `receive` body chunks. Feed them through the
-test adapter helper:
+Streaming handlers sit in a `receive` waiting for body chunks, so
+your test has to play the other side and feed them in. The test
+adapter has a helper for exactly that:
 
 ```erlang
 Stream = livery_test_adapter:new_stream(Tab),

@@ -2,12 +2,14 @@
 
 ## Problem
 
-An orchestrator (Kubernetes, a load balancer) needs liveness and
-readiness probes: is the process up, and is it ready to take traffic?
+Your orchestrator - Kubernetes, a load balancer, whatever sits in
+front - wants to ask your service two different questions. Is the
+process even up? And is it actually ready to take traffic? Those are
+the liveness and readiness probes, and you need an endpoint for each.
 
 ## Solution
 
-Mount the `livery_health` handlers on routes:
+Mount the ready-made `livery_health` handlers on a couple of routes:
 
 ```erlang
 R0 = livery_router:new(),
@@ -24,22 +26,26 @@ R2 = livery_router:add(
 
 ## Liveness
 
-`livery_health:live()` always answers `200 {"status":"ok"}`. Use it for
-the liveness probe - it only signals that the process is running.
+`livery_health:live()` always answers `200 {"status":"ok"}`. That is
+exactly what you want for a liveness probe: it says nothing more than
+"the process is running", which is the only thing liveness should
+care about.
 
 ## Readiness
 
-`livery_health:ready(Checks)` runs each `{Name, Fun}` check. A check
-passes when its `Fun()` returns `ok`; any other return or a raised
-exception counts as a failure.
+Readiness is where it gets interesting. `livery_health:ready(Checks)`
+runs each `{Name, Fun}` check in turn. A check passes when its `Fun()`
+returns `ok`; anything else, or a raised exception, counts as a
+failure.
 
 - All pass -> `200 {"status":"ok"}`.
 - Any fail -> `503 {"status":"unavailable","failed":["db"]}` listing the
   failed names.
 
-`ready([])` is always ready. Checks run synchronously in the request
-process, so keep them fast (wrap slow dependencies with your own
-timeout).
+`ready([])` is always ready. One thing to keep in mind: the checks
+run synchronously in the request process, so keep them quick. If a
+dependency can be slow, wrap it in a timeout of your own rather than
+letting the probe hang.
 
 ## See also
 

@@ -44,6 +44,7 @@ middleware after it.
 -include("livery.hrl").
 
 -export([handler/0, handler/1]).
+-export([router/0, router/1]).
 
 -export_type([opts/0]).
 
@@ -62,6 +63,25 @@ middleware after it.
 -spec handler() -> fun((livery_req:req()) -> livery_resp:resp()).
 handler() ->
     handler(#{}).
+
+-doc """
+A router for the MCP endpoint at `/mcp`, ready to mount with
+`livery_router:nest/3` or `merge/2`.
+""".
+-spec router() -> livery_router:router().
+router() ->
+    router(#{}).
+
+-doc "`router/0` with MCP handler options.".
+-spec router(opts()) -> livery_router:router().
+router(Opts) ->
+    Mcp = handler(Opts),
+    livery_router:compile([
+        {<<"POST">>, <<"/mcp">>, Mcp},
+        {<<"GET">>, <<"/mcp">>, Mcp},
+        {<<"DELETE">>, <<"/mcp">>, Mcp},
+        {<<"OPTIONS">>, <<"/mcp">>, Mcp}
+    ]).
 
 -doc "MCP handler built from `Opts` (see the module docs).".
 -spec handler(opts()) -> fun((livery_req:req()) -> livery_resp:resp()).

@@ -2,9 +2,10 @@
 
 ## Problem
 
-You have several routes and want the service to dispatch by
-method and path — with path-parameter binding and automatic
-404/405 — instead of writing one big handler.
+Your service has grown past a single endpoint, and you would rather
+declare routes than grow one giant handler with a `case` on the path.
+You want dispatch by method and path, path parameters bound for you, and
+404/405 handled automatically.
 
 ## Solution
 
@@ -25,8 +26,8 @@ Router = livery_router:compile([
 }).
 ```
 
-Each route handler is a normal handler — `fun(Req) -> Resp` or
-`{Module, Function}` — and receives the request with path
+Each route handler is a normal handler - `fun(Req) -> Resp` or
+`{Module, Function}` - and receives the request with path
 parameters already bound:
 
 ```erlang
@@ -61,8 +62,41 @@ Router = livery_router:compile([
 ```
 
 `/private` runs `Auth` before its handler; `/public` does not.
-Nesting is service stack (outermost) → route match → route stack →
+Nesting is service stack (outermost) -> route match -> route stack ->
 handler.
+
+## Composing routers
+
+Once a piece of your app is self-contained, it is nicer to keep its
+routes together and stitch them in, rather than copy them into one big
+list. Three functions let you do that, and they all return a router you
+can keep composing.
+
+`merge/2` puts two routers side by side. The later one wins if they
+register the same method and path:
+
+```erlang
+App = livery_router:compile([{<<"GET">>, <<"/">>, {my_app, index}}]),
+Router = livery_router:merge(App, livery_mcp:router()).
+```
+
+`nest/3` mounts a sub-router under a prefix. Here the MCP endpoint, which
+lives at `/mcp` on its own, ends up at `/ai/mcp`:
+
+```erlang
+Router = livery_router:nest(<<"/ai">>, livery_mcp:router(), App).
+```
+
+`layer/2` wraps a whole router in a middleware stack, which is the easy
+way to put one rule, say auth, over an entire mounted subtree:
+
+```erlang
+Admin = livery_router:compile([{<<"GET">>, <<"/admin/stats">>, {my_app, stats}}]),
+Guarded = livery_router:nest(<<"/v1">>, livery_router:layer([Auth], Admin), App).
+```
+
+Need the flat list back, perhaps to feed `livery_openapi:build/1`?
+`livery_router:routes/1` reconstructs it from any router, composed or not.
 
 ## Customising 404 / 405
 

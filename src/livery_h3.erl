@@ -59,6 +59,8 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
     settings => map(),
     quic_opts => map(),
     max_body => non_neg_integer() | infinity,
+    %% Shared service config, readable in handlers via livery_req:config/1.
+    config => term(),
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.
@@ -256,7 +258,7 @@ build_h3_opts(Opts, Stack, Handler) ->
         cert => maps:get(cert, Opts),
         key => maps:get(key, Opts),
         quic_opts => quic_opts(Opts),
-        handler => make_handler_fun(Stack, Handler, MaxBody)
+        handler => make_handler_fun(Stack, Handler, MaxBody, maps:get(config, Opts, undefined))
     },
     copy_keys(
         [
@@ -299,7 +301,8 @@ copy_keys([K | Rest], Src, Dst) ->
 -spec make_handler_fun(
     livery_middleware:stack(),
     livery_middleware:handler(),
-    non_neg_integer() | infinity
+    non_neg_integer() | infinity,
+    term()
 ) ->
     fun(
         (
@@ -310,7 +313,7 @@ copy_keys([K | Rest], Src, Dst) ->
             [{binary(), binary()}]
         ) -> ok
     ).
-make_handler_fun(Stack, Handler, MaxBody) ->
+make_handler_fun(Stack, Handler, MaxBody, Config) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -320,7 +323,8 @@ make_handler_fun(Stack, Handler, MaxBody) ->
             Headers,
             Stack,
             Handler,
-            MaxBody
+            MaxBody,
+            Config
         )
     end.
 
@@ -332,9 +336,10 @@ make_handler_fun(Stack, Handler, MaxBody) ->
     [{binary(), binary()}],
     livery_middleware:stack(),
     livery_middleware:handler(),
-    non_neg_integer() | infinity
+    non_neg_integer() | infinity,
+    term()
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody) ->
+dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config) ->
     BodyRef = make_ref(),
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
@@ -348,7 +353,8 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody)
     Req1 = Req#livery_req{
         raw_query = RawQuery,
         notifier_pid = Translator,
-        disc_ref = DiscRef
+        disc_ref = DiscRef,
+        config = Config
     },
     case
         livery_req_sup:start_request(#{

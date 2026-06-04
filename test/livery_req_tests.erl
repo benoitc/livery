@@ -103,3 +103,43 @@ body_is_opaque_to_req_test() ->
     ?assertEqual({buffered, <<"hi">>}, livery_req:body(Req0)),
     Req1 = livery_req:set_body({stream, make_ref()}, Req0),
     ?assertMatch({stream, _}, livery_req:body(Req1)).
+
+config_unset_is_undefined_test() ->
+    Req = livery_req:new(#{method => <<"GET">>, path => <<"/">>}),
+    ?assertEqual(undefined, livery_req:config(Req)),
+    ?assertEqual(undefined, livery_req:config(db, Req)),
+    ?assertEqual(default, livery_req:config(db, Req, default)).
+
+config_returns_whole_term_test() ->
+    Cfg = #{db => pool, cache => self()},
+    Req = livery_req:new(#{method => <<"GET">>, path => <<"/">>, config => Cfg}),
+    ?assertEqual(Cfg, livery_req:config(Req)).
+
+config_map_key_lookup_test() ->
+    Req = livery_req:new(#{method => <<"GET">>, path => <<"/">>, config => #{db => pool}}),
+    ?assertEqual(pool, livery_req:config(db, Req)),
+    ?assertEqual(undefined, livery_req:config(missing, Req)),
+    ?assertEqual(d, livery_req:config(missing, Req, d)).
+
+config_non_map_key_lookup_falls_back_test() ->
+    %% config can be any term (e.g. a record); a key lookup then yields the default.
+    Req = livery_req:new(#{method => <<"GET">>, path => <<"/">>, config => some_atom}),
+    ?assertEqual(some_atom, livery_req:config(Req)),
+    ?assertEqual(undefined, livery_req:config(db, Req)),
+    ?assertEqual(d, livery_req:config(db, Req, d)).
+
+config_independent_of_meta_test() ->
+    Req0 = livery_req:new(#{method => <<"GET">>, path => <<"/">>, config => #{db => pool}}),
+    Req1 = livery_req:set_meta(user, alice, Req0),
+    ?assertEqual(#{db => pool}, livery_req:config(Req1)),
+    ?assertEqual(alice, livery_req:meta(user, Req1)).
+
+config_via_test_adapter_spec_test() ->
+    H = fun(Req) -> livery_resp:text(200, atom_to_binary(livery_req:config(db, Req), utf8)) end,
+    Cap = livery_test_adapter:run([], H, #{method => <<"GET">>, config => #{db => pool}}),
+    ?assertEqual(<<"pool">>, livery_test_adapter:body(Cap)).
+
+config_via_test_adapter_opts_test() ->
+    H = fun(Req) -> livery_resp:text(200, atom_to_binary(livery_req:config(db, Req), utf8)) end,
+    Cap = livery_test_adapter:run([], H, #{method => <<"GET">>}, #{config => #{db => pool}}),
+    ?assertEqual(<<"pool">>, livery_test_adapter:body(Cap)).

@@ -49,6 +49,10 @@ new value for the next stage using the setters.
     meta/3,
     set_meta/3,
 
+    config/1,
+    config/2,
+    config/3,
+
     set_req_id/2,
 
     on_disconnect/2,
@@ -91,6 +95,7 @@ set_field(disc_ref, V, R) -> R#livery_req{disc_ref = V};
 set_field(req_id, V, R) -> R#livery_req{req_id = V};
 set_field(started_at, V, R) -> R#livery_req{started_at = V};
 set_field(meta, V, R) -> R#livery_req{meta = V};
+set_field(config, V, R) -> R#livery_req{config = V};
 set_field(Key, _V, _R) -> error({badarg, Key}).
 
 %%====================================================================
@@ -264,6 +269,30 @@ meta(Key, #livery_req{meta = M}, Default) ->
 -spec set_meta(term(), term(), req()) -> req().
 set_meta(Key, Value, #livery_req{meta = M} = Req) ->
     Req#livery_req{meta = maps:put(Key, Value, M)}.
+
+%%====================================================================
+%% Service config
+%%====================================================================
+
+-doc """
+The service config: the value passed once at listener or service start
+(`config => ...`), the same for every request. Use it for shared handles
+and settings (a DB pool, a cache, a config map). `undefined` if none was
+set. Unlike `meta`, it is read-only and not per-request.
+""".
+-spec config(req()) -> term().
+config(#livery_req{config = C}) -> C.
+
+-doc "Look up a key in a map config, or `undefined`.".
+-spec config(term(), req()) -> term() | undefined.
+config(Key, Req) -> config(Key, Req, undefined).
+
+-doc "Look up a key in a map config, falling back to `Default`.".
+-spec config(term(), req(), Default) -> term() | Default.
+config(Key, #livery_req{config = C}, Default) when is_map(C) ->
+    maps:get(Key, C, Default);
+config(_Key, #livery_req{}, Default) ->
+    Default.
 
 -doc "Set the request id field. Used by `livery_request_id`.".
 -spec set_req_id(binary(), req()) -> req().

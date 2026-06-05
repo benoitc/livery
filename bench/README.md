@@ -52,36 +52,54 @@ not as cross-environment targets.
 ## Cross-server comparison (livery vs cowboy vs bandit)
 
 `bench/compare.sh` benchmarks the same `GET / -> {"ok":true}` endpoint on
-**livery**, **cowboy**, and **bandit** over HTTP/1.1. Each server runs out
-of process on its own port and is driven by [`wrk`](https://github.com/wg/wrk),
+**livery**, **cowboy**, and **bandit** over HTTP/1.1 (cleartext) and
+HTTP/2 (over TLS, ALPN-negotiated - the way h2 is actually deployed). Each
+server runs out of process on its own port and is driven by an external
+client ([`wrk`](https://github.com/wg/wrk) for H1,
+[`h2load`](https://nghttp2.org/documentation/h2load-howto.html) for H2),
 so all three are treated identically and the load generator never shares a
 VM with the server under test. Livery and cowboy boot under one BEAM (via
 `livery_bench:serve/3`); bandit boots under Elixir, pulling itself in with
-`Mix.install` on first run (needs network and a one-time compile).
+`Mix.install` on first run (needs network and a one-time compile). TLS uses
+the vendored self-signed test certs.
 
 ```
 bench/compare.sh                       # 4 threads, 64 conns, 10s
 DUR=20 CONN=128 THREADS=8 bench/compare.sh
 ```
 
-Requires `wrk`, `elixir`, `rebar3`, and `curl` on the PATH.
+Requires `wrk`, `h2load`, `elixir`, `rebar3`, and `curl` on the PATH.
 
 Indicative numbers (loopback, Apple silicon, 4t / 64c / 8s):
 
+**HTTP/1.1 (cleartext, wrk)**
+
 | Server | req/s | p50 | p99 |
 |---|---|---|---|
-| livery | ~129k | 0.46 ms | 1.31 ms |
-| cowboy | ~142k | 0.36 ms | 1.22 ms |
-| bandit | ~151k | 0.33 ms | 1.24 ms |
+| livery | ~130k | 0.45 ms | 1.26 ms |
+| cowboy | ~142k | 0.36 ms | 1.11 ms |
+| bandit | ~147k | 0.34 ms | 1.30 ms |
+
+**HTTP/2 over TLS (h2load, 32 streams/conn)**
+
+| Server | req/s | errors |
+|---|---|---|
+| livery | ~154k | 0 |
+| bandit | ~139k | 0 |
+| cowboy | ~80k | resets under load |
 
 Same-host, single run; absolute numbers are host-specific. Notes:
 
-- Livery now coalesces H1 full responses into a single `content-length`
-  write (`livery_h1:send_full/5` -> `h1:respond/5`); earlier it sent them
-  as chunked over two writes, which cost ~20% throughput here.
-- The remaining gap is largely livery's worker process per request (the
-  `cowboy_loop` analogue), which trades a little raw throughput for the
-  ability to block/`receive` in a handler.
+- **H1**: livery now coalesces full responses into a single
+  `content-length` write (`livery_h1:send_full/5` -> `h1:respond/5`);
+  earlier it sent them chunked over two writes, which cost ~20% here. The
+  small remaining gap is largely livery's worker process per request (the
+  `cowboy_loop` analogue), traded for the ability to block/`receive` in a
+  handler.
+- **H2**: livery is fastest of the three over TLS (its H2 adapter already
+  coalesces via `h2:respond/5`). Cowboy's HTTP/2 returns fewer req/s and
+  resets a fraction of streams under `h2load`'s stream churn (its built-in
+  HTTP/2 flow-rate protection), so its number is noisier.
 
 ## p99 regression gate
 

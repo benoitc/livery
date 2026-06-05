@@ -1,16 +1,25 @@
 # Reference Bandit server for the cross-server benchmark.
 #
 # Serves the same endpoint as the livery/cowboy reference handlers:
-# GET / -> 200 application/json {"ok":true} over HTTP/1.1.
+# GET / -> 200 application/json {"ok":true}.
 #
-# Run: elixir bench/servers/bandit_server.exs <port>
+# Run:
+#   elixir bench/servers/bandit_server.exs <port>                  # HTTP/1.1
+#   elixir bench/servers/bandit_server.exs <port> <cert> <key>     # HTTPS (h2 via ALPN)
+#
 # Pulls Bandit (and Plug, Thousand Island) via Mix.install on first run,
 # which needs network access; compiled artifacts are cached afterwards.
 
-port =
+{port, scheme, extra} =
   case System.argv() do
-    [p | _] -> String.to_integer(p)
-    [] -> 9103
+    [p, cert, key] ->
+      {String.to_integer(p), :https, [certfile: cert, keyfile: key]}
+
+    [p | _] ->
+      {String.to_integer(p), :http, []}
+
+    [] ->
+      {9103, :http, []}
   end
 
 Mix.install([:bandit])
@@ -29,6 +38,6 @@ defmodule BenchPlug do
   end
 end
 
-{:ok, _} = Bandit.start_link(plug: BenchPlug, scheme: :http, port: port)
-IO.puts("READY bandit http #{port}")
+{:ok, _} = Bandit.start_link([plug: BenchPlug, scheme: scheme, port: port] ++ extra)
+IO.puts("READY bandit #{scheme} #{port}")
 Process.sleep(:infinity)

@@ -114,21 +114,23 @@ stop(Listener) ->
 ) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
-    case h2:send_response(Conn, StreamId, Status, Headers) of
-        ok ->
-            case maps:get(end_stream, Opts, false) of
-                true -> h2:send_data(Conn, StreamId, <<>>, true);
-                false -> ok
-            end;
-        Other ->
-            Other
-    end.
+    closed_guard(fun() ->
+        case h2:send_response(Conn, StreamId, Status, Headers) of
+            ok ->
+                case maps:get(end_stream, Opts, false) of
+                    true -> h2:send_data(Conn, StreamId, <<>>, true);
+                    false -> ok
+                end;
+            Other ->
+                Other
+        end
+    end).
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
 send_data({Conn, StreamId}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
-    h2:send_data(Conn, StreamId, iolist_to_binary(IoData), EndStream).
+    closed_guard(fun() -> h2:send_data(Conn, StreamId, iolist_to_binary(IoData), EndStream) end).
 
 %% Coalesced full response: HEADERS + DATA in one h2 call (and one
 %% socket write). h2:respond/5 falls back to the granular path itself
@@ -142,12 +144,31 @@ send_data({Conn, StreamId}, IoData, Opts) ->
 ) ->
     livery_adapter:send_result().
 send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
-    h2:respond(Conn, StreamId, Status, Headers, iolist_to_binary(IoData)).
+    closed_guard(fun() ->
+        h2:respond(Conn, StreamId, Status, Headers, iolist_to_binary(IoData))
+    end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
 send_trailers({Conn, StreamId}, Trailers) ->
-    h2:send_trailers(Conn, StreamId, Trailers).
+    closed_guard(fun() -> h2:send_trailers(Conn, StreamId, Trailers) end).
+
+%% A send to a connection whose client has gone away exits the underlying
+%% `gen_statem:call` (e.g. `{{shutdown, {send_failed, closed}}, _}` or
+%% `{noproc, _}`). Map that to `{error, closed}`, the way `gen_tcp:send`
+%% already reports it on H1, so `livery:emit/3` treats it as a normal
+%% disconnect instead of a handler crash. The crash path would log the
+%% response body (carried in the stacktrace), which is both a throughput
+%% sink on large responses and a log-hygiene leak.
+-spec closed_guard(fun(() -> R)) -> R | {error, closed}.
+closed_guard(Fun) ->
+    try
+        Fun()
+    catch
+        exit:{noproc, _} -> {error, closed};
+        exit:{normal, _} -> {error, closed};
+        exit:{{shutdown, _}, _} -> {error, closed}
+    end.
 
 -spec reset(stream(), term()) -> ok.
 reset({Conn, StreamId}, _Reason) ->
@@ -345,19 +366,16 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
     of
         {ok, WorkerPid} ->
             Translator ! {worker, WorkerPid},
-            case
-                h2:set_stream_handler(
-                    Conn,
-                    StreamId,
-                    Translator,
-                    #{drain_buffer => false}
-                )
-            of
+            case set_stream_handler(Conn, StreamId, Translator) of
                 ok ->
                     ok;
                 {ok, _Drained} ->
                     ok;
-                {error, unknown_stream} ->
+                %% The client already went away (unknown stream, or the
+                %% connection process is shutting down); abandon the
+                %% request quietly. The worker's DOWN still balances the
+                %% in-flight count.
+                {error, _} ->
                     exit(Translator, kill),
                     exit(WorkerPid, kill),
                     ok
@@ -367,6 +385,15 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
             reject_overload({Conn, StreamId})
     end,
     ok.
+
+%% Register the per-stream translator. Like the send callbacks, a
+%% connection that is already shutting down (client gone) exits the
+%% gen_statem:call; map it to `{error, closed}` so the caller abandons
+%% the request instead of crashing (which would error-log per disconnect).
+set_stream_handler(Conn, StreamId, Translator) ->
+    closed_guard(fun() ->
+        h2:set_stream_handler(Conn, StreamId, Translator, #{drain_buffer => false})
+    end).
 
 %% No worker slot available (concurrency cap reached): answer 503.
 -spec reject_overload(stream()) -> ok.

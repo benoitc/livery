@@ -25,7 +25,8 @@
     echo_buffered_body/1,
     error_500_on_crash/1,
     response_with_trailers/1,
-    cancel_on_connection_close/1
+    cancel_on_connection_close/1,
+    send_to_gone_client_is_closed/1
 ]).
 
 %%====================================================================
@@ -42,7 +43,8 @@ all() ->
         echo_buffered_body,
         error_500_on_crash,
         response_with_trailers,
-        cancel_on_connection_close
+        cancel_on_connection_close,
+        send_to_gone_client_is_closed
     ].
 
 init_per_suite(Config) ->
@@ -173,7 +175,10 @@ handler_for(cancel_on_connection_close) ->
             after 10000 -> ok
             end
         end)
-    end.
+    end;
+%% Cases that exercise the adapter directly (no listener traffic).
+handler_for(_TC) ->
+    fun(_R) -> livery_resp:text(200, <<"ok">>) end.
 
 cancel_on_connection_close(Config) ->
     Port = ?config(port, Config),
@@ -192,6 +197,29 @@ cancel_on_connection_close(Config) ->
         cancelled -> ok
     after 5000 -> ct:fail(cancel_callback_not_run)
     end.
+
+%% A send to a connection whose client has gone away must report
+%% `{error, closed}` (like gen_tcp:send on H1), not crash the worker.
+%% The crash path would error-log the response body carried in the
+%% stacktrace, a throughput sink on large responses. A dead connection
+%% process makes the underlying gen_statem:call exit with `{noproc, _}`,
+%% the same shape as a real mid-response disconnect.
+send_to_gone_client_is_closed(_Config) ->
+    Dead = spawn(fun() -> ok end),
+    Ref = monitor(process, Dead),
+    receive
+        {'DOWN', Ref, process, Dead, _} -> ok
+    after 5000 -> ct:fail(proc_not_dead)
+    end,
+    Stream = {Dead, 1},
+    ?assertEqual({error, closed}, livery_h2:send_full(Stream, 200, [], <<"body">>, #{})),
+    ?assertEqual(
+        {error, closed}, livery_h2:send_data(Stream, <<"body">>, #{end_stream => true})
+    ),
+    ?assertEqual(
+        {error, closed}, livery_h2:send_headers(Stream, 200, [], #{end_stream => true})
+    ),
+    ?assertEqual({error, closed}, livery_h2:send_trailers(Stream, [{<<"x">>, <<"y">>}])).
 
 %%====================================================================
 %% HTTP/2 client helpers

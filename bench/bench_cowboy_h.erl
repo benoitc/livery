@@ -14,7 +14,7 @@ route(<<"POST">>, <<"/echo">>, Req0) ->
     {Body, Req1} = read_body(Req0, <<>>),
     cowboy_req:reply(200, #{<<"content-type">> => <<"application/json">>}, Body, Req1);
 route(<<"GET">>, <<"/bytes/", N/binary>>, Req0) ->
-    Payload = binary:copy(<<"x">>, binary_to_integer(N)),
+    Payload = payload(binary_to_integer(N)),
     cowboy_req:reply(200, #{<<"content-type">> => <<"text/plain">>}, Payload, Req0);
 route(_Method, _Path, Req0) ->
     cowboy_req:reply(
@@ -25,4 +25,15 @@ read_body(Req0, Acc) ->
     case cowboy_req:read_body(Req0) of
         {ok, Data, Req1} -> {<<Acc/binary, Data/binary>>, Req1};
         {more, Data, Req1} -> read_body(Req1, <<Acc/binary, Data/binary>>)
+    end.
+
+%% Cached sized payload (built once), matching livery_bench:ref_payload/1.
+payload(Size) ->
+    case persistent_term:get({bench_payload, Size}, undefined) of
+        undefined ->
+            Payload = binary:copy(<<"x">>, Size),
+            persistent_term:put({bench_payload, Size}, Payload),
+            Payload;
+        Payload ->
+            Payload
     end.

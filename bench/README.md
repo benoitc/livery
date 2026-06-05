@@ -49,6 +49,43 @@ Loopback, single host (Apple silicon); absolute numbers are
 host-specific. Use them only as a same-host before/after baseline,
 not as cross-environment targets.
 
+## Cross-server comparison (livery vs cowboy vs bandit)
+
+`bench/compare.sh` benchmarks the same `GET / -> {"ok":true}` endpoint on
+**livery**, **cowboy**, and **bandit** over HTTP/1.1. Each server runs out
+of process on its own port and is driven by [`wrk`](https://github.com/wg/wrk),
+so all three are treated identically and the load generator never shares a
+VM with the server under test. Livery and cowboy boot under one BEAM (via
+`livery_bench:serve/3`); bandit boots under Elixir, pulling itself in with
+`Mix.install` on first run (needs network and a one-time compile).
+
+```
+bench/compare.sh                       # 4 threads, 64 conns, 10s
+DUR=20 CONN=128 THREADS=8 bench/compare.sh
+```
+
+Requires `wrk`, `elixir`, `rebar3`, and `curl` on the PATH.
+
+Indicative numbers (loopback, Apple silicon, 4t / 64c / 8s):
+
+| Server | req/s | p50 | p99 |
+|---|---|---|---|
+| livery | ~104k | 0.57 ms | 1.60 ms |
+| cowboy | ~142k | 0.36 ms | 1.23 ms |
+| bandit | ~148k | 0.33 ms | 1.59 ms |
+
+Same-host, single run; absolute numbers are host-specific. Two things to
+keep in mind when reading them:
+
+- Livery serves H1 full bodies with **chunked** transfer-encoding (it has
+  no `send_full/5` coalescing on `livery_h1`), while cowboy and bandit send
+  `content-length`. `wrk` handles both, but the extra framing and the
+  separate header/body writes cost livery some throughput here. Coalescing
+  H1 full responses is a worthwhile follow-up.
+- Livery spawns a worker process per request (the `cowboy_loop` analogue),
+  which trades a little raw throughput for the ability to block/`receive`
+  in a handler.
+
 ## p99 regression gate
 
 Capture a baseline on your benchmark host and compare future runs:

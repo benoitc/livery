@@ -7,8 +7,9 @@
 
 overload_rejects_past_cap_test() ->
     {ok, _} = application:ensure_all_started(livery),
-    Old = application:get_env(livery, max_concurrent_requests, 10000),
-    application:set_env(livery, max_concurrent_requests, 1),
+    %% The cap is cached in persistent_term at startup, so drive it
+    %% through the runtime setter rather than the app env.
+    ok = livery_req_sup:set_max_concurrent_requests(1),
     try
         Test = self(),
         Handler = fun(_Req) ->
@@ -32,5 +33,5 @@ overload_rejects_past_cap_test() ->
         ?assertEqual({error, overload}, livery_req_sup:start_request(Args)),
         exit(W1, kill)
     after
-        application:set_env(livery, max_concurrent_requests, Old)
+        livery_req_sup:set_max_concurrent_requests(10000)
     end.

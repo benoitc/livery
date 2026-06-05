@@ -92,3 +92,15 @@ echo "##### HTTP/2 over TLS (h2load) #####"
 bench_beam h2 "livery" livery 9111
 bench_beam h2 "cowboy" cowboy 9112
 bench_bandit h2 9113
+
+# H3 is livery only: cowboy and bandit do not speak HTTP/3, and external
+# h3 load tools (h2load QUIC) do not interoperate with the self-signed
+# QUIC listener here, so H3 uses livery's own in-VM quic_h3 driver. The
+# number is not directly comparable to the external H1/H2 figures above.
+echo
+echo "##### HTTP/3 (livery only, in-VM quic_h3) #####"
+echo "=== livery (h3, ${DUR}s) ==="
+ERL_LIBS="$BENCH_LIBS" erl -noshell -pa "$BENCH_PA" \
+    -eval "livery_bench:run(#{protocol => h3, connections => $CONN, duration_ms => $((DUR * 1000)), warmup_ms => 500})" \
+    -eval "halt()" 2>/dev/null \
+    | grep -E "throughput|latency p50|latency p99"

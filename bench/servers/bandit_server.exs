@@ -42,11 +42,24 @@ defmodule BenchPlug do
   def call(%Plug.Conn{method: "GET", request_path: "/bytes/" <> n} = conn, _opts) do
     conn
     |> put_resp_content_type("text/plain")
-    |> send_resp(200, String.duplicate("x", String.to_integer(n)))
+    |> send_resp(200, payload(String.to_integer(n)))
   end
 
   def call(conn, _opts) do
     conn |> put_resp_content_type("application/json") |> send_resp(200, ~s({"ok":true}))
+  end
+
+  # Cached sized payload (built once), matching the livery/cowboy handlers.
+  defp payload(size) do
+    case :persistent_term.get({:bench_payload, size}, nil) do
+      nil ->
+        p = String.duplicate("x", size)
+        :persistent_term.put({:bench_payload, size}, p)
+        p
+
+      p ->
+        p
+    end
   end
 end
 

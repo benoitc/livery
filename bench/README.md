@@ -62,6 +62,10 @@ static GET:
 | `bytes1k`/`10k`/`100k` | `GET /bytes/<n>` | response write path at 1/10/100 KiB |
 | `echo` | `POST /echo` | body read + decode + encode (the common API path) |
 
+The sized payloads are built once and served from a cache (not rebuilt per
+request), so the `bytes*` rows measure the response/write path rather than
+`binary:copy`/GC.
+
 Each server runs out of process on its own port and is driven by an
 external client ([`wrk`](https://github.com/wg/wrk) for H1,
 [`h2load`](https://nghttp2.org/documentation/h2load-howto.html) for H2),
@@ -86,17 +90,17 @@ Indicative numbers (loopback, Apple silicon, 4t / 64c, req/s):
 
 | Server | tiny | 1 KiB | 10 KiB | 100 KiB | echo |
 |---|---|---|---|---|---|
-| livery | ~119k | ~115k | ~81k | ~17.5k | ~113k |
-| cowboy | ~138k | ~137k | ~94k | ~17.6k | ~132k |
-| bandit | ~144k | ~146k | ~105k | ~17.6k | ~145k |
+| livery | ~119k | ~113k | ~105k | ~57k | ~106k |
+| cowboy | ~133k | ~137k | ~132k | ~61k | ~130k |
+| bandit | ~145k | ~144k | ~139k | ~57k | ~139k |
 
 **HTTP/2 over TLS (h2load, 32 streams/conn)**
 
 | Server | tiny | 1 KiB | 10 KiB | 100 KiB | echo |
 |---|---|---|---|---|---|
-| livery | ~138k | ~127k | ~81k | ~12k | ~110k |
-| cowboy | ~160k | ~160k | ~99k | ~17k | ~80k |
-| bandit | ~122k | ~109k | ~73k | ~16k | ~112k |
+| livery | ~121k | ~122k | ~116k | ~29k | ~110k |
+| cowboy | ~80k | ~80k | ~80k | ~80k | ~40k |
+| bandit | ~120k | ~107k | ~103k | ~61k | ~104k |
 
 **HTTP/3 (livery only, in-VM quic_h3)**: ~15k req/s. Cowboy and bandit do
 not speak HTTP/3, and external h3 load tools (`h2load` QUIC) do not
@@ -106,17 +110,20 @@ figures (different load path; QUIC over loopback is bounded by the round
 trip - measure off-box with a native client for absolute numbers).
 
 Same-host, single runs; absolute numbers are host-specific and vary run to
-run (cowboy's HTTP/2 in particular swings and resets a fraction of streams
-under `h2load`'s churn). What holds across runs:
+run (cowboy's HTTP/2 in particular swings under `h2load`'s churn). What
+holds across runs:
 
-- **Payload size dominates.** At 100 KiB all three converge (~17k H1) - the
-  write path and loopback bandwidth, not the framework, set the ceiling.
-- **livery is competitive and closes the gap on larger bodies and on the
-  `echo` (POST) path**; the tiny-GET gap is mostly livery's worker process
+- **H1 large bodies: livery is competitive.** At 100 KiB the three are
+  within noise (~57-61k), with livery on par - its `send_full/5`
+  coalescing puts the full response in one `content-length` write.
+- **H1 tiny GET: a ~10-15% gap** that traces to livery's worker process
   per request (the `cowboy_loop` analogue, traded for the ability to
-  block/`receive` in a handler) plus, on H1, was helped by `send_full/5`
-  coalescing into one `content-length` write.
-- **livery's HTTP/2 `echo` beats cowboy's** (~110k vs ~80k): cowboy's h2
+  block/`receive` in a handler).
+- **H2 large bodies: livery is slower** (~29k @ 100 KiB vs bandit ~61k),
+  a real cost in the H2 body-send path (DATA-frame chunking / flow control
+  / TLS writes), not allocation and not disconnect handling - a known
+  lead to chase upstream.
+- **livery's HTTP/2 `echo` beats cowboy's** (~110k vs ~40k): cowboy's h2
   POST path is its weak spot here.
 
 ## p99 regression gate

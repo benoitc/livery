@@ -244,10 +244,23 @@ ref_handler() ->
             {<<"POST">>, <<"/echo">>} ->
                 livery_resp:json(200, ref_read_body(Req));
             {<<"GET">>, <<"/bytes/", N/binary>>} ->
-                livery_resp:text(200, binary:copy(<<"x">>, binary_to_integer(N)));
+                livery_resp:text(200, ref_payload(binary_to_integer(N)));
             _ ->
                 livery_resp:json(200, <<"{\"ok\":true}">>)
         end
+    end.
+
+%% Serve a cached payload of the requested size. Building it once (not per
+%% request) keeps the sized-response workloads on the write path instead of
+%% measuring binary:copy/GC.
+ref_payload(Size) ->
+    case persistent_term:get({bench_payload, Size}, undefined) of
+        undefined ->
+            Payload = binary:copy(<<"x">>, Size),
+            persistent_term:put({bench_payload, Size}, Payload),
+            Payload;
+        Payload ->
+            Payload
     end.
 
 ref_read_body(Req) ->

@@ -1,7 +1,9 @@
 # Reference Bandit server for the cross-server benchmark.
 #
-# Serves the same endpoint as the livery/cowboy reference handlers:
-# GET / -> 200 application/json {"ok":true}.
+# Mirrors the livery/cowboy reference handlers:
+#   GET  /            -> 200 application/json {"ok":true}
+#   GET  /bytes/<n>   -> 200 text/plain, n bytes
+#   POST /echo        -> 200 application/json, the request body echoed
 #
 # Run:
 #   elixir bench/servers/bandit_server.exs <port>                  # HTTP/1.1
@@ -26,15 +28,25 @@ Mix.install([:bandit])
 
 defmodule BenchPlug do
   @behaviour Plug
+  import Plug.Conn
 
   @impl true
   def init(opts), do: opts
 
   @impl true
-  def call(conn, _opts) do
+  def call(%Plug.Conn{method: "POST", request_path: "/echo"} = conn, _opts) do
+    {:ok, body, conn} = read_body(conn, length: 16_000_000)
+    conn |> put_resp_content_type("application/json") |> send_resp(200, body)
+  end
+
+  def call(%Plug.Conn{method: "GET", request_path: "/bytes/" <> n} = conn, _opts) do
     conn
-    |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(200, ~s({"ok":true}))
+    |> put_resp_content_type("text/plain")
+    |> send_resp(200, String.duplicate("x", String.to_integer(n)))
+  end
+
+  def call(conn, _opts) do
+    conn |> put_resp_content_type("application/json") |> send_resp(200, ~s({"ok":true}))
   end
 end
 

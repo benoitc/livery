@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-05
+
+Maintenance release: dependency bumps and benchmark tooling. No API change.
+
+### Changed
+
+- Bump wire dependencies: `h1` (erlang_h1) 0.5.0 -> 0.6.0 (cuts
+  per-request allocations, single-scan header parsing, one-pass response
+  header block, header-block size cap), `quic` 1.6.3 -> 1.6.4, `hackney`
+  4.2.0 -> 4.2.1, `webtransport` 0.3.1 -> 0.3.2.
+
+### Added
+
+- HTTP/3 in the cross-server benchmark (`bench/compare.sh`), measured with
+  livery's in-VM `quic_h3` driver (livery only; cowboy and bandit have no
+  HTTP/3), alongside the HTTP/1.1 (`wrk`) and HTTP/2-over-TLS (`h2load`)
+  comparisons.
+
 ## [0.2.2] - 2026-06-05
 
 Maintenance release: an H1 throughput optimization and benchmark tooling.
@@ -162,6 +180,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.3]: https://github.com/benoitc/livery/releases/tag/v0.2.3
 [0.2.2]: https://github.com/benoitc/livery/releases/tag/v0.2.2
 [0.2.1]: https://github.com/benoitc/livery/releases/tag/v0.2.1
 [0.2.0]: https://github.com/benoitc/livery/releases/tag/v0.2.0

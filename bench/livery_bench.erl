@@ -24,7 +24,7 @@ pass it to `compare/2` to gate future runs.
 
 -export([run/0, run/1, run_all/0, run_all/1, compare/2, report/1]).
 -export([profile/2, sweep/3, compare_servers/0, compare_servers/1]).
--export([compare_servers_to_file/2]).
+-export([compare_servers_to_file/2, serve/3]).
 
 -define(RAW_REQUEST, <<"GET / HTTP/1.1\r\nHost: bench\r\n\r\n">>).
 
@@ -205,6 +205,19 @@ report(M) ->
             maps:get(max_us, M) / 1000
         ]
     ).
+
+%% @doc Start a reference listener on a fixed port and block forever, so
+%% an external load tool (wrk) can drive it out of process. `Server' is
+%% `livery' or `cowboy'. Launch it under its own BEAM and kill that BEAM
+%% to stop; this never returns. Used by `bench/compare.sh'.
+serve(Server, Protocol, Port) ->
+    {ok, _} = application:ensure_all_started(livery),
+    {ok, _} = ensure_started(Server, Protocol),
+    {ok, _Listener} = start_listener(Server, Protocol, #{port => Port}),
+    io:format("READY ~p ~p ~p~n", [Server, Protocol, Port]),
+    receive
+        stop -> ok
+    end.
 
 %%====================================================================
 %% Listener lifecycle per protocol
@@ -439,11 +452,17 @@ await_h3(Conn, StreamId) ->
         {error, timeout}
     end.
 
-%% H1: read headers, then exactly Content-Length body bytes (keep-alive).
+%% H1: read one full response and keep the connection alive. The body is
+%% framed either by Content-Length or by chunked transfer-encoding (livery
+%% chunk-frames full bodies over H1); handle both so the next keep-alive
+%% request starts from a clean buffer.
 read_response(Sock, Buf) ->
     case binary:split(Buf, <<"\r\n\r\n">>) of
         [Headers, Rest] ->
-            read_body(Sock, Rest, content_length(Headers));
+            case is_chunked(Headers) of
+                true -> read_chunked(Sock, Rest);
+                false -> read_body(Sock, Rest, content_length(Headers))
+            end;
         [_] ->
             case gen_tcp:recv(Sock, 0, 5000) of
                 {ok, Data} -> read_response(Sock, <<Buf/binary, Data/binary>>);
@@ -458,6 +477,21 @@ read_body(Sock, Body, Len) ->
         {ok, Data} -> read_body(Sock, <<Body/binary, Data/binary>>, Len);
         {error, _} = E -> E
     end.
+
+%% Read chunks until the terminating zero-length chunk ("0\r\n\r\n").
+read_chunked(Sock, Buf) ->
+    case binary:match(Buf, <<"0\r\n\r\n">>) of
+        nomatch ->
+            case gen_tcp:recv(Sock, 0, 5000) of
+                {ok, Data} -> read_chunked(Sock, <<Buf/binary, Data/binary>>);
+                {error, _} = E -> E
+            end;
+        _ ->
+            ok
+    end.
+
+is_chunked(Headers) ->
+    binary:match(string:lowercase(Headers), <<"transfer-encoding: chunked">>) =/= nomatch.
 
 content_length(Headers) ->
     Lower = string:lowercase(Headers),

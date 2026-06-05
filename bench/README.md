@@ -88,6 +88,19 @@ Indicative numbers (loopback, Apple silicon, 4t / 64c / 8s):
 | bandit | ~139k | 0 |
 | cowboy | ~80k | resets under load |
 
+**HTTP/3 (livery only, in-VM quic_h3)**
+
+| Server | req/s | p50 | p99 |
+|---|---|---|---|
+| livery | ~16k | 3.7 ms | 4.6 ms |
+
+Cowboy and bandit do not speak HTTP/3, and external h3 load tools
+(`h2load` QUIC) do not interoperate with the self-signed QUIC listener
+here, so H3 is measured with livery's own in-VM `quic_h3` driver and is
+not directly comparable to the external H1/H2 figures (different load
+path, and QUIC over loopback is bounded by the round trip - measure H3
+with a native client off-box for absolute numbers).
+
 Same-host, single run; absolute numbers are host-specific. Notes:
 
 - **H1**: livery now coalesces full responses into a single

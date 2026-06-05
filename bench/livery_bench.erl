@@ -235,8 +235,31 @@ ensure_started(livery, h3) ->
 ensure_started(cowboy, _Protocol) ->
     application:ensure_all_started(cowboy).
 
+%% The reference handler covers three workloads so the benchmark can
+%% exercise more than a static GET: a tiny JSON GET (`/`), a sized
+%% response (`GET /bytes/<n>`), and a JSON echo (`POST /echo`).
 ref_handler() ->
-    fun(_Req) -> livery_resp:json(200, <<"{\"ok\":true}">>) end.
+    fun(Req) ->
+        case {livery_req:method(Req), livery_req:path(Req)} of
+            {<<"POST">>, <<"/echo">>} ->
+                livery_resp:json(200, ref_read_body(Req));
+            {<<"GET">>, <<"/bytes/", N/binary>>} ->
+                livery_resp:text(200, binary:copy(<<"x">>, binary_to_integer(N)));
+            _ ->
+                livery_resp:json(200, <<"{\"ok\":true}">>)
+        end
+    end.
+
+ref_read_body(Req) ->
+    case livery_req:body(Req) of
+        {stream, Reader} ->
+            {ok, Bin, _} = livery_body:read_all(Reader),
+            Bin;
+        {buffered, IoData} ->
+            iolist_to_binary(IoData);
+        empty ->
+            <<>>
+    end.
 
 start_listener(livery, h1, Opts) ->
     livery_h1:start(#{
@@ -277,7 +300,7 @@ start_listener(livery, h3, Opts) ->
 %% exercises exactly the protocol under test.
 start_listener(cowboy, Protocol, Opts) when Protocol =:= h1; Protocol =:= h2 ->
     Ref = cowboy_ref(Protocol),
-    Dispatch = cowboy_router:compile([{'_', [{"/", bench_cowboy_h, []}]}]),
+    Dispatch = cowboy_router:compile([{'_', [{"/[...]", bench_cowboy_h, []}]}]),
     Protocols =
         case Protocol of
             h1 -> [http];
@@ -293,7 +316,7 @@ start_listener(cowboy, Protocol, Opts) when Protocol =:= h1; Protocol =:= h2 ->
 start_listener(cowboy, h2tls, Opts) ->
     Ref = bench_cowboy_h2tls,
     {CertFile, KeyFile} = certfiles(),
-    Dispatch = cowboy_router:compile([{'_', [{"/", bench_cowboy_h, []}]}]),
+    Dispatch = cowboy_router:compile([{'_', [{"/[...]", bench_cowboy_h, []}]}]),
     {ok, _} = cowboy:start_tls(
         Ref,
         [{port, maps:get(port, Opts, 0)}, {certfile, CertFile}, {keyfile, KeyFile}],

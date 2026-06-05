@@ -15,10 +15,11 @@ handler. For every inbound request the adapter:
    engine never blocks on the worker.
 
 Response emission goes through `livery:emit/3` and lands on the
-adapter callbacks (`send_headers/4`, `send_data/3`,
+adapter callbacks (`send_headers/4`, `send_full/5`, `send_data/3`,
 `send_trailers/2`, `reset/2`), which in turn call into
-`h1:send_response/4`, `h1:send_data/3,4`, and
-`h1:send_trailers/3`.
+`h1:send_response/4`, `h1:respond/5`, `h1:send_data/3,4`, and
+`h1:send_trailers/3`. Full bodies coalesce into a single
+content-length write via `send_full/5` -> `h1:respond/5`.
 """.
 
 -behaviour(livery_adapter).
@@ -38,6 +39,7 @@ adapter callbacks (`send_headers/4`, `send_data/3`,
     start/3,
     stop/1,
     send_headers/4,
+    send_full/5,
     send_data/3,
     send_trailers/2,
     reset/2,
@@ -127,6 +129,21 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
         Other ->
             Other
     end.
+
+-spec send_full(
+    stream(),
+    100..599,
+    [{binary(), binary()}],
+    iodata(),
+    livery_adapter:send_opts()
+) ->
+    livery_adapter:send_result().
+%% Coalesce a full response (headers + body) into a single content-length
+%% write via h1:respond/5, instead of the granular send_headers/send_data
+%% path which frames the body as chunked. livery:emit/3 picks this up
+%% because the callback is exported.
+send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
+    h1:respond(Conn, StreamId, Status, Headers, IoData).
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().

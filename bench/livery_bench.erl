@@ -223,10 +223,17 @@ serve(Server, Protocol, Port) ->
 %% Listener lifecycle per protocol
 %%====================================================================
 
-ensure_started(livery, h1) -> application:ensure_all_started(h1);
-ensure_started(livery, h2) -> application:ensure_all_started(h2);
-ensure_started(livery, h3) -> application:ensure_all_started(quic);
-ensure_started(cowboy, _Protocol) -> application:ensure_all_started(cowboy).
+ensure_started(livery, h1) ->
+    application:ensure_all_started(h1);
+ensure_started(livery, h2) ->
+    application:ensure_all_started(h2);
+ensure_started(livery, h2tls) ->
+    {ok, _} = application:ensure_all_started(ssl),
+    application:ensure_all_started(h2);
+ensure_started(livery, h3) ->
+    application:ensure_all_started(quic);
+ensure_started(cowboy, _Protocol) ->
+    application:ensure_all_started(cowboy).
 
 ref_handler() ->
     fun(_Req) -> livery_resp:json(200, <<"{\"ok\":true}">>) end.
@@ -241,6 +248,16 @@ start_listener(livery, h2, Opts) ->
     livery_h2:start(#{
         port => maps:get(port, Opts, 0),
         transport => tcp,
+        stack => [],
+        handler => ref_handler()
+    });
+start_listener(livery, h2tls, Opts) ->
+    {CertFile, KeyFile} = certfiles(),
+    livery_h2:start(#{
+        port => maps:get(port, Opts, 0),
+        transport => ssl,
+        cert => CertFile,
+        key => KeyFile,
         stack => [],
         handler => ref_handler()
     });
@@ -271,11 +288,24 @@ start_listener(cowboy, Protocol, Opts) when Protocol =:= h1; Protocol =:= h2 ->
         [{port, maps:get(port, Opts, 0)}],
         #{env => #{dispatch => Dispatch}, protocols => Protocols}
     ),
+    {ok, Ref};
+%% Cowboy over TLS with ALPN-negotiated HTTP/2: the realistic h2 path.
+start_listener(cowboy, h2tls, Opts) ->
+    Ref = bench_cowboy_h2tls,
+    {CertFile, KeyFile} = certfiles(),
+    Dispatch = cowboy_router:compile([{'_', [{"/", bench_cowboy_h, []}]}]),
+    {ok, _} = cowboy:start_tls(
+        Ref,
+        [{port, maps:get(port, Opts, 0)}, {certfile, CertFile}, {keyfile, KeyFile}],
+        #{env => #{dispatch => Dispatch}, protocols => [http2]}
+    ),
     {ok, Ref}.
 
 listener_port(livery, h1, L) ->
     h1:server_port(L);
 listener_port(livery, h2, L) ->
+    h2:server_port(L);
+listener_port(livery, h2tls, L) ->
     h2:server_port(L);
 listener_port(livery, h3, L) ->
     {ok, P} = quic:get_server_port(L),
@@ -285,11 +315,18 @@ listener_port(cowboy, _Protocol, Ref) ->
 
 stop_listener(livery, h1, L) -> livery_h1:stop(L);
 stop_listener(livery, h2, L) -> livery_h2:stop(L);
+stop_listener(livery, h2tls, L) -> livery_h2:stop(L);
 stop_listener(livery, h3, L) -> livery_h3:stop(L);
 stop_listener(cowboy, _Protocol, Ref) -> cowboy:stop_listener(Ref).
 
 cowboy_ref(h1) -> bench_cowboy_h1;
 cowboy_ref(h2) -> bench_cowboy_h2.
+
+%% Self-signed test cert/key file paths (shared with the test suites).
+certfiles() ->
+    Base = code:lib_dir(livery),
+    Dir = filename:join([Base, "..", "..", "..", "..", "test", "certs"]),
+    {filename:join(Dir, "cert.pem"), filename:join(Dir, "key.pem")}.
 
 %% Reuse the vendored self-signed test certs for the H3 listener.
 load_certs() ->

@@ -29,7 +29,8 @@ previous supervisor-count-based check.
 -export([
     start_link/0,
     start_request/1,
-    in_flight/0
+    in_flight/0,
+    set_max_concurrent_requests/1
 ]).
 -export([
     init/1,
@@ -38,10 +39,13 @@ previous supervisor-count-based check.
     handle_info/2
 ]).
 
-%% persistent_term key for the in-flight `counters' reference. Read on
-%% the request hot path, so it lives in persistent_term (lock-free,
-%% no copy) rather than this server's state.
--define(COUNTER_KEY, {?MODULE, inflight}).
+%% persistent_term holds `{CounterRef, Max}` for the admission hot path:
+%% the in-flight `counters' reference and the `max_concurrent_requests'
+%% cap. Both are read per request, so they live in persistent_term
+%% (lock-free, no copy) and `Max' is resolved once at startup rather than
+%% via `application:get_env/3' on every request.
+-define(ADMISSION_KEY, {?MODULE, admission}).
+-define(DEFAULT_MAX, 10000).
 
 -record(state, {counter :: counters:counters_ref()}).
 -type state() :: #state{}.
@@ -58,8 +62,7 @@ the `max_concurrent_requests` cap, in which case return
 -spec start_request(livery_req_proc:args()) ->
     {ok, pid()} | {error, term()}.
 start_request(Args) ->
-    Ref = persistent_term:get(?COUNTER_KEY),
-    Max = application:get_env(livery, max_concurrent_requests, 10000),
+    {Ref, Max} = persistent_term:get(?ADMISSION_KEY),
     case counters:get(Ref, 1) >= Max of
         true ->
             {error, overload};
@@ -73,12 +76,21 @@ start_request(Args) ->
 -doc "Number of requests currently in flight (0 if the app is down).".
 -spec in_flight() -> non_neg_integer().
 in_flight() ->
-    try counters:get(persistent_term:get(?COUNTER_KEY), 1) of
-        N when N > 0 -> N;
-        _ -> 0
+    try persistent_term:get(?ADMISSION_KEY) of
+        {Ref, _Max} ->
+            case counters:get(Ref, 1) of
+                N when N > 0 -> N;
+                _ -> 0
+            end
     catch
         _:_ -> 0
     end.
+
+-doc "Update the in-flight cap at runtime (kept in persistent_term).".
+-spec set_max_concurrent_requests(pos_integer()) -> ok.
+set_max_concurrent_requests(Max) when is_integer(Max), Max > 0 ->
+    {Ref, _Old} = persistent_term:get(?ADMISSION_KEY),
+    persistent_term:put(?ADMISSION_KEY, {Ref, Max}).
 
 %%====================================================================
 %% gen_server
@@ -87,7 +99,8 @@ in_flight() ->
 -spec init([]) -> {ok, state()}.
 init([]) ->
     Ref = counters:new(1, [write_concurrency]),
-    persistent_term:put(?COUNTER_KEY, Ref),
+    Max = application:get_env(livery, max_concurrent_requests, ?DEFAULT_MAX),
+    persistent_term:put(?ADMISSION_KEY, {Ref, Max}),
     {ok, #state{counter = Ref}}.
 
 -spec handle_call(term(), {pid(), term()}, state()) -> {reply, ok, state()}.

@@ -149,6 +149,15 @@ under [`docs/`](docs/README.md): start with the
 [how-to guides](docs/README.md#how-to-guides). For contributors, see
 [AGENTS.md](AGENTS.md).
 
+## Sponsors
+
+<a href="https://enki-multimedia.eu"><img src="site/assets/enki-multimedia.svg" alt="Enki Multimedia" height="50" /></a>
+
+Livery is developed and maintained by [Enki Multimedia](https://enki-multimedia.eu).
+If your company relies on it, [reach out](mailto:benoitc@enki-multimedia.eu)
+for sponsored support, or sponsor its maintenance via
+[GitHub Sponsors](https://github.com/sponsors/benoitc).
+
 ## License
 
 Apache-2.0.

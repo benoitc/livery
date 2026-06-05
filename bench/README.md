@@ -70,21 +70,18 @@ Indicative numbers (loopback, Apple silicon, 4t / 64c / 8s):
 
 | Server | req/s | p50 | p99 |
 |---|---|---|---|
-| livery | ~104k | 0.57 ms | 1.60 ms |
-| cowboy | ~142k | 0.36 ms | 1.23 ms |
-| bandit | ~148k | 0.33 ms | 1.59 ms |
+| livery | ~129k | 0.46 ms | 1.31 ms |
+| cowboy | ~142k | 0.36 ms | 1.22 ms |
+| bandit | ~151k | 0.33 ms | 1.24 ms |
 
-Same-host, single run; absolute numbers are host-specific. Two things to
-keep in mind when reading them:
+Same-host, single run; absolute numbers are host-specific. Notes:
 
-- Livery serves H1 full bodies with **chunked** transfer-encoding (it has
-  no `send_full/5` coalescing on `livery_h1`), while cowboy and bandit send
-  `content-length`. `wrk` handles both, but the extra framing and the
-  separate header/body writes cost livery some throughput here. Coalescing
-  H1 full responses is a worthwhile follow-up.
-- Livery spawns a worker process per request (the `cowboy_loop` analogue),
-  which trades a little raw throughput for the ability to block/`receive`
-  in a handler.
+- Livery now coalesces H1 full responses into a single `content-length`
+  write (`livery_h1:send_full/5` -> `h1:respond/5`); earlier it sent them
+  as chunked over two writes, which cost ~20% throughput here.
+- The remaining gap is largely livery's worker process per request (the
+  `cowboy_loop` analogue), which trades a little raw throughput for the
+  ability to block/`receive` in a handler.
 
 ## p99 regression gate
 

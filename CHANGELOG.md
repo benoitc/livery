@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-05
+
+Maintenance release: an H1 throughput optimization and benchmark tooling.
+No API change.
+
+### Changed
+
+- H1 full responses coalesce into a single `content-length` socket write
+  (`livery_h1:send_full/5` via the new `h1:respond/5`) instead of chunked
+  framing over two writes, lifting H1 throughput about 24% in the loopback
+  benchmark. Requires erlang_h1 0.5.0 (bumped from 0.4.0).
+
+### Added
+
+- Cross-server benchmark (`bench/compare.sh`) comparing livery, cowboy,
+  and bandit over HTTP/1.1 (`wrk`) and HTTP/2 over TLS (`h2load`).
+
 ## [0.2.1] - 2026-06-04
 
 Maintenance release: tests, docs, and internal layout. No API or
@@ -145,6 +162,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.2]: https://github.com/benoitc/livery/releases/tag/v0.2.2
 [0.2.1]: https://github.com/benoitc/livery/releases/tag/v0.2.1
 [0.2.0]: https://github.com/benoitc/livery/releases/tag/v0.2.0
 [0.1.0]: https://github.com/benoitc/livery/releases/tag/v0.1.0

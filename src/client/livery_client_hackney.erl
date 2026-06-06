@@ -62,6 +62,9 @@ buffered(Method, Url, Headers, Body, Opts) ->
     case hackney:request(Method, Url, Headers, Body, Opts) of
         {ok, Status, RespHeaders, RespBody} ->
             {ok, response(Status, RespHeaders, {full, RespBody})};
+        {ok, Status, RespHeaders} ->
+            %% Bodyless response (HEAD, 204, 304): hackney omits the body.
+            {ok, response(Status, RespHeaders, {full, <<>>})};
         {error, Reason} ->
             {error, Reason}
     end.

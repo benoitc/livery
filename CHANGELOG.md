@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-06
+
+Maintenance release: an HTTP/2 write-path optimization, an HTTP/2
+disconnect fix, and a runtime concurrency-cap setter. No API change
+beyond the added setter.
+
 ### Changed
 
 - Bump `h2` to 0.9.0, which coalesces a response's frames into a single
@@ -211,6 +217,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.4]: https://github.com/benoitc/livery/releases/tag/v0.2.4
 [0.2.3]: https://github.com/benoitc/livery/releases/tag/v0.2.3
 [0.2.2]: https://github.com/benoitc/livery/releases/tag/v0.2.2
 [0.2.1]: https://github.com/benoitc/livery/releases/tag/v0.2.1

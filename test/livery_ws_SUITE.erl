@@ -140,11 +140,31 @@ end_per_testcase(_TC, Config) ->
 ws_handler(R) ->
     livery_ws:upgrade(R, livery_ws_echo_handler, #{}).
 
+%% Probe the IPv6 loopback with a real connect round-trip, not just a
+%% listen: CI runners can bind `::1' yet fail to connect to it, which
+%% would otherwise surface as a flaky `no_ready_frame' timeout instead
+%% of a clean skip.
 ipv6_loopback_available() ->
-    case gen_tcp:listen(0, [inet6, {ip, {0, 0, 0, 0, 0, 0, 0, 1}}]) of
-        {ok, S} ->
-            ok = gen_tcp:close(S),
-            true;
+    Loopback = {0, 0, 0, 0, 0, 0, 0, 1},
+    case gen_tcp:listen(0, [inet6, {ip, Loopback}, {active, false}]) of
+        {ok, L} ->
+            {ok, Port} = inet:port(L),
+            Ok =
+                case gen_tcp:connect(Loopback, Port, [inet6], 1000) of
+                    {ok, C} ->
+                        gen_tcp:close(C),
+                        case gen_tcp:accept(L, 1000) of
+                            {ok, A} ->
+                                gen_tcp:close(A),
+                                true;
+                            {error, _} ->
+                                false
+                        end;
+                    {error, _} ->
+                        false
+                end,
+            gen_tcp:close(L),
+            Ok;
         {error, _} ->
             false
     end.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `h2` to 0.9.0, which coalesces a response's frames into a single
+  socket write instead of one write per frame. On the loopback benchmark
+  this roughly doubles large HTTP/2 response throughput (100 KiB over TLS:
+  ~28k -> ~66k req/s) and lifts smaller bodies ~7-9%.
+
 ### Fixed
 
 - HTTP/2: a client that disconnects mid-response is reported as a normal

@@ -16,7 +16,9 @@
     circuit_store_recovers/1,
     stream_response/1,
     stream_request/1,
-    custom_adapter/1
+    custom_adapter/1,
+    no_content_response/1,
+    head_request/1
 ]).
 
 all() ->
@@ -30,7 +32,9 @@ all() ->
         circuit_store_recovers,
         stream_response,
         stream_request,
-        custom_adapter
+        custom_adapter,
+        no_content_response,
+        head_request
     ].
 
 init_per_suite(Config) ->
@@ -45,7 +49,9 @@ init_per_suite(Config) ->
         {<<"GET">>, <<"/slow">>, fun handle_slow/1},
         {<<"GET">>, <<"/flaky">>, fun handle_flaky/1},
         {<<"GET">>, <<"/big">>, fun handle_big/1},
-        {<<"GET">>, <<"/block">>, fun handle_block/1}
+        {<<"GET">>, <<"/block">>, fun handle_block/1},
+        {<<"GET">>, <<"/empty">>, fun handle_no_content/1},
+        {<<"HEAD">>, <<"/ping">>, fun handle_ok/1}
     ]),
     {ok, Pid} = livery:start_service(#{
         http => #{port => 0},
@@ -84,6 +90,8 @@ handle_flaky(Req) ->
     end.
 
 handle_big(_Req) -> livery_resp:text(200, binary:copy(<<"x">>, 100000)).
+
+handle_no_content(_Req) -> livery_resp:empty(204).
 
 handle_block(_Req) ->
     timer:sleep(200),
@@ -202,6 +210,21 @@ custom_adapter(_Config) ->
     {ok, Resp} = livery_client:get(C, <<"http://ignored/">>),
     ?assertEqual(418, livery_client:status(Resp)),
     ?assertEqual({full, <<"teapot">>}, livery_client:body(Resp)).
+
+%% A 204 carries no body; the adapter must surface it as an empty-bodied
+%% response.
+no_content_response(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:get(C, <<"/empty">>),
+    ?assertEqual(204, livery_client:status(Resp)),
+    ?assertEqual({full, <<>>}, livery_client:body(Resp)).
+
+%% A HEAD response is always bodyless; same three-element reply path.
+head_request(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:request(C, head, <<"/ping">>, #{}),
+    ?assertEqual(200, livery_client:status(Resp)),
+    ?assertEqual({full, <<>>}, livery_client:body(Resp)).
 
 %%====================================================================
 %% Helpers

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- HTTP/2: a client that disconnects mid-response is reported as a normal
+  disconnect (`{error, closed}`, matching HTTP/1.1's `gen_tcp:send`)
+  instead of crashing the request. The crash path error-logged the full
+  stacktrace, which carries the response body as a send argument, so a
+  disconnect during a large response pretty-printed the whole body per
+  request - a throughput sink and a log-hygiene leak.
+
+### Added
+
+- `livery_req_sup:set_max_concurrent_requests/1` changes the in-flight
+  request cap at runtime. The cap is resolved once at startup and cached
+  in `persistent_term` rather than read from the application environment
+  on every request.
+
+### Benchmarks
+
+- `bench/compare.sh` compares livery, cowboy, and bandit over HTTP/1.1
+  (`wrk`) and HTTP/2 over TLS (`h2load`) across realistic workloads (tiny
+  GET, 1/10/100 KiB sized responses served from a cached payload, JSON
+  echo `POST`), with a per-protocol summary table and an optional
+  concurrency sweep.
+
 ## [0.2.3] - 2026-06-05
 
 Maintenance release: dependency bumps and benchmark tooling. No API change.

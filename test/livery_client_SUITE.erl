@@ -18,7 +18,8 @@
     stream_request/1,
     custom_adapter/1,
     no_content_response/1,
-    head_request/1
+    head_request/1,
+    retry_after_layer/1
 ]).
 
 all() ->
@@ -34,7 +35,8 @@ all() ->
         stream_request,
         custom_adapter,
         no_content_response,
-        head_request
+        head_request,
+        retry_after_layer
     ].
 
 init_per_suite(Config) ->
@@ -51,7 +53,8 @@ init_per_suite(Config) ->
         {<<"GET">>, <<"/big">>, fun handle_big/1},
         {<<"GET">>, <<"/block">>, fun handle_block/1},
         {<<"GET">>, <<"/empty">>, fun handle_no_content/1},
-        {<<"HEAD">>, <<"/ping">>, fun handle_ok/1}
+        {<<"HEAD">>, <<"/ping">>, fun handle_ok/1},
+        {<<"GET">>, <<"/retry_after">>, fun handle_retry_after/1}
     ]),
     {ok, Pid} = livery:start_service(#{
         http => #{port => 0},
@@ -92,6 +95,14 @@ handle_flaky(Req) ->
 handle_big(_Req) -> livery_resp:text(200, binary:copy(<<"x">>, 100000)).
 
 handle_no_content(_Req) -> livery_resp:empty(204).
+
+%% First call: 503 with Retry-After: 1 second. Then: 200.
+handle_retry_after(Req) ->
+    Ref = livery_req:config(counter, Req),
+    case atomics:add_get(Ref, 1, 1) of
+        1 -> livery_resp:text(503, [{<<"retry-after">>, <<"1">>}], <<"slow">>);
+        _ -> livery_resp:text(200, <<"ok">>)
+    end.
 
 handle_block(_Req) ->
     timer:sleep(200),
@@ -225,6 +236,20 @@ head_request(Config) ->
     {ok, Resp} = livery_client:request(C, head, <<"/ping">>, #{}),
     ?assertEqual(200, livery_client:status(Resp)),
     ?assertEqual({full, <<>>}, livery_client:body(Resp)).
+
+%% A retryable response with `Retry-After: 1` is honored (the 1s delay dwarfs
+%% the ~50ms backoff), then the retry succeeds.
+retry_after_layer(Config) ->
+    atomics:put(?config(counter, Config), 1, 0),
+    C = livery_client:new(#{
+        base_url => ?config(base, Config),
+        stack => [livery_client:retry(#{max => 2, backoff => {50, 1.0}})]
+    }),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, Resp} = livery_client:get(C, <<"/retry_after">>),
+    Elapsed = erlang:monotonic_time(millisecond) - T0,
+    ?assertEqual(200, livery_client:status(Resp)),
+    ?assert(Elapsed >= 900).
 
 %%====================================================================
 %% Helpers

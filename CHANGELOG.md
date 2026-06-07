@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-07
+
+Maintenance release: HTTP client fixes and a `Retry-After`-aware retry
+layer. No API change beyond the new retry option.
+
+### Added
+
+- The retry layer honors a `Retry-After` (delta-seconds) header on a
+  retryable response, sleeping that long instead of the computed backoff,
+  capped by the new `retry_after_max` option (default 120000 ms). An
+  HTTP-date `Retry-After` falls back to backoff.
+
+### Fixed
+
+- The hackney client adapter no longer crashes on a bodyless response
+  (HEAD, 204, 304), where hackney returns a three-tuple with no body.
+
+### Changed
+
+- Bump `hackney` 4.2.1 -> 4.2.2.
+
 ## [0.2.4] - 2026-06-06
 
 Maintenance release: an HTTP/2 write-path optimization, an HTTP/2
@@ -217,6 +238,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.5]: https://github.com/benoitc/livery/releases/tag/v0.2.5
 [0.2.4]: https://github.com/benoitc/livery/releases/tag/v0.2.4
 [0.2.3]: https://github.com/benoitc/livery/releases/tag/v0.2.3
 [0.2.2]: https://github.com/benoitc/livery/releases/tag/v0.2.2

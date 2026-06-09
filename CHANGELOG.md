@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-06-09
+
+Maintenance release: a `barrel_mcp` bump that threads the authenticated
+principal into MCP tool handlers. No Livery API change.
+
 ### Changed
 
 - Bump `barrel_mcp` 2.1.0 -> 2.2.0. Arity-2 MCP tool handlers
@@ -245,6 +250,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.6]: https://github.com/benoitc/livery/releases/tag/v0.2.6
 [0.2.5]: https://github.com/benoitc/livery/releases/tag/v0.2.5
 [0.2.4]: https://github.com/benoitc/livery/releases/tag/v0.2.4
 [0.2.3]: https://github.com/benoitc/livery/releases/tag/v0.2.3

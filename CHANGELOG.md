@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `barrel_mcp` 2.1.0 -> 2.2.0. Arity-2 MCP tool handlers
+  (`Mod:Fun(Args, Ctx)`) now receive the authenticated principal in
+  `Ctx` under `auth_info`, so owner-scoped tools can identify the
+  caller. The handler passes it through unchanged; no Livery API change.
+
 ## [0.2.5] - 2026-06-07
 
 Maintenance release: HTTP client fixes and a `Retry-After`-aware retry

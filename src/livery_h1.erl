@@ -62,6 +62,7 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     cert => binary() | string(),
     key => binary() | string(),
     cacerts => [binary()],
+    ssl_opts => [ssl:tls_server_option()],
     acceptors => pos_integer(),
     max_body => non_neg_integer() | infinity,
     %% Slow-client guards, passed through to `h1'. They have finite
@@ -251,6 +252,7 @@ build_h1_opts(Opts, Stack, Handler) ->
             cert,
             key,
             cacerts,
+            ssl_opts,
             acceptors,
             handshake_timeout,
             idle_timeout,

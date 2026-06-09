@@ -64,6 +64,7 @@ in `capabilities/1`.
     cert => binary() | string(),
     key => binary() | string(),
     cacerts => [binary()],
+    ssl_opts => [ssl:tls_server_option()],
     acceptors => pos_integer(),
     enable_connect_protocol => boolean(),
     max_body => non_neg_integer() | infinity,
@@ -279,6 +280,7 @@ build_h2_opts(Opts, Stack, Handler) ->
             cert,
             key,
             cacerts,
+            ssl_opts,
             acceptors,
             settings,
             enable_connect_protocol

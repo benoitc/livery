@@ -30,12 +30,15 @@ The transport is a `livery_client_adapter`; the default,
 -export([get/2, post/3, put/3, delete/2, request/3, request/4, run/2]).
 -export([status/1, headers/1, header/2, header/3, body/1, method/1, url/1, set_header/3]).
 -export([read/2, read_body/1]).
+-export([stream_next/1, stop_stream/1]).
 -export([timeout/1, concurrency/1, retry/1, circuit_breaker/1, balance/1]).
 -export([add_endpoint/2, remove_endpoint/2]).
 -export([before/1, after_response/1, wrap/1]).
 -export([rebase/2]).
 
--export_type([client/0, request/0, response/0, result/0, next/0, entry/0, stack/0, endpoint/0]).
+-export_type([
+    client/0, request/0, response/0, result/0, next/0, entry/0, stack/0, endpoint/0, stream_ref/0
+]).
 
 -type request() :: #{
     method := atom() | binary(),
@@ -44,13 +47,16 @@ The transport is a `livery_client_adapter`; the default,
     body := empty | {full, iodata()} | {stream, fun()},
     timeout := timeout(),
     stream := boolean(),
+    stream_to := pid() | undefined,
+    flow := auto | manual,
     meta := map()
 }.
 -type response() :: #{
-    status := 100..599,
+    status := 100..599 | undefined,
     headers := [{binary(), binary()}],
-    body := {full, binary()} | {stream, term()}
+    body := {full, binary()} | {stream, term()} | {push, stream_ref()}
 }.
+-opaque stream_ref() :: {livery_stream, module(), term()}.
 -type result() :: {ok, response()} | {error, term()}.
 -type endpoint() :: binary().
 -type next() :: fun((request()) -> result()).
@@ -102,6 +108,24 @@ request(Client, Method, Path) -> request(Client, Method, Path, #{}).
 Send a request. `Opts`: `body` (`iodata` | `{full, _}` | `{stream, Fun}`),
 `headers`, `timeout`, `stream` (`true` to receive a `{stream, Reader}`
 response body), `meta`.
+
+Push streaming: set `stream_to` to a pid and the response is delivered to
+it as ordered messages, freeing the pid to selectively receive body chunks
+alongside its own control messages instead of dedicating a process to a
+pull loop. The reply is `{ok, #{body := {push, Ref}}}`; the recipient then
+receives
+
+```erlang
+{livery_response, Ref, {status, Status, Headers}}
+{livery_response, Ref, {chunk, Binary}}      %% zero or more
+{livery_response, Ref, done}
+{livery_response, Ref, {error, Reason}}       %% instead of done, on failure
+```
+
+`flow` (default `auto`) pushes chunks as fast as the wire allows; `manual`
+sends one chunk per `stream_next/1` for backpressure. `stop_stream/1`
+cancels the stream and drops its connection. Push streaming bypasses the
+layer stack; the adapter owns the connection.
 """.
 -spec request(client(), atom() | binary(), binary(), map()) -> result().
 request(Client, Method, Path, Opts) ->
@@ -111,8 +135,20 @@ request(Client, Method, Path, Opts) ->
 -spec run(client(), request()) -> result().
 run(Client, Req) ->
     #{adapter := Adapter, adapter_opts := AdapterOpts, stack := Stack} = Client,
-    Handler = fun(R) -> Adapter:request(R, AdapterOpts) end,
-    run_stack(Stack, Handler, Req).
+    case maps:get(stream_to, Req, undefined) of
+        Pid when is_pid(Pid) ->
+            start_push(Adapter, AdapterOpts, Req, Pid);
+        _ ->
+            Handler = fun(R) -> Adapter:request(R, AdapterOpts) end,
+            run_stack(Stack, Handler, Req)
+    end.
+
+start_push(Adapter, AdapterOpts, Req, Pid) ->
+    StreamOpts = #{stream_to => Pid, flow => maps:get(flow, Req, auto)},
+    case Adapter:stream(Req, AdapterOpts, StreamOpts) of
+        {ok, Ref} -> {ok, #{status => undefined, headers => [], body => {push, Ref}}};
+        {error, _} = E -> E
+    end.
 
 %%====================================================================
 %% Accessors
@@ -173,6 +209,19 @@ read_body(Reader, Acc) ->
         {done, _Reader1} -> {ok, iolist_to_binary(lists:reverse(Acc))};
         {error, _} = E -> E
     end.
+
+-doc """
+Ask a `flow => manual` push stream for one more `{chunk, _}` message.
+`Ref` is the value from the `{push, Ref}` response body.
+""".
+-spec stream_next(stream_ref()) -> ok | {error, term()}.
+stream_next({livery_stream, Adapter, _} = Ref) ->
+    Adapter:stream_next(Ref).
+
+-doc "Cancel a push stream and release its connection.".
+-spec stop_stream(stream_ref()) -> ok.
+stop_stream({livery_stream, Adapter, _} = Ref) ->
+    Adapter:stop_stream(Ref).
 
 %%====================================================================
 %% Layer constructors
@@ -247,6 +296,8 @@ build_request(Client, Method, Path, Opts) ->
         body => normalize_body(maps:get(body, Opts, empty)),
         timeout => maps:get(timeout, Opts, 30000),
         stream => maps:get(stream, Opts, false),
+        stream_to => maps:get(stream_to, Opts, undefined),
+        flow => maps:get(flow, Opts, auto),
         meta => maps:get(meta, Opts, #{})
     }.
 

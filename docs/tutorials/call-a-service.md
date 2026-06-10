@@ -205,6 +205,84 @@ wherever you need a user. Timeout, retry, and breaker come along for free
 on every call, and the caller only ever sees `{ok, User}` or a clean
 error.
 
+## 8. Stream a response to your process
+
+A streamed response with `stream => true` gives you a `{stream, Reader}`
+body and `livery_client:read/2`, a blocking pull. That is perfect for a
+process whose only job is to drain the body, but it forces a worker that
+also wants to react to its own messages, a cancel signal, a progress
+tick, into a second process just to run the read loop.
+
+Push mode turns the body around. Set `stream_to` to a pid and the chunks
+arrive as messages, so the worker can selectively receive body chunks and
+its own control messages side by side:
+
+```erlang
+{ok, Resp} = livery_client:request(Client, get, <<"/blob">>, #{
+    stream    => true,
+    stream_to => self()
+}),
+{push, Ref} = livery_client:body(Resp),
+download(Ref, 0).
+
+download(Ref, Bytes) ->
+    receive
+        {livery_response, Ref, {status, 200, _Headers}} ->
+            download(Ref, Bytes);
+        {livery_response, Ref, {chunk, Data}} ->
+            Got = Bytes + byte_size(Data),
+            io:format("~p bytes~n", [Got]),
+            download(Ref, Got);
+        {livery_response, Ref, done} ->
+            {ok, Bytes};
+        {livery_response, Ref, {error, Reason}} ->
+            {error, Reason};
+        cancel ->
+            livery_client:stop_stream(Ref),
+            {cancelled, Bytes}
+    end.
+```
+
+`Ref` is opaque and unique to this request, so a worker running several
+downloads tells them apart by matching on it. The messages always arrive
+in order: one `{status, Status, Headers}`, then zero or more
+`{chunk, Binary}`, then a single `done` (or `{error, Reason}` if the
+transfer fails).
+
+The `cancel` clause is the point: a plain message in the same mailbox aborts
+the download mid-flight. `livery_client:stop_stream/1` drops the connection,
+so a user who quits a multi-gigabyte fetch stops paying for it immediately.
+
+### Backpressure with `flow => manual`
+
+By default chunks are pushed as fast as the wire delivers them. If the
+worker writes each chunk somewhere slower than the network, ask for one
+chunk at a time with `flow => manual` and pull with
+`livery_client:stream_next/1`:
+
+```erlang
+{ok, Resp} = livery_client:request(Client, get, <<"/blob">>, #{
+    stream    => true,
+    stream_to => self(),
+    flow      => manual
+}),
+{push, Ref} = livery_client:body(Resp),
+receive
+    {livery_response, Ref, {status, _, _}} -> ok
+end,
+ok = livery_client:stream_next(Ref),   %% pull the first chunk
+receive
+    {livery_response, Ref, {chunk, First}} -> write(First)
+end.
+```
+
+No chunk arrives until you call `stream_next/1`, so a slow consumer never
+builds an unbounded backlog in its mailbox.
+
+The pull-based `{stream, Reader}` API stays as it was for simple
+consumers; reach for push mode when one process needs to interleave body
+chunks with its own work.
+
 ## Where to go next
 
 - Need to download something large without buffering it? See

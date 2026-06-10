@@ -16,6 +16,9 @@
     circuit_store_recovers/1,
     stream_response/1,
     stream_request/1,
+    push_stream/1,
+    push_stream_stop/1,
+    push_stream_manual/1,
     custom_adapter/1,
     no_content_response/1,
     head_request/1,
@@ -33,6 +36,9 @@ all() ->
         circuit_store_recovers,
         stream_response,
         stream_request,
+        push_stream,
+        push_stream_stop,
+        push_stream_manual,
         custom_adapter,
         no_content_response,
         head_request,
@@ -51,6 +57,7 @@ init_per_suite(Config) ->
         {<<"GET">>, <<"/slow">>, fun handle_slow/1},
         {<<"GET">>, <<"/flaky">>, fun handle_flaky/1},
         {<<"GET">>, <<"/big">>, fun handle_big/1},
+        {<<"GET">>, <<"/chunks">>, fun handle_chunks/1},
         {<<"GET">>, <<"/block">>, fun handle_block/1},
         {<<"GET">>, <<"/empty">>, fun handle_no_content/1},
         {<<"HEAD">>, <<"/ping">>, fun handle_ok/1},
@@ -93,6 +100,13 @@ handle_flaky(Req) ->
     end.
 
 handle_big(_Req) -> livery_resp:text(200, binary:copy(<<"x">>, 100000)).
+
+handle_chunks(_Req) ->
+    Producer = fun(Emit) ->
+        [Emit(<<"chunk", (integer_to_binary(N))/binary>>) || N <- lists:seq(1, 3)],
+        ok
+    end,
+    livery_resp:stream(200, [], Producer).
 
 handle_no_content(_Req) -> livery_resp:empty(204).
 
@@ -216,6 +230,65 @@ stream_request(Config) ->
     {ok, Resp} = livery_client:request(C, post, <<"/echo">>, #{body => Body}),
     ?assertEqual({full, <<"abc">>}, livery_client:body(Resp)).
 
+%% Push mode delivers status, then body chunks, then done, in order, to the
+%% caller's mailbox, leaving it free to selectively receive between chunks.
+push_stream(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:request(C, get, <<"/chunks">>, #{
+        stream => true, stream_to => self()
+    }),
+    {push, Ref} = livery_client:body(Resp),
+    {Status, Headers} = recv_status(Ref),
+    ?assertEqual(200, Status),
+    ?assert(is_list(Headers)),
+    Body = recv_until_done(Ref, []),
+    ?assertEqual(<<"chunk1chunk2chunk3">>, Body).
+
+%% stop_stream mid-flight cancels the download. We pull one chunk, then stop
+%% before draining the rest; no further chunk or done message follows, and the
+%% relay tears the connection down.
+push_stream_stop(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:request(C, get, <<"/chunks">>, #{
+        stream => true, stream_to => self(), flow => manual
+    }),
+    {push, Ref} = livery_client:body(Resp),
+    {200, _} = recv_status(Ref),
+    ok = livery_client:stream_next(Ref),
+    receive
+        {livery_response, Ref, {chunk, <<"chunk1">>}} -> ok
+    after 2000 -> ct:fail(no_first_chunk)
+    end,
+    ok = livery_client:stop_stream(Ref),
+    %% The stream is cancelled: no further chunk or done arrives.
+    receive
+        {livery_response, Ref, Msg} -> ct:fail({unexpected_after_stop, Msg})
+    after 300 -> ok
+    end.
+
+%% Under flow => manual the reader pulls one chunk per stream_next; no chunk
+%% arrives until asked for.
+push_stream_manual(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:request(C, get, <<"/chunks">>, #{
+        stream => true, stream_to => self(), flow => manual
+    }),
+    {push, Ref} = livery_client:body(Resp),
+    {200, _} = recv_status(Ref),
+    %% Nothing is pushed until we ask.
+    receive
+        {livery_response, Ref, {chunk, _}} -> ct:fail(chunk_without_stream_next)
+    after 200 -> ok
+    end,
+    ok = livery_client:stream_next(Ref),
+    receive
+        {livery_response, Ref, {chunk, First}} -> ?assertEqual(<<"chunk1">>, First)
+    after 2000 -> ct:fail(no_chunk_after_stream_next)
+    end,
+    %% Pull the rest one at a time to completion.
+    Rest = pull_until_done(Ref, []),
+    ?assertEqual(<<"chunk2chunk3">>, Rest).
+
 custom_adapter(_Config) ->
     C = livery_client:new(#{adapter => livery_client_fake_adapter}),
     {ok, Resp} = livery_client:get(C, <<"http://ignored/">>),
@@ -254,6 +327,31 @@ retry_after_layer(Config) ->
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+recv_status(Ref) ->
+    receive
+        {livery_response, Ref, {status, Status, Headers}} -> {Status, Headers}
+    after 2000 -> ct:fail(no_status)
+    end.
+
+%% Accumulate auto-flow chunks until done.
+recv_until_done(Ref, Acc) ->
+    receive
+        {livery_response, Ref, {chunk, Bin}} -> recv_until_done(Ref, [Bin | Acc]);
+        {livery_response, Ref, done} -> iolist_to_binary(lists:reverse(Acc));
+        {livery_response, Ref, {error, R}} -> ct:fail({stream_error, R})
+    after 2000 -> ct:fail(no_done)
+    end.
+
+%% Manual flow: one stream_next per chunk until done.
+pull_until_done(Ref, Acc) ->
+    ok = livery_client:stream_next(Ref),
+    receive
+        {livery_response, Ref, {chunk, Bin}} -> pull_until_done(Ref, [Bin | Acc]);
+        {livery_response, Ref, done} -> iolist_to_binary(lists:reverse(Acc));
+        {livery_response, Ref, {error, R}} -> ct:fail({stream_error, R})
+    after 2000 -> ct:fail(no_done)
+    end.
 
 producer([]) ->
     fun() -> eof end;

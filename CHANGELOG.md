@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-06-10
+
+Maintenance release: a Hex resolution fix, an HTTP/1.1 WebSocket header
+fix, and a push-streaming mode for the HTTP client.
+
+### Added
+
+- `livery_client` push streaming. Pass `stream_to => Pid` (with `stream
+  => true`) and the response is delivered to `Pid` as ordered messages
+  (`{livery_response, Ref, {status, Status, Headers}}`, `{chunk, Binary}`,
+  `done`, `{error, Reason}`), so one process can interleave body chunks
+  with its own control messages in a selective receive instead of
+  dedicating a process to a blocking read loop. `flow => manual` sends one
+  chunk per `stream_next/1` for backpressure; `stop_stream/1` cancels and
+  drops the connection. The `livery_client_adapter` behaviour gains
+  optional `stream/3`, `stream_next/1`, and `stop_stream/1` callbacks. The
+  pull-based `{stream, Reader}` + `read/2` API is unchanged.
+
 ### Fixed
 
 - The package now resolves on Hex (#49). The published dependency pins

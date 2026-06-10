@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The package now resolves on Hex (#49). The published dependency pins
+  conflicted: `barrel_mcp` 2.2.0 required `hackney` 4.0.3 / `h2` 0.6.1 /
+  `erlang_h1` ~>0.2.3, and `hackney` 4.2.2 required `h2` 0.8.0, neither
+  of which agrees with Livery's own pins. The dependency bumps below put
+  the whole graph on `h2` 0.9.0. (Local builds use git deps, which skip
+  Hex version resolution, so the conflict never showed up in CI.)
+- HTTP/1.1 WebSocket upgrade: the `101 Switching Protocols` response no
+  longer carries duplicate `Connection`/`Upgrade` headers, which
+  spec-strict clients (Safari, undici) reject. Fixed upstream in
+  `erlang_h1` 0.6.1, which now owns those framing headers and strips any
+  caller-supplied copies.
+
+### Changed
+
+- Bump dependencies onto a mutually compatible set:
+  - `barrel_mcp` 2.2.0 -> 2.2.2 (now requires `hackney` 4.2.3 / `h2`
+    0.9.0 / `erlang_h1` ~>0.6.1)
+  - `erlang_h1` 0.6.0 -> 0.6.1
+  - `hackney` 4.2.2 -> 4.2.3 (now requires `h2` 0.9.0)
+  - `webtransport` 0.3.2 -> 0.3.3
+
 ## [0.2.6] - 2026-06-09
 
 Maintenance release: a `barrel_mcp` bump that threads the authenticated

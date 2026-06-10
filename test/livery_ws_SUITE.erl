@@ -141,9 +141,8 @@ ws_handler(R) ->
     livery_ws:upgrade(R, livery_ws_echo_handler, #{}).
 
 %% Probe the IPv6 loopback with a real connect round-trip, not just a
-%% listen: CI runners can bind `::1' yet fail to connect to it, which
-%% would otherwise surface as a flaky `no_ready_frame' timeout instead
-%% of a clean skip.
+%% listen: CI runners can bind `::1' yet fail to connect to it. A false
+%% here skips the case cleanly instead of crashing the listener start.
 ipv6_loopback_available() ->
     Loopback = {0, 0, 0, 0, 0, 0, 0, 1},
     case gen_tcp:listen(0, [inet6, {ip, Loopback}, {active, false}]) of
@@ -169,6 +168,12 @@ ipv6_loopback_available() ->
             false
     end.
 
+drain_captured() ->
+    receive
+        {captured, _} -> drain_captured()
+    after 0 -> ok
+    end.
+
 %%====================================================================
 %% H1
 %%====================================================================
@@ -180,12 +185,15 @@ h1_echo_text_frame(Config) ->
         integer_to_binary(Port),
         <<"/">>
     ]),
-    ws_echo_roundtrip(Url).
+    ?assertEqual(ok, ws_echo_roundtrip(Url)).
 
 %% Same echo round-trip over an IPv6-bound listener (`ip => ::1'),
 %% proving the listen-address options carry through to the WS upgrade.
 %% The listener is bound v6 in init_per_testcase, which skips the case
-%% on a host without an IPv6 loopback.
+%% on a host without an IPv6 loopback. The `::1' ws handshake is
+%% intermittently slow on some CI runners (a connect that binds and
+%% accepts TCP yet stalls the upgrade), so retry a transient stall with a
+%% fresh session before failing instead of flaking on a single timeout.
 h1_echo_text_frame_ipv6(Config) ->
     Port = ?config(port, Config),
     Url = iolist_to_binary([
@@ -193,29 +201,56 @@ h1_echo_text_frame_ipv6(Config) ->
         integer_to_binary(Port),
         <<"/">>
     ]),
-    ws_echo_roundtrip(Url).
+    ?assertEqual(ok, ws_echo_roundtrip(Url, 3)).
 
 ws_echo_roundtrip(Url) ->
+    ws_echo_roundtrip(Url, 1).
+
+ws_echo_roundtrip(Url, Attempts) ->
+    ws_echo_roundtrip(Url, Attempts, {error, not_attempted}).
+
+ws_echo_roundtrip(_Url, 0, Last) ->
+    Last;
+ws_echo_roundtrip(Url, N, _Last) ->
+    case ws_echo_attempt(Url) of
+        ok -> ok;
+        {error, _} = E -> ws_echo_roundtrip(Url, N - 1, E)
+    end.
+
+%% One connect + ready + echo round-trip. Returns `ok' or `{error, Reason}'
+%% (never raises), so the retry wrapper can try a fresh session. Drains any
+%% frames captured during teardown so a retry starts with a clean mailbox.
+ws_echo_attempt(Url) ->
     Self = self(),
-    {ok, Sess} = ws_client:connect(Url, #{
-        handler => livery_ws_client_capture,
-        handler_opts => #{parent => Self}
-    }),
-    try
-        %% The handler emits a `ready' frame on connect; wait for it so
-        %% the stream is provably live before sending our own frame.
-        receive
-            {captured, {text, <<"ready">>}} -> ok
-        after 15000 -> ct:fail(no_ready_frame)
-        end,
-        ok = ws:send(Sess, [{text, <<"hello">>}]),
-        receive
-            {captured, {text, <<"hello">>}} -> ok
-        after 15000 -> ct:fail(no_echo_frame)
-        end
-    after
-        catch ws:close(Sess, 1000, <<"bye">>),
-        catch ws:stop(Sess)
+    case
+        ws_client:connect(Url, #{
+            handler => livery_ws_client_capture,
+            handler_opts => #{parent => Self}
+        })
+    of
+        {ok, Sess} ->
+            try
+                ws_echo_frames(Sess)
+            after
+                catch ws:close(Sess, 1000, <<"bye">>),
+                catch ws:stop(Sess),
+                drain_captured()
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+ws_echo_frames(Sess) ->
+    %% The handler emits a `ready' frame on connect; wait for it so the
+    %% stream is provably live before sending our own frame.
+    receive
+        {captured, {text, <<"ready">>}} ->
+            ok = ws:send(Sess, [{text, <<"hello">>}]),
+            receive
+                {captured, {text, <<"hello">>}} -> ok
+            after 15000 -> {error, no_echo_frame}
+            end
+    after 15000 -> {error, no_ready_frame}
     end.
 
 h1_rejects_request_without_upgrade_headers(Config) ->

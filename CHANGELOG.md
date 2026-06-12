@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-06-13
+
+Adds deferred responses, per-SNI certificate selection on HTTP/3, and
+per-listener TLS options, with wire-dependency bumps.
+
 ### Added
 
 - `livery_resp:stream_deferred/1`. The resolver fun runs at emit time, in
@@ -16,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error if admission fails before the first byte, instead of `200 OK` + an
   in-band error frame. Headers added by wrapping middleware merge under the
   decision's headers (decision wins on conflict).
+- Per-SNI certificate selection on HTTP/3. `livery_h3` forwards a
+  `sni_callback` (carried inside `quic_opts`) so an H3 listener picks its
+  certificate per connection from the ClientHello SNI, mirroring the
+  `ssl_opts`/`sni_fun` path on H1/H2. See
+  `docs/guides/serve-multiple-certs-sni.md`.
+- Per-listener TLS `ssl_opts` are forwarded to the underlying listeners.
+
+### Changed
+
+- Bump `h1` 0.6.1 -> 0.6.2, `quic` 1.6.4 -> 1.6.5, `webtransport`
+  0.3.3 -> 0.4.0, `hackney` 4.2.3 -> 4.3.0.
 
 ## [0.2.7] - 2026-06-10
 
@@ -301,6 +317,8 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.2.8]: https://github.com/benoitc/livery/releases/tag/v0.2.8
+[0.2.7]: https://github.com/benoitc/livery/releases/tag/v0.2.7
 [0.2.6]: https://github.com/benoitc/livery/releases/tag/v0.2.6
 [0.2.5]: https://github.com/benoitc/livery/releases/tag/v0.2.5
 [0.2.4]: https://github.com/benoitc/livery/releases/tag/v0.2.4

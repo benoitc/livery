@@ -80,6 +80,12 @@ in-flight requests finish, use `livery:drain/1,2`.
     key => binary() | string() | term(),
     cacerts => [binary()],
     acceptors => pos_integer(),
+    %% H3 per-SNI certificate selection, forwarded to `quic' (>= 1.6.5).
+    sni_callback => fun(
+        (binary() | undefined) ->
+            {ok, #{cert := binary(), key := term(), cert_chain => [binary()]}}
+            | {error, term()}
+    ),
     settings => map(),
     quic_opts => map(),
     %% Per-listener config; overrides the service-wide `config'.

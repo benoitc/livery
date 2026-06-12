@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `livery_resp:stream_deferred/1`. The resolver fun runs at emit time, in
+  the worker, before any header is written, and chooses the response shape:
+  `{stream|sse|ndjson, Status, Headers, Producer}` or `{full, Status,
+  Headers, Body}`. This lets a streaming handler reply with a non-2xx JSON
+  error if admission fails before the first byte, instead of `200 OK` + an
+  in-band error frame. Headers added by wrapping middleware merge under the
+  decision's headers (decision wins on conflict).
+
 ## [0.2.7] - 2026-06-10
 
 Maintenance release: a Hex resolution fix, an HTTP/1.1 WebSocket header

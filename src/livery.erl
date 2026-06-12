@@ -266,6 +266,13 @@ emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers) ->
         Other ->
             Other
     end;
+emit_body(Adapter, Stream, _Status, Hs, {deferred, Resolver}, _Trailers) ->
+    %% The resolver runs here, in the worker, before any header write,
+    %% so it can still choose the status and body shape. The outer Hs
+    %% carries any headers added by wrapping middleware; the decision
+    %% wins on a name conflict.
+    Resolved = livery_resp:resolve_deferred(Hs, Resolver()),
+    emit(Adapter, Stream, Resolved);
 emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers) ->
     case file_segment(Path, Range) of
         {error, enoent} ->

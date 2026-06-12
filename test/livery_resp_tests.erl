@@ -131,6 +131,35 @@ ndjson_user_content_type_wins_test() ->
         header(R, <<"content-type">>)
     ).
 
+resolve_deferred_maps_each_decision_test() ->
+    P = fun(_) -> ok end,
+    Stream = livery_resp:resolve_deferred({stream, 200, [], P}),
+    ?assertEqual(200, livery_resp:status(Stream)),
+    ?assertMatch({chunked, _}, livery_resp:body(Stream)),
+
+    Sse = livery_resp:resolve_deferred({sse, 200, [], P}),
+    ?assertMatch({sse, _}, livery_resp:body(Sse)),
+    ?assertEqual(<<"text/event-stream">>, header(Sse, <<"content-type">>)),
+
+    Ndjson = livery_resp:resolve_deferred({ndjson, 200, [], P}),
+    ?assertMatch({chunked, _}, livery_resp:body(Ndjson)),
+    ?assertEqual(<<"application/x-ndjson">>, header(Ndjson, <<"content-type">>)),
+
+    Full = livery_resp:resolve_deferred({full, 429, [], <<"x">>}),
+    ?assertEqual(429, livery_resp:status(Full)),
+    ?assertEqual({full, <<"x">>}, livery_resp:body(Full)).
+
+resolve_deferred_merges_outer_headers_decision_wins_test() ->
+    Outer = [
+        {<<"x-request-id">>, <<"abc">>},
+        {<<"content-type">>, <<"text/plain">>}
+    ],
+    Decision = {full, 429, [{<<"content-type">>, <<"application/json">>}], <<"{}">>},
+    R = livery_resp:resolve_deferred(Outer, Decision),
+    ?assertEqual(429, livery_resp:status(R)),
+    ?assertEqual(<<"abc">>, header(R, <<"x-request-id">>)),
+    ?assertEqual(<<"application/json">>, header(R, <<"content-type">>)).
+
 %%====================================================================
 %% Helpers
 %%====================================================================

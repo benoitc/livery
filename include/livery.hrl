@@ -34,6 +34,7 @@
         {full, iodata()}
         | {chunked, fun((term()) -> ok | {error, term()})}
         | {sse, fun((term()) -> ok | {error, term()})}
+        | {deferred, fun(() -> term())}
         | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
         | {upgrade, ws | wt, term()}
         | empty

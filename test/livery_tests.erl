@@ -122,6 +122,64 @@ emit_sse_iolist_data_test() ->
     {Cap, _} = emit_through(livery_resp:sse(200, Producer)),
     ?assertEqual(<<"data: ab\n\n">>, livery_test_adapter:body(Cap)).
 
+emit_deferred_full_status_overrides_wrapper_test() ->
+    Json = <<"{\"error\":\"busy\"}">>,
+    Resp = livery_resp:stream_deferred(fun() ->
+        {full, 429, [{<<"content-type">>, <<"application/json">>}], Json}
+    end),
+    {Cap, _} = emit_through(Resp),
+    ?assertEqual(429, livery_test_adapter:status(Cap)),
+    ?assertEqual(Json, livery_test_adapter:body(Cap)),
+    ?assertEqual(
+        <<"application/json">>,
+        livery_test_adapter:header(<<"content-type">>, Cap)
+    ),
+    ?assert(livery_test_adapter:end_stream(Cap)).
+
+emit_deferred_stream_test() ->
+    Resp = livery_resp:stream_deferred(fun() ->
+        {stream, 200, [], fun(Emit) ->
+            Emit(<<"a">>),
+            Emit(<<"b">>),
+            Emit(<<"c">>),
+            ok
+        end}
+    end),
+    {Cap, _} = emit_through(Resp),
+    ?assertEqual(200, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"abc">>, livery_test_adapter:body(Cap)),
+    ?assert(livery_test_adapter:end_stream(Cap)).
+
+emit_deferred_sse_test() ->
+    Resp = livery_resp:stream_deferred(fun() ->
+        {sse, 200, [], fun(Emit) -> Emit(<<"plain">>) end}
+    end),
+    {Cap, _} = emit_through(Resp),
+    ?assertEqual(<<"data: plain\n\n">>, livery_test_adapter:body(Cap)),
+    ?assertEqual(
+        <<"text/event-stream">>,
+        livery_test_adapter:header(<<"content-type">>, Cap)
+    ).
+
+emit_deferred_merges_wrapper_headers_test() ->
+    %% A header added by wrapping middleware survives; the decision's
+    %% own content-type wins over the wrapper's on a name conflict.
+    Resp0 = livery_resp:stream_deferred(fun() ->
+        {full, 429, [{<<"content-type">>, <<"application/json">>}], <<"{}">>}
+    end),
+    Resp1 = livery_resp:with_header(<<"x-request-id">>, <<"abc">>, Resp0),
+    Resp = livery_resp:with_header(<<"content-type">>, <<"text/plain">>, Resp1),
+    {Cap, _} = emit_through(Resp),
+    ?assertEqual(429, livery_test_adapter:status(Cap)),
+    ?assertEqual(
+        <<"abc">>,
+        livery_test_adapter:header(<<"x-request-id">>, Cap)
+    ),
+    ?assertEqual(
+        <<"application/json">>,
+        livery_test_adapter:header(<<"content-type">>, Cap)
+    ).
+
 emit_missing_file_returns_404_test() ->
     Resp = livery_resp:file(200, "/tmp/livery-no-such-file-zzz"),
     {Cap, R} = emit_through(Resp),

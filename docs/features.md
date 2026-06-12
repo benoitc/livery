@@ -135,3 +135,34 @@ remaining H3 cost is inherent to userspace QUIC (AEAD, the connection
 state machine, per-packet processing, UDP syscalls). The benchmark
 also runs the QUIC client and server in one VM, so the H3 figure is
 pessimistic versus an external client.
+
+## Deferred response status: decide stream-vs-error at the first byte
+
+DONE: `livery_resp:stream_deferred/1`. `stream/3` / `sse/3` / `ndjson/3`
+fix the status and headers at construction, so `livery:emit_body/6` writes
+them before the producer runs. That blocks the async-admission pattern
+"admit, then stream; if admission fails before the first byte, reply with
+an error status": a saturated request could only emit `200 OK` + an in-band
+error frame, never `429` + a JSON envelope.
+
+`stream_deferred(Resolver)` stores a `{deferred, Resolver}` body variant.
+`Resolver` runs once in the worker, before any header write, and returns
+one of:
+
+    {stream, 100..599, headers(), producer()}
+    {sse,    100..599, headers(), producer()}
+    {ndjson, 100..599, headers(), producer()}
+    {full,   100..599, headers(), iodata()}
+
+`emit_body/6` converts the decision into a normal `#livery_resp{}` via the
+existing `stream/3` / `sse/3` / `ndjson/3` / `new/3` constructors (reusing
+the SSE/ndjson default headers and producer wrapping) and re-enters
+`emit/3`, so no adapter contract changes. Headers added by wrapping
+middleware (request id, security headers, CORS) merge under the decision's
+headers via `resolve_deferred/2`; the decision wins on a name conflict. An
+invalid decision crashes before any byte, surfacing as a clean 500. Tests:
+`livery_tests:emit_deferred_*`, `livery_resp_tests:resolve_deferred_*`.
+
+The original reproducer is `barrel_inference`'s `chat_busy_returns_429/1`
+CT case (saturates a concurrency=1/depth=1 queue, asserts a racing request
+reports `429`/`504`).

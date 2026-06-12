@@ -6,6 +6,11 @@ Handlers return an immutable `#livery_resp{}` value. The core
 emits it onto the wire by walking the body variant and driving
 the adapter's `send_headers`/`send_data`/`send_trailers` calls.
 Response builders here are pure: they never touch sockets.
+
+Most builders fix the status and headers up front. When the status
+is not known until the first byte (admission control, lazy probing),
+use `stream_deferred/1` to choose between streaming and a one-shot
+error after the handler returns but before anything is written.
 """.
 
 -include("livery.hrl").
@@ -38,6 +43,9 @@ Response builders here are pure: they never touch sockets.
     empty/1,
 
     stream/3,
+    stream_deferred/1,
+    resolve_deferred/1,
+    resolve_deferred/2,
     sse/2,
     sse/3,
 
@@ -53,7 +61,7 @@ Response builders here are pure: they never touch sockets.
     upgrade/2
 ]).
 
--export_type([resp/0, body/0, cache_directive/0]).
+-export_type([resp/0, body/0, deferred_decision/0, cache_directive/0]).
 
 -type cache_directive() ::
     no_cache
@@ -72,14 +80,24 @@ Response builders here are pure: they never touch sockets.
 -type resp() :: #livery_resp{}.
 -type header_name() :: binary().
 -type header_value() :: binary().
+-type producer() :: fun((term()) -> ok | {error, term()}).
 -type body() ::
     {full, iodata()}
-    | {chunked, fun((term()) -> ok | {error, term()})}
-    | {sse, fun((term()) -> ok | {error, term()})}
+    | {chunked, producer()}
+    | {sse, producer()}
+    | {deferred, fun(() -> deferred_decision())}
     | {file, file:name_all(), undefined | {non_neg_integer(), non_neg_integer() | eof}}
     | {upgrade, ws | wt, term()}
     | empty
     | taken_over.
+
+%% A deferred response resolves to exactly one of these on first
+%% emit, before any header is written. See `stream_deferred/1`.
+-type deferred_decision() ::
+    {stream, 100..599, [{header_name(), header_value()}], producer()}
+    | {sse, 100..599, [{header_name(), header_value()}], producer()}
+    | {ndjson, 100..599, [{header_name(), header_value()}], producer()}
+    | {full, 100..599, [{header_name(), header_value()}], iodata()}.
 
 %%====================================================================
 %% Construction
@@ -266,6 +284,86 @@ until it returns.
 ) -> resp().
 stream(Status, Headers, Producer) when is_function(Producer, 1) ->
     new(Status, Headers, {chunked, Producer}).
+
+-doc """
+Deferred response: choose the status, headers, and body shape at the
+first byte rather than at construction.
+
+`stream/3`, `sse/3`, and `ndjson/3` fix the status and headers when the
+response is built, so the status is on the wire before the producer runs.
+That blocks the "admit, then stream; if admission fails before the first
+byte, reply with an error status" pattern: a saturated request can only
+emit `200 OK` followed by an in-band error frame, never `429` + a JSON
+envelope.
+
+`Resolver` is invoked once, in the handler's process, before any header
+is written. It returns one of:
+
+- `{stream, Status, Headers, Producer}`  -- like `stream/3`
+- `{sse, Status, Headers, Producer}`     -- like `sse/3`
+- `{ndjson, Status, Headers, Producer}`  -- like `ndjson/3`
+- `{full, Status, Headers, Body}`        -- a one-shot full response
+
+```erlang
+livery_resp:stream_deferred(fun() ->
+    case admit() of
+        ok            -> {sse, 200, [], fun(Emit) -> drive(Emit) end};
+        pool_exhausted -> {full, 429, [{<<"content-type">>, <<"application/json">>}],
+                           <<"{\\"error\\":\\"busy\\"}">>}
+    end
+end).
+```
+
+Headers added by middleware that wraps the handler (request id, security
+headers, CORS) are kept; the decision's own headers win on a name
+conflict. An invalid decision crashes before any byte is sent, so it
+surfaces as a clean 500.
+""".
+-spec stream_deferred(fun(() -> deferred_decision())) -> resp().
+stream_deferred(Resolver) when is_function(Resolver, 0) ->
+    new(200, [], {deferred, Resolver}).
+
+-doc "Resolve a deferred decision into a concrete response.".
+-spec resolve_deferred(deferred_decision()) -> resp().
+resolve_deferred(Decision) ->
+    resolve_deferred([], Decision).
+
+-doc """
+`resolve_deferred/1` merging `OuterHeaders` (e.g. headers added by
+middleware to the deferred wrapper) under the decision's headers. The
+decision wins on a name conflict.
+""".
+-spec resolve_deferred([{header_name(), header_value()}], deferred_decision()) ->
+    resp().
+resolve_deferred(OuterHeaders, Decision) ->
+    Resolved = from_decision(Decision),
+    Merged = merge_under(OuterHeaders, headers(Resolved)),
+    Resolved#livery_resp{headers = Merged}.
+
+-spec from_decision(deferred_decision()) -> resp().
+from_decision({stream, Status, Headers, Producer}) ->
+    stream(Status, Headers, Producer);
+from_decision({sse, Status, Headers, Producer}) ->
+    sse(Status, Headers, Producer);
+from_decision({ndjson, Status, Headers, Producer}) ->
+    ndjson(Status, Headers, Producer);
+from_decision({full, Status, Headers, Body}) ->
+    new(Status, Headers, {full, Body}).
+
+%% Higher (the decision) wins on a name conflict; Lower entries survive
+%% only when their lowercased name is absent from Higher.
+-spec merge_under(
+    [{header_name(), header_value()}],
+    [{header_name(), header_value()}]
+) -> [{header_name(), header_value()}].
+merge_under(Lower, Higher) ->
+    Names = [string:lowercase(K) || {K, _} <- Higher],
+    Extra = [
+        KV
+     || {K, _} = KV <- Lower,
+        not lists:member(string:lowercase(K), Names)
+    ],
+    Higher ++ Extra.
 
 -doc "Server-Sent Events response.".
 -spec sse(100..599, fun((term()) -> ok | {error, term()})) -> resp().

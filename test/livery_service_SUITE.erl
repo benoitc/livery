@@ -22,6 +22,7 @@
     which_listeners_reports_all_three/1,
     router_service_dispatches_routes/1,
     config_is_readable_in_handler/1,
+    https_listener_forwards_ssl_opts/1,
     service_without_handler_or_router_fails/1,
     stop_accepting_refuses_new_connections/1,
     drain_lets_inflight_finish/1,
@@ -39,6 +40,7 @@ all() ->
         which_listeners_reports_all_three,
         router_service_dispatches_routes,
         config_is_readable_in_handler,
+        https_listener_forwards_ssl_opts,
         service_without_handler_or_router_fails,
         stop_accepting_refuses_new_connections,
         drain_lets_inflight_finish,
@@ -172,6 +174,37 @@ config_is_readable_in_handler(_Config) ->
         )
     after
         livery:stop_service(P2)
+    end.
+
+https_listener_forwards_ssl_opts(Config) ->
+    Parent = self(),
+    CertFile = ?config(cert_file, Config),
+    KeyFile = ?config(key_file, Config),
+    SniFun = fun(ServerName) ->
+        Parent ! {sni_seen, ServerName},
+        [{certfile, CertFile}, {keyfile, KeyFile}]
+    end,
+    {ok, Pid} = livery:start_service(#{
+        https => #{
+            port => 0,
+            cert => CertFile,
+            key => KeyFile,
+            ssl_opts => [{sni_fun, SniFun}]
+        },
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
+    }),
+    try
+        ?assertEqual(
+            <<"ok">>,
+            body_via_h2(maps:get(h2, livery:which_listeners(Pid)))
+        ),
+        receive
+            {sni_seen, "localhost"} -> ok
+        after 1000 ->
+            ct:fail(sni_not_seen)
+        end
+    after
+        livery:stop_service(Pid)
     end.
 
 service_without_handler_or_router_fails(_Config) ->

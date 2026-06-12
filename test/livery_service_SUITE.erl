@@ -23,6 +23,7 @@
     router_service_dispatches_routes/1,
     config_is_readable_in_handler/1,
     https_listener_forwards_ssl_opts/1,
+    http3_listener_forwards_sni_callback/1,
     service_without_handler_or_router_fails/1,
     stop_accepting_refuses_new_connections/1,
     drain_lets_inflight_finish/1,
@@ -41,6 +42,7 @@ all() ->
         router_service_dispatches_routes,
         config_is_readable_in_handler,
         https_listener_forwards_ssl_opts,
+        http3_listener_forwards_sni_callback,
         service_without_handler_or_router_fails,
         stop_accepting_refuses_new_connections,
         drain_lets_inflight_finish,
@@ -200,6 +202,37 @@ https_listener_forwards_ssl_opts(Config) ->
         ),
         receive
             {sni_seen, "localhost"} -> ok
+        after 1000 ->
+            ct:fail(sni_not_seen)
+        end
+    after
+        livery:stop_service(Pid)
+    end.
+
+http3_listener_forwards_sni_callback(Config) ->
+    Parent = self(),
+    CertDer = ?config(cert_der, Config),
+    KeyDer = ?config(key_der, Config),
+    SniCallback = fun(ServerName) ->
+        Parent ! {sni_seen, ServerName},
+        {ok, #{cert => CertDer, key => KeyDer}}
+    end,
+    {ok, Pid} = livery:start_service(#{
+        http3 => #{
+            port => 0,
+            cert => CertDer,
+            key => KeyDer,
+            sni_callback => SniCallback
+        },
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
+    }),
+    try
+        ?assertEqual(
+            <<"ok">>,
+            body_via_h3(maps:get(h3, livery:which_listeners(Pid)), Config)
+        ),
+        receive
+            {sni_seen, <<"localhost">>} -> ok
         after 1000 ->
             ct:fail(sni_not_seen)
         end

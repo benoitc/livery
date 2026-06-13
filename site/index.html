@@ -20,6 +20,7 @@
     <div class="nav-links">
       <a href="api/index.html">Docs</a>
       <a href="api/livery.html">API</a>
+      <a href="#ecosystem">Ecosystem</a>
       <a href="https://github.com/benoitc/livery">GitHub</a>
     </div>
   </nav>
@@ -114,6 +115,30 @@ livery:<span class="a">start_service</span>(#{
           <span class="ic">🔭</span>
           <h3>Observability &amp; auth</h3>
           <p>OpenTelemetry-style traces and metrics, trace-correlated logs, JWT/JWKS/OIDC, signed sessions, and token introspection.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="ecosystem">
+    <div class="wrap">
+      <h2 class="section-title">Built on Livery</h2>
+      <p class="section-sub">Companion libraries that reuse the same client and H2 stack, each in its own repo.</p>
+      <div class="grid">
+        <div class="card">
+          <span class="ic">🛰️</span>
+          <h3><a href="https://github.com/benoitc/livery_grpc">livery_grpc</a></h3>
+          <p>gRPC server and client on Livery's HTTP/2 stack: all four call types, deadlines, gRPC-Web, server reflection, and the health service.</p>
+        </div>
+        <div class="card">
+          <span class="ic">🪣</span>
+          <h3><a href="https://github.com/benoitc/livery_s3">livery_s3</a></h3>
+          <p>S3-compatible object storage client on the Livery HTTP client: SigV4 signing, multipart uploads, and presigned URLs. AWS S3, Garage, MinIO, Ceph, Wasabi.</p>
+        </div>
+        <div class="card">
+          <span class="ic">💳</span>
+          <h3><a href="https://github.com/benoitc/livery_stripe">livery_stripe</a></h3>
+          <p>Stripe API client on the Livery HTTP client: customers, subscriptions, Checkout, the Billing Portal, and webhook verification.</p>
         </div>
       </div>
     </div>

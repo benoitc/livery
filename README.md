@@ -139,6 +139,20 @@ WebTransport over H2/H3 work the same way.
 - **Observability & auth** — OpenTelemetry-style traces/metrics,
   trace-correlated logs, JWT/JWKS/OIDC, signed sessions, introspection.
 
+## Ecosystem
+
+Companion libraries built on Livery, each in its own repo:
+
+- **[livery_grpc](https://github.com/benoitc/livery_grpc)** - gRPC server and
+  client on Livery's HTTP/2 stack: all four call types, deadlines, gRPC-Web,
+  server reflection, and the standard health service.
+- **[livery_s3](https://github.com/benoitc/livery_s3)** - S3-compatible object
+  storage client on the Livery HTTP client: AWS SigV4 signing, multipart
+  uploads, and presigned URLs, for AWS S3, Garage, MinIO, Ceph, and Wasabi.
+- **[livery_stripe](https://github.com/benoitc/livery_stripe)** - Stripe API
+  client on the Livery HTTP client: customers, subscriptions, Checkout, the
+  Billing Portal, and webhook verification.
+
 ## Documentation
 
 Full guides, tutorials, and the generated API reference live at

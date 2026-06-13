@@ -107,6 +107,20 @@ sidebar's "Modules" section, grouped as:
 - **Body reader:** `livery_body`
 - **Runtime:** `livery_app`, `livery_sup`, `livery_req_proc`, `livery_req_sup`
 
+## Ecosystem
+
+Companion libraries built on Livery, each in its own repo:
+
+- [livery_grpc](https://github.com/benoitc/livery_grpc): gRPC server and
+  client on Livery's HTTP/2 stack. All four call types, deadlines, gRPC-Web,
+  server reflection, and the standard health service.
+- [livery_s3](https://github.com/benoitc/livery_s3): S3-compatible object
+  storage client on the Livery HTTP client. AWS SigV4 signing, multipart
+  uploads, presigned URLs; works with AWS S3, Garage, MinIO, Ceph, and Wasabi.
+- [livery_stripe](https://github.com/benoitc/livery_stripe): Stripe API
+  client on the Livery HTTP client. Customers, subscriptions, Checkout, the
+  Billing Portal, and webhook verification.
+
 ## Project state
 
 The developer surface, the H1/H2/H3 wire adapters, and

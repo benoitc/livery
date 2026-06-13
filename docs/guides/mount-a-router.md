@@ -1,13 +1,11 @@
 # How to mount a router on a service
 
-## Problem
+A router dispatches requests by method and path, binds path parameters
+for you, and handles 404/405 automatically. You need it once your service
+has grown past a single endpoint and you would rather declare routes than
+grow one giant handler with a `case` on the path.
 
-Your service has grown past a single endpoint, and you would rather
-declare routes than grow one giant handler with a `case` on the path.
-You want dispatch by method and path, path parameters bound for you, and
-404/405 handled automatically.
-
-## Solution
+## Compile and mount a router
 
 Compile a router and pass it to `start_service/1` as `router`:
 
@@ -26,9 +24,9 @@ Router = livery_router:compile([
 }).
 ```
 
-Each route handler is a normal handler - `fun(Req) -> Resp` or
-`{Module, Function}` - and receives the request with path
-parameters already bound:
+Each route handler is a normal handler, `fun(Req) -> Resp` or
+`{Module, Function}`, and receives the request with path parameters
+already bound:
 
 ```erlang
 show(Req) ->
@@ -36,21 +34,20 @@ show(Req) ->
     livery_resp:json(200, lookup(Id)).
 ```
 
-`start_service/1` takes **exactly one** of `router` or `handler`.
-Use `handler` for a single catch-all; use `router` for dispatch.
-The service-level `middleware` stack wraps every route.
+`start_service/1` takes **exactly one** of `router` or `handler`. Use
+`handler` for a single catch-all; use `router` for dispatch. The
+service-level `middleware` stack wraps every route.
 
 ## What you get for free
 
 - **404** for an unmatched path.
-- **405** with an `Allow` header for a known path on the wrong
-  method.
+- **405** with an `Allow` header for a known path on the wrong method.
 - Path bindings on `livery_req:bindings/1` / `binding/2,3`.
 
-## Per-route middleware
+## Add per-route middleware
 
-A route's optional `Meta` map (the fourth tuple element) may carry
-a `middleware` stack that runs only for that route, inside any
+A route's optional `Meta` map (the fourth tuple element) may carry a
+`middleware` stack that runs only for that route, inside any
 service-level stack:
 
 ```erlang
@@ -61,11 +58,10 @@ Router = livery_router:compile([
 ]).
 ```
 
-`/private` runs `Auth` before its handler; `/public` does not.
-Nesting is service stack (outermost) -> route match -> route stack ->
-handler.
+`/private` runs `Auth` before its handler; `/public` does not. Nesting is
+service stack (outermost) -> route match -> route stack -> handler.
 
-## Composing routers
+## Compose routers
 
 Once a piece of your app is self-contained, it is nicer to keep its
 routes together and stitch them in, rather than copy them into one big
@@ -98,7 +94,7 @@ Guarded = livery_router:nest(<<"/v1">>, livery_router:layer([Auth], Admin), App)
 Need the flat list back, perhaps to feed `livery_openapi:build/1`?
 `livery_router:routes/1` reconstructs it from any router, composed or not.
 
-## Customising 404 / 405
+## Customise 404 / 405
 
 To control the fallbacks, build the handler yourself with
 `livery:router_handler/2` and pass it as `handler`:
@@ -111,10 +107,10 @@ H = livery:router_handler(Router, #{
 livery:start_service(#{http => #{port => 8080}, handler => H}).
 ```
 
-## Using a router without the service
+## Use a router without the service
 
-`livery:router_handler/1` returns a plain handler fun, so you can
-also use it with a single listener or drive it directly in tests:
+`livery:router_handler/1` returns a plain handler fun, so you can also
+use it with a single listener or drive it directly in tests:
 
 ```erlang
 H = livery:router_handler(Router),

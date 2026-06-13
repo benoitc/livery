@@ -1,15 +1,12 @@
 # How to handle file uploads (multipart/form-data)
 
-## Problem
+When a client POSTs `multipart/form-data` (a browser form with
+files, or a multimodal request) you need the fields and uploaded
+files without buffering the whole request in memory. Use
+`livery_multipart`: pull parts one at a time and stream each part's
+body, so a large upload never sits in RAM.
 
-A client POSTs `multipart/form-data` (a browser form with files, or a
-multimodal request) and you need the fields and uploaded files without
-buffering the whole request in memory.
-
-## Solution
-
-Use `livery_multipart`. Pull parts one at a time and stream each part's
-body, so a large upload never sits in RAM:
+## Stream parts one at a time
 
 ```erlang
 upload(Req) ->
@@ -36,25 +33,25 @@ consume(MP, _Name, _File) ->
     end.
 ```
 
-`next_part/2` returns each part's `name`, `filename`, `content_type`,
-and raw `headers` (parsed from `Content-Disposition`). `read_part/2`
-streams that part's bytes; calling `next_part` again skips any unread
-remainder.
+`next_part/2` returns each part's `name`, `filename`,
+`content_type`, and raw `headers` (parsed from `Content-Disposition`).
+`read_part/2` streams that part's bytes; calling `next_part` again
+skips any unread remainder.
 
-## Small forms: read everything at once
+## Read small forms at once
 
-When the parts are small, `read_all/1,2` collects them into memory under
-the limits:
+When the parts are small, `read_all/1,2` collects them into memory
+under the limits:
 
 ```erlang
 {ok, Parts} = livery_multipart:read_all(Req),
 %% Parts :: [#{name, filename, content_type, headers, body}]
 ```
 
-## Limits
+## Set the limits
 
-All buffering is bounded. Override the defaults via the options map on
-`new/2` / `read_all/2`:
+All buffering is bounded. Override the defaults via the options map
+on `new/2` / `read_all/2`:
 
 ```erlang
 livery_multipart:read_all(Req, #{
@@ -67,16 +64,16 @@ livery_multipart:read_all(Req, #{
 }).
 ```
 
-## Security: sanitize the filename
+## Notes
 
-`filename` is returned exactly as the client sent it and the parser
-never touches the filesystem. A hostile client can send
-`../../etc/passwd`. If you write uploads to disk, confine the path
-yourself (basename + a fixed directory); never join the raw `filename`
-onto a path.
+- Sanitize the filename. `filename` is returned exactly as the
+  client sent it and the parser never touches the filesystem. A
+  hostile client can send `../../etc/passwd`. If you write uploads
+  to disk, confine the path yourself (basename + a fixed directory);
+  never join the raw `filename` onto a path.
 
 ## See also
 
 - Reference: `livery_multipart`, `livery_body`
-- Recipe: [Parse form bodies](parse-form-bodies.md)
-- Recipe: [Read a streaming request body](read-streaming-body.md)
+- Guide: [Parse form bodies](parse-form-bodies.md)
+- Guide: [Read a streaming request body](read-streaming-body.md)

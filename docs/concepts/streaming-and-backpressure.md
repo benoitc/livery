@@ -1,10 +1,12 @@
 # Streaming and backpressure
 
-Most responses are one short burst: a handler builds a value and Livery
-writes it. Streaming is for the other kind, where the body arrives, or
-leaves, in pieces over time. This page explains how you stream in both
-directions, where the producing function lives, and what happens when
-one side cannot keep up.
+This page explains how you stream a body in either direction, where the
+producing function lives, and what happens when one side cannot keep up.
+Read it when a body is too large to hold in memory, or when you want
+bytes to reach the client as they are produced. Most responses are one
+short burst: a handler builds a value and Livery writes it. Streaming is
+for the other kind, where the body arrives, or leaves, in pieces over
+time.
 
 The thing to hold onto: **a request runs in its own process** (the
 per-request worker). So the function that produces a stream is free to
@@ -30,7 +32,7 @@ produced rather than at the end.
 named events with automatic reconnect semantics: dashboards, progress
 bars, notifications, LLM tokens. **Use `ndjson/2` when** the consumer is
 a CLI or another service reading one JSON object per line. **Use
-`stream/3` when** you just need to push opaque chunks (a CSV report
+`stream/3` when** you only need to push opaque chunks (a CSV report
 generated row by row, a proxied payload). **Prefer `file/2`** over
 reading a file yourself; adapters that can will use `sendfile`.
 

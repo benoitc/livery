@@ -1,13 +1,12 @@
 # How to compress responses
 
-## Problem
-
-You want responses gzip/deflate-compressed when the client supports it,
+`livery_compress` is a middleware that compresses response bodies when
+the client supports it. You need it when you want gzip or deflate
 without touching every handler.
 
-## Solution
+## Add it to the stack
 
-Add `livery_compress` to the stack. gzip and deflate are built in:
+gzip and deflate are built in:
 
 ```erlang
 Stack = [
@@ -23,7 +22,7 @@ none the server has) gets the response uncompressed, so any HTTP client
 works: those that advertise gzip decode it transparently, the rest get
 identity.
 
-## What gets compressed
+## Control what gets compressed
 
 Eligible responses are `{full, _}` bodies at least `min_size` bytes and
 `{chunked, _}` streams, with a compressible `Content-Type` and no
@@ -40,7 +39,7 @@ pass through untouched.
 `Content-Type` matching is case-insensitive and ignores parameters, so
 `Application/JSON; charset=utf-8` is compressed.
 
-## Negotiation and server preference
+## Set server preference
 
 A coding is acceptable when its `Accept-Encoding` q-value is greater
 than zero (`q=0` rejects). Among acceptable codings the SERVER decides
@@ -51,7 +50,7 @@ an accept/reject filter. Control the order with `codecs`:
 {livery_compress, #{codecs => [livery_codec_gzip]}}   %% gzip only
 ```
 
-## Adding more codecs
+## Add more codecs
 
 `livery_compress` negotiates over `livery_codec:registered()`, which is
 `[livery_codec_gzip, livery_codec_deflate]` plus any codec a separate
@@ -65,5 +64,5 @@ registration.
 
 - Reference: `livery_compress`, `livery_codec`, `livery_codec_gzip`,
   `livery_codec_deflate`
-- Recipe: [Enable CORS](enable-cors.md)
-- Recipe: [Set security headers](set-security-headers.md)
+- Guide: [Enable CORS](enable-cors.md)
+- Guide: [Set security headers](set-security-headers.md)

@@ -1,8 +1,9 @@
 # Tutorial: Compose a middleware stack
 
-Build a middleware stack that adds a request id, logs every
-request, caps the body size, and catches handler crashes. About
-10 minutes.
+In this tutorial you build a middleware stack that adds a request
+id, logs every request, caps the body size, and catches handler
+crashes. It is for you once you can write a handler and want to see
+how cross-cutting work wraps around it. About 10 minutes.
 
 ## 1. Start from a handler that crashes
 
@@ -94,4 +95,4 @@ work.
 
 - Reference: `livery_middleware`
 - Built-in modules: `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`
-- Recipe: [Write a custom middleware](../guides/custom-middleware.md)
+- Guide: [Write a custom middleware](../guides/custom-middleware.md)

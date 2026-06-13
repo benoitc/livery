@@ -1,15 +1,13 @@
 # How to enable CORS
 
-## Problem
+`livery_cors` is a middleware that adds Cross-Origin Resource Sharing
+headers to your responses and answers preflight `OPTIONS` requests. You
+need it when a browser app served from another origin calls your API:
+without these headers the browser blocks the response.
 
-A browser app on another origin needs to call your API, so the
-responses must carry Cross-Origin Resource Sharing headers and
-preflight `OPTIONS` requests must be answered.
+## Add it to the stack
 
-## Solution
-
-Add `livery_cors` to the stack. Every config key is optional; the
-default allows any origin:
+Every config key is optional. The default allows any origin:
 
 ```erlang
 Stack = [
@@ -27,10 +25,10 @@ Stack = [
 
 A preflight (`OPTIONS` carrying `Access-Control-Request-Method`) is
 answered directly with `204` and the `Access-Control-Allow-*` headers;
-the handler is never called. A normal request runs the handler, then
-the CORS response headers are added.
+your handler never runs. A normal request runs the handler, then the CORS
+headers are added to its response.
 
-## Origins
+## Match origins
 
 ```erlang
 origins => '*'                                  %% any origin (default)
@@ -41,28 +39,24 @@ origins => fun(Origin) -> is_tenant_origin(Origin) end
 When the origin is not allowed, no `Access-Control-Allow-Origin` is
 emitted and the browser blocks the response.
 
-## Credentials and the wildcard
+## Use credentials
 
-`Access-Control-Allow-Origin: *` is invalid with credentials. When
-`credentials => true`, `livery_cors` always echoes the request
-`Origin` instead of `*` and adds `Access-Control-Allow-Credentials:
-true`.
+`Access-Control-Allow-Origin: *` is invalid with credentials. When you set
+`credentials => true`, `livery_cors` echoes the request `Origin` instead
+of `*` and adds `Access-Control-Allow-Credentials: true`.
 
-## Caching is handled for you
+## Notes
 
-`livery_cors` sets `Vary` so shared caches stay correct:
-
-- `Vary: Origin` is added on every response (allowed, denied, and the
-  no-`Origin` passthrough) whenever the output depends on the request
-  origin, which is any config except the plain non-credentialed `'*'`.
-- Mirroring preflights also add `Vary: Access-Control-Request-Headers`.
-- A plain `origins => '*'` without credentials is origin-independent,
-  so no `Vary` is added.
-
-Existing `Vary` tokens are never duplicated.
+- `Vary` is set for you so shared caches stay correct. `Vary: Origin` is
+  added to every response whose output depends on the origin (any config
+  except a plain non-credentialed `'*'`), and mirroring preflights also add
+  `Vary: Access-Control-Request-Headers`. Existing `Vary` tokens are never
+  duplicated.
+- A plain `origins => '*'` without credentials is origin-independent, so no
+  `Vary` is added.
 
 ## See also
 
 - Reference: `livery_cors`, `livery_security_headers`
-- Recipe: [Set security headers](set-security-headers.md)
-- Recipe: [Write a custom middleware](custom-middleware.md)
+- Guide: [Set security headers](set-security-headers.md)
+- Guide: [Write a custom middleware](custom-middleware.md)

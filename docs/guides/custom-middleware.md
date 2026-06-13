@@ -1,11 +1,11 @@
 # How to write a custom middleware
 
-## Problem
+A middleware runs before or after every handler in a stack: auth, CORS,
+rate limiting, feature flags, request mutation. You need one when that
+behaviour is cross-cutting and you do not want to repeat it in each
+handler.
 
-You need behaviour that runs before or after every handler in a
-stack: auth, CORS, rate limiting, feature flags, request mutation.
-
-## Solution
+## Implement the behaviour
 
 Implement the `livery_middleware` behaviour. One callback:
 `call(Req, Next, State) -> Resp`.
@@ -33,7 +33,7 @@ call(Req, Next, #{origins := Allowed} = State) ->
 
 Wire it into a stack as `{my_cors, #{origins => [...]}}`.
 
-## Sugar helpers
+## Use the sugar helpers
 
 For simple shapes, use the constructors instead of a full module:
 
@@ -55,7 +55,9 @@ livery_middleware:wrap(fun(Class, Reason, _Stack) ->
 end).
 ```
 
-## Three shapes a middleware can take
+## Pick a shape
+
+A middleware takes one of three shapes:
 
 1. **Pass-through.** Transform request or response. Always call
    `Next`. Example: `livery_request_id`, `livery_access_log`.
@@ -64,7 +66,7 @@ end).
 3. **Wrapper.** Run `Next` inside `try`/`catch` or a monitor.
    Example: `livery_middleware:wrap`, `livery_timeout`.
 
-## Storing state on the request
+## Store state on the request
 
 Use `livery_req:set_meta/3` to thread values from middleware to
 handler:
@@ -77,13 +79,13 @@ call(Req, Next, _State) ->
 
 The handler reads it back with `livery_req:meta(user, Req)`.
 
-## Ordering
+## Order the stack
 
 The first entry in the stack list is outermost. Put auth before
-business logic. Put request id and error wrappers at the very top
-so every response carries them.
+business logic. Put request id and error wrappers at the very top so
+every response carries them.
 
-## Testing
+## Test it
 
 ```erlang
 denies_when_origin_missing_test() ->

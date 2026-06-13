@@ -1,10 +1,12 @@
 # Adapters
 
-An adapter is the thin translator between a wire library and Livery's
-request/response model. It is the only part of Livery that knows there is
-a socket. Everything above it (the router, the middleware, your handlers)
-works in terms of request and response values, and the adapter turns
-those into the bytes a particular protocol expects.
+This page explains what an adapter is and why Livery keeps it thin. You
+rarely write one, but understanding the boundary tells you where each
+kind of work belongs. An adapter is the thin translator between a wire
+library and Livery's request/response model. It is the only part of
+Livery that knows there is a socket. Everything above it (the router, the
+middleware, your handlers) works in terms of request and response values,
+and the adapter turns those into the bytes a particular protocol expects.
 
 Because the adapter owns so little, the same handler runs unchanged over
 HTTP/1.1, HTTP/2, and HTTP/3, and over an in-memory test harness with no

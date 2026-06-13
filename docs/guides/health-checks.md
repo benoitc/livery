@@ -1,13 +1,10 @@
 # How to add health and readiness checks
 
-## Problem
-
 An orchestrator (Kubernetes, a load balancer) needs liveness and
-readiness probes: is the process up, and is it ready to take traffic?
+readiness probes: is the process up, and is it ready to take
+traffic? Mount the `livery_health` handlers on routes to answer both.
 
-## Solution
-
-Mount the `livery_health` handlers on routes:
+## Mount the handlers
 
 ```erlang
 R0 = livery_router:new(),
@@ -24,8 +21,8 @@ R2 = livery_router:add(
 
 ## Liveness
 
-`livery_health:live()` always answers `200 {"status":"ok"}`. Use it for
-the liveness probe - it only signals that the process is running.
+`livery_health:live()` always answers `200 {"status":"ok"}`. Use it
+for the liveness probe; it only signals that the process is running.
 
 ## Readiness
 
@@ -34,14 +31,16 @@ passes when its `Fun()` returns `ok`; any other return or a raised
 exception counts as a failure.
 
 - All pass -> `200 {"status":"ok"}`.
-- Any fail -> `503 {"status":"unavailable","failed":["db"]}` listing the
-  failed names.
+- Any fail -> `503 {"status":"unavailable","failed":["db"]}` listing
+  the failed names.
 
-`ready([])` is always ready. Checks run synchronously in the request
-process, so keep them fast (wrap slow dependencies with your own
-timeout).
+## Notes
+
+- `ready([])` is always ready.
+- Checks run synchronously in the request process, so keep them fast
+  (wrap slow dependencies with your own timeout).
 
 ## See also
 
 - Reference: `livery_health`
-- Recipe: [Export Prometheus metrics](export-metrics.md)
+- Guide: [Export Prometheus metrics](export-metrics.md)

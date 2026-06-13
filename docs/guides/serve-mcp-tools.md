@@ -1,17 +1,16 @@
 # How to serve MCP tools
 
-## Problem
+`livery_mcp:handler/1` exposes tools, resources, and prompts to MCP
+clients (Claude, IDEs, agents) over the MCP Streamable HTTP
+transport. You need it when you want those clients to reach your
+tools alongside your other routes, on the same Livery service.
 
-You want to expose tools, resources, and prompts to MCP clients
-(Claude, IDEs, agents) over the MCP Streamable HTTP transport,
-served by your Livery service alongside your other routes.
+## Mount the handler
 
-## Solution
-
-`livery_mcp:handler/1` bridges Livery to the `barrel_mcp` protocol
-engine. Livery owns the wire (H1/H2/H3, router, middleware); the
-engine handles the MCP protocol (POST requests, GET SSE streams,
-DELETE session termination). Mount it at `/mcp`:
+The handler bridges Livery to the `barrel_mcp` protocol engine.
+Livery owns the wire (H1/H2/H3, router, middleware); the engine
+handles the MCP protocol (POST requests, GET SSE streams, DELETE
+session termination). Mount it at `/mcp`:
 
 ```erlang
 Mcp = livery_mcp:handler(#{session_enabled => true}),
@@ -45,7 +44,7 @@ ok = barrel_mcp:reg_tool(<<"echo">>, my_tools, echo, #{
 echo(#{<<"value">> := V}) -> <<"echo: ", V/binary>>.
 ```
 
-The `barrel_mcp` application is started automatically as a Livery
+The `barrel_mcp` application starts automatically as a Livery
 dependency, so the registry is ready once your release boots.
 
 ## Options

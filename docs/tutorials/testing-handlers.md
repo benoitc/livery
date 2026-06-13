@@ -1,8 +1,9 @@
 # Tutorial: Test your handlers
 
-Livery handlers are pure functions over a request value, so most
-tests do not need a socket. This tutorial covers the three test
-levels and when to use each.
+Livery handlers are pure functions over a request value, so most of
+your tests do not need a socket. In this tutorial you learn the four
+test levels and when to reach for each. It is for you once you have
+a handler or two and want to cover them well.
 
 ## Level 1: handler in isolation
 
@@ -51,9 +52,9 @@ The request spec map accepts any field of `#livery_req{}`:
 
 ## Level 3: through the per-request process
 
-Sometimes you want the request to run in its own process — to
-verify crash-to-500 mapping, or to read body messages from the
-adapter's mailbox. Use `livery_req_proc:start_link/1`.
+Sometimes you want the request to run in its own process, to verify
+crash-to-500 mapping, or to read body messages from the adapter's
+mailbox. Use `livery_req_proc:start_link/1`.
 
 ```erlang
 handler_crash_returns_500_test() ->

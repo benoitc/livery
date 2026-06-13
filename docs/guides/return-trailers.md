@@ -1,11 +1,14 @@
 # How to return trailers
 
-## Problem
+Trailers are response headers sent after the body (HTTP/1.1
+chunked-trailers, HTTP/2 and HTTP/3 trailer frames). You need them
+when a value is only known once the body has been produced, such as
+a checksum over the bytes you streamed.
 
-You need to emit response trailers (HTTP/1.1 chunked-trailers,
-HTTP/2/3 trailer frames) after the body.
+## Attach trailers to a response
 
-## Solution
+Pass a list of `{Name, Value}` pairs to
+`livery_resp:with_trailers/2`:
 
 ```erlang
 fetch(_Req) ->
@@ -13,12 +16,11 @@ fetch(_Req) ->
     livery_resp:with_trailers([{<<"x-checksum">>, checksum()}], Resp).
 ```
 
-`livery_resp:with_trailers/2` accepts:
+## Compute a trailer lazily
 
-- a list of `{Name, Value}` pairs, computed up front
-- a fun `fun() -> [{Name, Value}]` evaluated lazily after the body
-  has been emitted (useful when the trailer depends on bytes that
-  have not been produced yet)
+When the trailer depends on bytes that have not been produced yet,
+pass a fun instead. Livery evaluates it after the body has been
+emitted:
 
 ```erlang
 livery_resp:with_trailers(
@@ -26,13 +28,14 @@ livery_resp:with_trailers(
     livery_resp:stream(200, [], Producer)).
 ```
 
-## Capability gate
+## Notes
 
-Trailers are always supported on HTTP/2 and HTTP/3. On HTTP/1.1
-they require chunked transfer encoding; the H1 adapter
-auto-promotes when trailers are present. Check the adapter's
-capabilities map (`c:livery_adapter:capabilities/1`) if your code
-must adapt by protocol.
+- Trailers are always supported on HTTP/2 and HTTP/3. On HTTP/1.1
+  they require chunked transfer encoding; the H1 adapter
+  auto-promotes when trailers are present.
+- Check the adapter's capabilities map
+  (`c:livery_adapter:capabilities/1`) if your code must adapt by
+  protocol.
 
 ## See also
 

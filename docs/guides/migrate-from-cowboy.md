@@ -1,9 +1,8 @@
 # How to migrate from Cowboy
 
-## Problem
-
-You have a service running on Cowboy and you want to move it to
-Livery, ideally without rewriting handlers from scratch.
+This guide maps Cowboy's request, routing, and streaming APIs onto their
+Livery counterparts. You need it when you have a service running on Cowboy
+and you want to move it to Livery without rewriting handlers from scratch.
 
 ## Mapping table
 
@@ -86,8 +85,8 @@ loop(Emit) ->
 
 The producer fun runs in the per-request process. It can `receive`
 between emits and hibernate during idle stretches the same way
-`cowboy_loop` does, with one function instead of a three-callback
-state machine.
+`cowboy_loop` does, with one function instead of a three-callback state
+machine.
 
 ### 3. Convert the access log stream handler
 
@@ -102,8 +101,8 @@ Stack = [
 ].
 ```
 
-`livery_access_log` emits one structured `logger` entry per
-request with method, path, status, duration, and request id.
+`livery_access_log` emits one structured `logger` entry per request with
+method, path, status, duration, and request id.
 
 ### 4. Convert the listener
 
@@ -127,9 +126,9 @@ Livery:
 }).
 ```
 
-The H1/H2/H3 adapters are wired, so the same handler set serves all
-three protocols from one `start_service/1` call. You can also drive
-handlers in EUnit through `livery_test_adapter:run/3`.
+The H1/H2/H3 adapters are wired, so the same handler set serves all three
+protocols from one `start_service/1` call. You can also drive handlers in
+EUnit through `livery_test_adapter:run/3`.
 
 ## Validated against Cowboy
 
@@ -145,13 +144,13 @@ give you. The mappings in this guide are enforced by that suite.
 ## Cowboy concepts that do not move
 
 - `cowboy_rest`: there is no equivalent. Use plain handlers with
-  `livery_ext` extractors. A REST helper module is not on the
-  current roadmap.
-- `cowboy_req:cast/2`: not needed. The request process owns its
-  state; send a message to `livery_req:engine_pid/1` or use
-  application-level pub/sub.
-- `cowboy_stream` custom handlers: replaced by middleware. There is
-  no second extension point.
+  `livery_ext` extractors. A REST helper module is not on the current
+  roadmap.
+- `cowboy_req:cast/2`: not needed. The request process owns its state;
+  send a message to `livery_req:engine_pid/1` or use application-level
+  pub/sub.
+- `cowboy_stream` custom handlers: replaced by middleware. There is no
+  second extension point.
 
 ## See also
 

@@ -1,23 +1,21 @@
 # How to bind to a specific address or IPv6
 
-## Problem
+By default a listener binds the IPv4 wildcard, accepting connections on
+every interface. You need these options when you want to pin a listener
+to one address, or serve over IPv6.
 
-By default a listener binds the IPv4 wildcard, accepting connections
-on every interface. You want to pin it to one address, or serve over
-IPv6.
-
-## Solution
+## Set the bind options
 
 Every listener accepts two options, on `start_service/1`,
 `start_listener/2`, and each adapter's `start/1`:
 
-- `ip => inet:ip_address()` - the bind address. An IPv6 8-tuple
-  selects the IPv6 family automatically.
-- `inet6 => true` - bind the IPv6 wildcard (`::`) when you do not
-  want to name a specific address.
+- `ip => inet:ip_address()`: the bind address. An IPv6 8-tuple selects
+  the IPv6 family automatically.
+- `inet6 => true`: bind the IPv6 wildcard (`::`) when you do not want to
+  name a specific address.
 
-They work the same across all three protocols (HTTP/1.1, HTTP/2,
-and HTTP/3 over QUIC).
+They work the same across all three protocols (HTTP/1.1, HTTP/2, and
+HTTP/3 over QUIC).
 
 ### What the protocol keys mean
 
@@ -226,7 +224,7 @@ The bind options (`ip`, `inet6`) are independent of these: they decide
 *where* the listener accepts connections, while `handler` and `stack`
 decide *what happens* to each request.
 
-## Dual-stack vs IPv6-only
+## Choose dual-stack or IPv6-only
 
 Binding `inet6` gives you whatever the OS default for v6 sockets is.
 On most systems that is dual-stack (the socket also accepts IPv4 via
@@ -240,7 +238,7 @@ the underlying socket option through the adapter's lower-level opts:
 To serve both families predictably, start one listener per family on
 the same port.
 
-## WebSockets and WebTransport
+## Upgrade WebSockets and WebTransport
 
 There is nothing extra to configure. WebSockets (HTTP Upgrade on
 HTTP/1.1, extended CONNECT on HTTP/2 and HTTP/3) and WebTransport

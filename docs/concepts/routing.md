@@ -1,9 +1,11 @@
 # Routing
 
-A router maps a method and a path to a handler. You give Livery a flat
-list of routes, it compiles them into a radix trie once, and from then
-on each request is matched to its handler in time proportional to the
-path depth, not the number of routes.
+This page explains how Livery turns a method and a path into a handler,
+and the few rules that govern matching. Read it when your service grows
+past a handful of endpoints. A router maps a method and a path to a
+handler: you give Livery a flat list of routes, it compiles them into a
+radix trie once, and from then on each request is matched to its handler
+in time proportional to the path depth, not the number of routes.
 
 ## When you want a router
 

@@ -1,17 +1,17 @@
 # How to share config across handlers
 
-## Problem
+`config` is one value, set once at startup, that every request can
+read. You need it when your handlers all want the same things: a
+database pool, a cache, settings you read at boot. It saves you
+from capturing them in a closure for every handler, reaching for a
+global, or smuggling them through the per-request `meta` map (which
+is really for per-request scratch).
 
-Your handlers all need the same things: a database pool, a cache, some
-settings you read at boot. You do not want to capture them in a closure
-for every handler, reach for a global, or smuggle them through the
-per-request `meta` map (which is really for per-request scratch). You
-want one value, set once at startup, that any handler can read.
+## Pass config at startup
 
-## Solution
-
-Pass `config` when you start the service. It is whatever you like, most
-often a map of handles, and the same value reaches every request:
+Pass `config` when you start the service. It is whatever you like,
+most often a map of handles, and the same value reaches every
+request:
 
 ```erlang
 {ok, Pid} = livery:start_service(#{
@@ -21,7 +21,9 @@ often a map of handles, and the same value reaches every request:
 }).
 ```
 
-A handler reads it with `livery_req:config/1` for the whole value:
+## Read it in a handler
+
+Use `livery_req:config/1` for the whole value:
 
 ```erlang
 list_users(Req) ->
@@ -45,10 +47,10 @@ call(Req, Next, _Opts) ->
     enforce(Limiter, Req, Next).
 ```
 
-## A record, if you prefer
+## Use a record, if you prefer
 
-Config is any term, so a record gives you a little more discipline than
-a map:
+Config is any term, so a record gives you a little more discipline
+than a map:
 
 ```erlang
 %% -record(app, {db, cache}).
@@ -57,7 +59,7 @@ show(Req) ->
     livery_resp:json(200, fetch(App#app.db)).
 ```
 
-## A single listener, or one config per listener
+## Set config on a single listener
 
 `livery:start_listener/2` takes `config` the same way:
 
@@ -67,28 +69,27 @@ show(Req) ->
 }).
 ```
 
-And a `config` inside one protocol's map on `start_service/1` overrides
+A `config` inside one protocol's map on `start_service/1` overrides
 the service-wide one for that listener, handy when, say, your TLS
 endpoint should point at a different pool.
 
-## config vs meta
+## Test with config in the spec
 
-Two different jobs, easy to mix up:
-
-- **`config`** is service-wide and set at startup: the same value for
-  every request, read-only. Use it for shared handles and settings.
-- **`meta`** is per-request scratch a middleware writes for this one
-  request, like the authenticated user or a trace id. See
-  [Write a custom middleware](custom-middleware.md).
-
-## Testing
-
-Handlers stay testable with no socket: put `config` in the request spec.
+Handlers stay testable with no socket: put `config` in the request
+spec.
 
 ```erlang
 Cap = livery_test_adapter:run([], fun my_app:list_users/1,
     #{method => <<"GET">>, config => #{db => FakeDb}}).
 ```
+
+## Notes
+
+- `config` is service-wide and set at startup: the same value for
+  every request, read-only. Use it for shared handles and settings.
+- `meta` is per-request scratch a middleware writes for this one
+  request, like the authenticated user or a trace id. See
+  [Write a custom middleware](custom-middleware.md).
 
 ## See also
 

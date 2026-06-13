@@ -1,15 +1,15 @@
 # How to limit concurrency (load-shedding)
 
-## Problem
+`livery_concurrency` is a middleware that caps the number of in-flight
+requests and sheds the overflow with `503`. You need it when a traffic
+spike can pile up more requests than your workers (or a downstream model)
+can handle, and you would rather drop the excess than let the service
+collapse.
 
-A traffic spike can pile up more in-flight requests than your workers
-(or a downstream model) can handle. You want to cap concurrency and shed
-the overflow with `503` instead of collapsing.
+## Add it to the stack
 
-## Solution
-
-Add `livery_concurrency` to the stack, built with the `limiter/1`
-factory (which creates the shared counter once):
+Build the limiter with the `limiter/1` factory, which creates the shared
+counter once, and put it in your stack:
 
 ```erlang
 Stack = [
@@ -18,12 +18,12 @@ Stack = [
 ].
 ```
 
-While at or under the limit the request proceeds; over the limit it is
+While at or under the limit the request proceeds. Over the limit it is
 shed immediately with `503 Service Unavailable` and the handler is never
 called. The counter is a lock-free `atomics` cell shared across request
 processes, so there is no extra process and no lock.
 
-## Options
+## Change the response
 
 ```erlang
 livery_concurrency:limiter(500, #{
@@ -33,7 +33,7 @@ livery_concurrency:limiter(500, #{
 })
 ```
 
-## Global vs per-route
+## Use global and per-route limits
 
 `limiter/1,2` returns a State carrying its own counter, so each call is
 an independent limiter:
@@ -46,7 +46,7 @@ ServiceStack = [{livery_concurrency, livery_concurrency:limiter(2000)}],
 InferStack = [{livery_concurrency, livery_concurrency:limiter(8)} | Common].
 ```
 
-## Scope and caveats
+## Notes
 
 - A slot is held from admission until the handler RETURNS its response.
   Body streaming runs after that (outside the middleware stack), so the
@@ -61,5 +61,5 @@ InferStack = [{livery_concurrency, livery_concurrency:limiter(8)} | Common].
 ## See also
 
 - Reference: `livery_concurrency`
-- Recipe: [Add per-request deadlines](add-deadlines.md)
-- Recipe: [Cap request body size](cap-body-size.md)
+- Guide: [Add per-request deadlines](add-deadlines.md)
+- Guide: [Cap request body size](cap-body-size.md)

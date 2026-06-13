@@ -1,12 +1,11 @@
 # How to propagate request IDs
 
-## Problem
+`livery_request_id` gives every request a stable id that appears in
+logs and on the response, and that clients can pin to track work
+across services. You need it as soon as a request crosses more than
+one log line or one service.
 
-Every request should carry a stable id that appears in logs and
-on the response, and that clients can pin to track work
-across services.
-
-## Solution
+## Add it to the stack
 
 ```erlang
 Stack = [
@@ -44,16 +43,16 @@ my_handler(Req) ->
 ```
 
 When the downstream service also runs Livery with
-`livery_request_id`, it will honor the value and keep the chain
+`livery_request_id`, it honors the value and keeps the chain
 consistent.
 
 ## Place it first
 
 `livery_request_id` should be the outermost entry in the stack so
-every response — including ones produced by short-circuiting
-middleware below it — carries the id.
+every response carries the id, including ones produced by
+short-circuiting middleware below it.
 
 ## See also
 
 - Reference: `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`
-- Recipe: [Log every request](log-requests.md)
+- Guide: [Log every request](log-requests.md)

@@ -1,11 +1,10 @@
 # How to extract a bearer token
 
-## Problem
+`livery_ext:bearer_token/1` reads the bearer token from the
+`Authorization` header. You need it when a handler or auth middleware
+has to pull the token out before verifying it.
 
-Your handler or auth middleware needs the bearer token from the
-`Authorization` header.
-
-## Solution
+## Read the token
 
 ```erlang
 case livery_ext:bearer_token(Req) of
@@ -47,10 +46,10 @@ verify(_Token) -> {ok, #{}}.
 Place it in the stack after `livery_request_id` and
 `livery_access_log` so the audit log records the failed attempt.
 
-## Non-bearer schemes
+## Handle non-bearer schemes
 
-`livery_ext:bearer_token/1` only matches the bearer scheme. For
-Basic auth, read the header directly and decode:
+`livery_ext:bearer_token/1` only matches the bearer scheme. For Basic
+auth, read the header directly and decode:
 
 ```erlang
 case livery_req:header(<<"authorization">>, Req) of
@@ -59,9 +58,11 @@ case livery_req:header(<<"authorization">>, Req) of
 end.
 ```
 
-OIDC, JWKS rotation, and JWT verification ship as `livery_auth`.
+## Notes
+
+- OIDC, JWKS rotation, and JWT verification ship as `livery_auth`.
 
 ## See also
 
 - Reference: `livery_ext`
-- Recipe: [Write a custom middleware](custom-middleware.md)
+- Guide: [Write a custom middleware](custom-middleware.md)

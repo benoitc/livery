@@ -1,11 +1,10 @@
 # How to parse a JSON body
 
-## Problem
+`livery_ext:json/1` decodes a JSON request body into an Erlang term.
+You need it when a handler accepts a JSON-encoded body and wants the
+decoded value.
 
-Your handler accepts a JSON-encoded request body and needs the
-decoded term.
-
-## Solution
+## Decode the body
 
 ```erlang
 create_user(Req) ->
@@ -24,10 +23,10 @@ create_user(Req) ->
     end.
 ```
 
-`livery_ext:json/1` returns `{ok, Term}` or `{error, Reason}`. It
-uses the OTP `json` module (OTP 27+).
+`livery_ext:json/1` returns `{ok, Term}` or `{error, Reason}`. It uses
+the OTP `json` module (OTP 27+).
 
-## Body must be buffered
+## Buffer a streaming body first
 
 JSON extraction requires the body to be in
 `#livery_req{body = {buffered, _}}` form. Streaming bodies must be
@@ -40,8 +39,8 @@ Req1 = livery_req:set_body({buffered, Bytes}, Req),
 {ok, Term} = livery_ext:json(Req1).
 ```
 
-The H1/H2/H3 adapters can be configured to buffer up to a
-per-route threshold automatically.
+The H1/H2/H3 adapters can be configured to buffer up to a per-route
+threshold automatically.
 
 ## Cap the size first
 
@@ -58,5 +57,5 @@ Stack = [
 ## See also
 
 - Reference: `livery_ext`
-- Recipe: [Cap request body size](cap-body-size.md)
-- Recipe: [Read a streaming request body](read-streaming-body.md)
+- Guide: [Cap request body size](cap-body-size.md)
+- Guide: [Read a streaming request body](read-streaming-body.md)

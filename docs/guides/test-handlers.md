@@ -1,14 +1,11 @@
 # How to test handlers without a socket
 
-## Problem
-
-You want fast unit tests for a handler or a stack, without binding
-ports, without HTTP clients, without docker.
-
-## Solution
-
 `livery_test_adapter:run/3` runs a synthetic request through a
-stack and handler and captures the emitted response.
+stack and handler and captures the emitted response. You need it
+when you want fast unit tests for a handler or a stack, without
+binding ports, without HTTP clients, without docker.
+
+## Run a request through a handler
 
 ```erlang
 ok_test() ->
@@ -51,7 +48,7 @@ over `h1`.
 | `livery_test_adapter:reset_reason/1` | reset reason if the stream was aborted |
 | `livery_test_adapter:end_stream/1` | boolean, true after the final frame |
 
-## When run/3 is not enough
+## Spawn a worker when run/3 is not enough
 
 Spawn through `livery_req_proc` if you need the per-request worker
 semantics: 500-on-crash, body-message routing via mailbox,

@@ -1,16 +1,14 @@
 # How to use signed session cookies
 
-## Problem
-
-You want to keep a small amount of per-user state (a user id, a
-role) across requests without a server-side session store.
-
-## Solution
-
 `livery_auth_session` signs a JSON payload with HMAC-SHA256 and
-stores it in a cookie. The payload travels with the client; the
-signature stops it being tampered with. Add the middleware with a
-shared `secret`:
+stores it in a cookie. You need it when you want to keep a small
+amount of per-user state (a user id, a role) across requests
+without a server-side session store. The payload travels with the
+client; the signature stops it being tampered with.
+
+## Add it to the stack
+
+Add the middleware with a shared `secret`:
 
 ```erlang
 Stack = [
@@ -20,7 +18,8 @@ Stack = [
 ```
 
 On each request the middleware reads the cookie, verifies it, and
-stores the payload under `meta(session, _)`. Read it in a handler:
+stores the payload under `meta(session, _)`. Read it in a handler
+with `livery_ext:session/1`:
 
 ```erlang
 fun(Req) ->
@@ -73,4 +72,4 @@ logout(_Req) ->
 ## See also
 
 - Reference: `livery_auth_session`, `livery_ext`
-- Recipe: [Extract a bearer token](bearer-tokens.md)
+- Guide: [Extract a bearer token](bearer-tokens.md)

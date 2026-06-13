@@ -1,10 +1,11 @@
 # Request lifecycle
 
 This page follows one request from the moment it lands on a listener to
-the moment its response is on the wire. Knowing this path explains the
-two things that surprise people coming from other frameworks: why a
-handler may block freely, and why a handler crash never takes the server
-down.
+the moment its response is on the wire. Read it when you want to know
+where your code runs, or when something about timing or crashes
+surprises you. The path explains the two things that catch people coming
+from other frameworks: why a handler may block freely, and why a handler
+crash never takes the server down.
 
 The short version: **every request gets its own process.** The adapter
 spawns a worker, the worker runs your middleware and handler, and it

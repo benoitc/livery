@@ -1,8 +1,10 @@
 # Tutorial: Your first service
 
-In this tutorial you will build a small REST handler set, exercise
-it end-to-end through `livery_test_adapter`, and understand the
-shape of a Livery handler. No socket is involved. About 10 minutes.
+In this tutorial you build a small REST handler set, exercise it
+end-to-end through `livery_test_adapter`, and learn the shape of a
+Livery handler. No socket is involved, so this is the right starting
+point if you have never written a Livery handler before. About 10
+minutes.
 
 ## What you will build
 

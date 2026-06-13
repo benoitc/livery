@@ -1,10 +1,10 @@
 # How to read query string parameters
 
-## Problem
+`livery_ext:query/2` reads a value from the request URL's query string.
+You need it whenever a handler depends on parameters like `?q=...` or
+`?page=...`.
 
-You need a query string value from the request URL.
-
-## Solution
+## Read a parameter
 
 ```erlang
 search(Req) ->
@@ -16,7 +16,7 @@ search(Req) ->
 `livery_ext:query/2` returns the first value for the key, or
 `undefined` if it is missing.
 
-## Default values
+## Apply a default value
 
 Wrap with a fallback:
 
@@ -27,7 +27,7 @@ Page = case livery_ext:query(<<"page">>, Req) of
 end.
 ```
 
-## Integer values
+## Convert to an integer
 
 `livery_ext:query/2` always returns a binary. Convert at the call
 site:
@@ -36,7 +36,7 @@ site:
 PageInt = try binary_to_integer(Page) catch _:_ -> 1 end.
 ```
 
-## URL-decoded
+## URL-decoded values
 
 Values are URL-decoded:
 
@@ -46,11 +46,12 @@ Values are URL-decoded:
 <<"100%">>        = livery_ext:query(<<"unit">>, Req).
 ```
 
-## Multiple values for the same key
+## Notes
 
-Today `livery_ext:query/2` returns only the first. To read all
-values, call `livery_req:query/1` to get the raw query string and
-parse it yourself, or open an issue if you need this in `livery_ext`.
+- `livery_ext:query/2` returns only the first value for a repeated
+  key. To read all values, call `livery_req:query/1` to get the raw
+  query string and parse it yourself, or open an issue if you need
+  this in `livery_ext`.
 
 ## See also
 

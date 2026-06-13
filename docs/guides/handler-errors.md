@@ -1,14 +1,11 @@
 # How to catch handler errors
 
-## Problem
+When a handler crashes (`error(badmatch)`, `throw(_)`, division by
+zero, etc.) you want a controlled response instead of a propagating
+exit. Wrap the rest of the stack with `livery_middleware:wrap/1` and
+turn each class of failure into the response shape you want.
 
-A handler crashes (`error(badmatch)`, `throw(_)`, division by zero,
-etc.) and you want a controlled response instead of a propagating
-exit.
-
-## Solution
-
-Wrap the rest of the stack with `livery_middleware:wrap/1`:
+## Wrap the stack
 
 ```erlang
 Stack = [
@@ -29,15 +26,15 @@ errors_to_resp(_Class, _Reason, _Stack) ->
 The wrapper catches `throw`, `error`, and `exit` from anything
 downstream. `Class` is `throw | error | exit`.
 
-## Without a wrapper
+## Rely on the default without a wrapper
 
 When a handler runs inside `livery_req_proc` (the worker the H1/H2/H3
 adapters spawn), a crash is automatically mapped to
-`livery_resp:text(500, <<"internal server error">>)`. The wrapper
-is for when you want a custom shape (validation errors as 400,
-business errors as 422, etc.).
+`livery_resp:text(500, <<"internal server error">>)`. The wrapper is
+for when you want a custom shape (validation errors as 400, business
+errors as 422, etc.).
 
-## In tests
+## Catch errors in tests
 
 `livery_test_adapter:run/3` runs synchronously. Without a wrapper a
 crash propagates up through the test process. Either:
@@ -46,7 +43,7 @@ crash propagates up through the test process. Either:
 - Drive through `livery_req_proc:start_link/1` to exercise the
   default 500 mapping.
 
-## Domain exceptions as control flow
+## Use domain exceptions as control flow
 
 Throw to short-circuit from deep inside the call tree:
 

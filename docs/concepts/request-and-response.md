@@ -1,11 +1,13 @@
 # Request and response model
 
-A handler in Livery is a plain function: it takes one request value and
-returns one response value. No mutable request object, no response handle
-you write into, no `init/2` and reply tuple. One value in, one value out.
-That is the whole model, and it is why handlers are trivial to test (you
-build a request, you check the response) and safe to pass between
-processes.
+This page explains how Livery models a request and a response, and why
+that model is shaped the way it is. Read it once early: most of what you
+write touches these two values. A handler in Livery is a plain function:
+it takes one request value and returns one response value. No mutable
+request object, no response handle you write into, no `init/2` and reply
+tuple. One value in, one value out. That is the whole model, and it is
+why handlers are easy to test (you build a request, you check the
+response) and safe to pass between processes.
 
 ```erlang
 greet(Req) ->

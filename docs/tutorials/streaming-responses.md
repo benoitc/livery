@@ -1,7 +1,9 @@
 # Tutorial: Stream a response
 
-Build three streaming endpoints: chunked bytes, Server-Sent Events,
-and a long-running progress feed driven by a separate process.
+In this tutorial you build three streaming endpoints: chunked
+bytes, Server-Sent Events, and a long-running progress feed driven
+by a separate process. It is for you once you can write a plain
+handler and want to send a body that does not fit in one buffer.
 About 10 minutes.
 
 ## 1. Chunked bytes
@@ -75,8 +77,8 @@ is exactly that, a process.
 
 This is the Livery replacement for Cowboy's `cowboy_loop` callback
 shape. There is no `init/2`/`info/3`/`terminate/3` triad: the
-streaming handler is just a fun that drives `Emit` until it has
-nothing more to say.
+streaming handler is a fun that drives `Emit` until it has nothing
+more to say.
 
 ## 4. Detecting client disconnect
 
@@ -100,6 +102,6 @@ adapters surface peer disconnect through this return value.
 
 ## Next steps
 
-- Recipe: [Return Server-Sent Events](../guides/server-sent-events.md)
-- Recipe: [Return a streaming response](../guides/stream-chunked.md)
+- Guide: [Return Server-Sent Events](../guides/server-sent-events.md)
+- Guide: [Return a streaming response](../guides/stream-chunked.md)
 - Concepts: [Streaming and backpressure](../concepts/streaming-and-backpressure.md)

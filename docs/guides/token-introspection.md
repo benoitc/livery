@@ -1,18 +1,16 @@
 # How to verify opaque tokens with introspection
 
-## Problem
+`livery_auth_introspect` POSTs a token to the authorization
+server's introspection endpoint and trusts the `active` field of
+the JSON response (RFC 7662). You need it when your bearer tokens
+are opaque reference tokens, not self-contained JWTs, so you cannot
+verify them locally.
 
-Your bearer tokens are opaque reference tokens, not self-contained
-JWTs, so you cannot verify them locally. You need to ask the
-authorization server whether a token is still valid (RFC 7662).
+## Add it to the stack
 
-## Solution
-
-`livery_auth_introspect` POSTs the token to the introspection
-endpoint, authenticates this resource server with HTTP Basic, and
-trusts the `active` field of the JSON response. On success the
-response (with `scope`, `sub`, `exp`, ...) is stored under
-`meta(user, _)`:
+The middleware authenticates this resource server with HTTP Basic.
+On success the response (with `scope`, `sub`, `exp`, ...) is stored
+under `meta(user, _)`:
 
 ```erlang
 Stack = [
@@ -38,7 +36,7 @@ A missing token is rejected with `401` unless `required => false`.
 An inactive token (or any transport/decoding failure) is always
 rejected with `401` and a `WWW-Authenticate: Bearer` header.
 
-## JWT vs. introspection
+## Choose JWT or introspection
 
 | Token kind | Use |
 |---|---|
@@ -48,7 +46,7 @@ rejected with `401` and a `WWW-Authenticate: Bearer` header.
 Introspection adds a network call per request. Cache results in
 your own layer if the round trip is too costly.
 
-## Custom HTTP client
+## Plug in a custom HTTP client
 
 The call is pluggable. Pass `fetch => fun((Url, Headers, Body) ->
 {ok, Status, Body} | {error, _})` to use your own client or to
@@ -62,4 +60,4 @@ test without a network:
 ## See also
 
 - Reference: `livery_auth_introspect`, `livery_ext`
-- Recipe: [Extract a bearer token](bearer-tokens.md)
+- Guide: [Extract a bearer token](bearer-tokens.md)

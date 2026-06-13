@@ -1,11 +1,11 @@
 # How to parse form bodies and query strings
 
-## Problem
+`livery_ext` reads form fields and query parameters off the request.
+You need it when a handler accepts an
+`application/x-www-form-urlencoded` body, or when you want a parameter
+from the URL query string.
 
-You need the fields from an `application/x-www-form-urlencoded` request
-body, or the parameters from the URL query string.
-
-## Query string
+## Read a query parameter
 
 `livery_ext:query/2` pulls a single decoded parameter from the request
 URI:
@@ -16,7 +16,7 @@ search(Req) ->
     ...
 ```
 
-## Form body (urlencoded)
+## Read a form body (urlencoded)
 
 If the body is already buffered, `livery_ext:form/1` decodes it
 directly. Since adapters stream bodies by default, use `read_form/1,2`,
@@ -35,17 +35,19 @@ submit(Req) ->
     end.
 ```
 
-The `Content-Type` check is case-insensitive and tolerates parameters
-(`Application/X-WWW-Form-Urlencoded; charset=utf-8`). Cap the body with
-`#{max_size => Bytes}` (default 1 MiB) and the per-read wait with
-`#{timeout => Ms}`.
+Cap the body with `#{max_size => Bytes}` (default 1 MiB) and the
+per-read wait with `#{timeout => Ms}`.
 
-Decoding handles `%XX` escapes and `+` as space. A malformed escape
-(`%ZZ`) is kept verbatim rather than failing the whole body, matching
-`form/1`.
+## Notes
+
+- The `Content-Type` check is case-insensitive and tolerates
+  parameters (`Application/X-WWW-Form-Urlencoded; charset=utf-8`).
+- Decoding handles `%XX` escapes and `+` as space. A malformed escape
+  (`%ZZ`) is kept verbatim rather than failing the whole body,
+  matching `form/1`.
 
 ## See also
 
 - Reference: `livery_ext`
-- Recipe: [Handle file uploads](handle-file-uploads.md)
-- Recipe: [Read query strings](read-query-strings.md)
+- Guide: [Handle file uploads](handle-file-uploads.md)
+- Guide: [Read query strings](read-query-strings.md)

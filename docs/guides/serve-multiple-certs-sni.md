@@ -1,15 +1,13 @@
 # How to serve several certificates by hostname (SNI)
 
-## Problem
-
-One listener, several hostnames, a different certificate for each.
 When a client opens a TLS (or QUIC) connection it sends the hostname
 it is asking for in the ClientHello, as the Server Name Indication
-(SNI, RFC 6066). You want to look at that name and hand back the
-matching certificate, instead of pinning the listener to a single
-`cert`/`key` pair.
+(SNI, RFC 6066). You need SNI when one listener serves several
+hostnames and each one has a different certificate: you look at that
+name and hand back the matching certificate, instead of pinning the
+listener to a single `cert`/`key` pair.
 
-## Solution
+## Install a per-hostname callback
 
 Every TLS-bearing adapter lets you install a callback that runs once
 per connection, receives the SNI, and returns the certificate to
@@ -27,7 +25,7 @@ that override the defaults for that handshake. On `http3` the callback
 returns `{ok, #{cert := Der, key := Key}}` (with an optional
 `cert_chain => [Der]`), or `{error, Reason}` to refuse the handshake.
 
-### HTTP/1.1 and HTTP/2
+## HTTP/1.1 and HTTP/2
 
 `ssl_opts` is a passthrough to `ssl:listen/2`: whatever you put there
 is merged on top of the listener's own TLS defaults, so your options
@@ -60,7 +58,7 @@ Erlang's `ssl` hands to `sni_fun`. Keep the listener's `cert`/`key`:
 they are the fallback for clients that send no SNI, or a name your
 callback does not recognise.
 
-### HTTP/3 (QUIC)
+## HTTP/3 (QUIC)
 
 QUIC negotiates TLS inside its own transport, so it does not use
 `ssl_opts`. Pass `sni_callback` instead. It is called once per
@@ -94,7 +92,7 @@ malformed result, or a raised exception fails the handshake with a
 `handshake_failure` alert, so a missing host closes the connection
 rather than serving the wrong certificate.
 
-### The same certificates on every protocol
+## Share the same certificates on every protocol
 
 To serve one hostname over H1, H2, and H3, give each TLS adapter its
 own hook. The two callbacks differ only in their return shape (an

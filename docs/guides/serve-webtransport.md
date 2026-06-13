@@ -1,16 +1,13 @@
 # How to serve WebTransport
 
-## Problem
+`livery_wt:upgrade/3` accepts a WebTransport session (bidi/uni
+streams and datagrams) on an extended-CONNECT request and hands the
+stream to the `webtransport` library. You need it when a client
+wants a low-latency bidirectional channel over HTTP/3 (or HTTP/2),
+driven by a handler you implement (`webtransport_handler`
+behaviour).
 
-You want to accept WebTransport sessions (bidi/uni streams and
-datagrams) over HTTP/3 (or HTTP/2), served by your Livery handler.
-
-## Solution
-
-`livery_wt:upgrade/3` accepts a WebTransport session on an
-extended-CONNECT request and hands the stream to the
-`webtransport` library, driven by a handler you implement
-(`webtransport_handler` behaviour).
+## Advertise the settings and upgrade
 
 The listener must advertise the WebTransport settings. Merge
 `webtransport:h3_settings/0` (H3) or `webtransport:h2_settings/0`

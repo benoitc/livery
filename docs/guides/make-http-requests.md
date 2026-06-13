@@ -1,15 +1,14 @@
 # How to make outbound HTTP requests
 
-## Problem
+`livery_client` is the outbound twin of Livery's middleware: you stack
+layers around a request the same way you stack them around a handler. You
+need it when your service has to call other services (a payment API, an
+internal microservice, a webhook endpoint) and you want the same
+guarantees you put in front of your own handlers, a timeout, a few
+retries, a circuit breaker, a concurrency cap, without hand-rolling them
+around every call site.
 
-Your service has to call other services: a payment API, an internal
-microservice, a webhook endpoint. You want the same guarantees you put
-in front of your own handlers, a timeout, a few retries, a circuit
-breaker, a concurrency cap, without hand-rolling them around every call
-site. Livery's client is the outbound twin of its middleware: you stack
-layers around a request the same way you stack them around a handler.
-
-## Solution
+## Build a client and call it
 
 Build a client once, keep it around, and call it. The layers run
 outermost-first, and every call returns `{ok, Response}` or

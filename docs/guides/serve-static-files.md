@@ -1,16 +1,16 @@
 # How to serve static files
 
-## Problem
+`livery_static:handler/1,2` serves a directory of files (assets, a
+built SPA, downloads) over HTTP, with correct `Content-Type`,
+conditional GET, and `Range` support, and without exposing anything
+outside the directory. You need it when you want to ship a folder of
+files rather than write a handler per asset.
 
-You want to serve a directory of files (assets, a built SPA, downloads)
-over HTTP, with correct `Content-Type`, conditional GET, and `Range`
-support - without exposing anything outside the directory.
+## Mount it on a wildcard route
 
-## Solution
-
-Mount `livery_static:handler/1,2` on a router WILDCARD route. The `*path`
-segment captures the rest of the URL, which the handler maps to a file
-under the root:
+Mount the handler on a router wildcard route. The `*path` segment
+captures the rest of the URL, which the handler maps to a file under
+the root:
 
 ```erlang
 Router = livery_router:add(
@@ -22,7 +22,7 @@ Router = livery_router:add(
 `Content-Type: text/css`, an `ETag`, and (if the client sends `Range`)
 partial content.
 
-## Without the router
+## Serve it without the router
 
 If you are not using the router, configure a `prefix` to strip from the
 request path:
@@ -49,7 +49,7 @@ livery_static:handler("priv/assets", #{
 }).
 ```
 
-## Behavior
+## Behaviour
 
 - `Content-Type` is inferred from the file extension (text types get
   `; charset=utf-8`), defaulting to `application/octet-stream`.
@@ -62,16 +62,16 @@ livery_static:handler("priv/assets", #{
 - A directory request serves `index` if present, else `404` (no
   directory listing).
 
-## Security
+## Notes
 
-The sub-path is percent-decoded and then confined: any `..` segment,
-absolute path, control byte, or bad escape is rejected with `404`, so a
-request can never traverse out of the root. Only regular files are
-served - directories and symlinks yield `404` - so a symlink inside the
-root cannot be used to escape it.
+- The sub-path is percent-decoded and then confined: any `..` segment,
+  absolute path, control byte, or bad escape is rejected with `404`, so a
+  request can never traverse out of the root.
+- Only regular files are served (directories and symlinks yield `404`),
+  so a symlink inside the root cannot be used to escape it.
 
 ## See also
 
 - Reference: `livery_static`, `livery_resp` (`file/2,3`)
-- Recipe: [Add HTTP caching](http-caching.md)
-- Recipe: [Serve a file](serve-a-file.md)
+- Guide: [Add HTTP caching](http-caching.md)
+- Guide: [Serve a file](serve-a-file.md)

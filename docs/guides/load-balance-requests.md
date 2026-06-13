@@ -1,17 +1,15 @@
 # How to load-balance outbound requests
 
-## Problem
+The `balance` layer spreads your outbound calls across a pool of
+endpoints, leans away from a slow replica, and stops sending to a dead
+one until it recovers. You need it when the service you call runs as
+several replicas and you want the client to do the balancing, with no
+separate proxy in front.
 
-The service you call runs as several replicas, and you want to spread
-your requests across them, lean away from a slow one, and stop sending to
-a dead one until it recovers. You do not want a separate proxy in front;
-you want the client to do it.
+## Add a balance layer
 
-## Solution
-
-Add a `balance` layer to the client. Instead of a `base_url`, you give it
-a pool of endpoints and pass paths; the layer picks an endpoint per
-request and supplies the host.
+Instead of a `base_url`, give the client a pool of endpoints and pass
+paths. The layer picks an endpoint per request and supplies the host.
 
 ```erlang
 Client = livery_client:new(#{
@@ -35,7 +33,7 @@ By default the layer uses power-of-two-choices: it samples two endpoints
 and sends to the one with fewer in-flight requests, which resists piling
 onto a slow node. Pass `policy => round_robin` for plain rotation.
 
-## Health: ejection and recovery
+## Tune ejection and recovery
 
 The balancer watches outcomes. An endpoint that fails `eject_after`
 times in a row (default 5) is ejected from the pool for `eject_for` ms
@@ -58,15 +56,15 @@ Recovery is lazy and safe: once the cooldown passes, the next request is
 leased as a single probe (an atomic compare-and-swap means only one
 caller probes, even under load). If it succeeds the endpoint rejoins; if
 it fails the endpoint stays out for another cooldown. Stack `retry` above
-`balance`, as shown, and that one probe failure is retried onto a healthy
-endpoint, invisibly to the caller.
+`balance`, as shown above, and that one probe failure is retried onto a
+healthy endpoint, invisibly to the caller.
 
 If every endpoint is ejected, a call returns `{error, no_endpoint}`.
 
-## Changing the pool at runtime
+## Change the pool at runtime
 
-A deploy adds a replica, or a node drains. Adjust the live pool without
-rebuilding the client:
+When a deploy adds a replica, or a node drains, adjust the live pool
+without rebuilding the client:
 
 ```erlang
 ok = livery_client:add_endpoint(users, <<"http://10.0.0.4:8080">>),
@@ -78,7 +76,7 @@ name shares it. The `endpoints` list seeds the pool once, on first use;
 after that your `add`/`remove` calls are authoritative and a later
 request will not bring a removed endpoint back.
 
-## Discovery
+## Resolve endpoints from discovery
 
 `endpoints` can be a `{Module, Arg}` pair naming a `livery_client_discover`
 provider instead of a fixed list. The shipped provider is static; a

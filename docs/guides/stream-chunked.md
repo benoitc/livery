@@ -1,14 +1,11 @@
 # How to return a streaming response
 
-## Problem
-
-You need to emit response body bytes incrementally rather than
-buffering the whole payload in memory.
-
-## Solution
-
 `livery_resp:stream/3` takes a status, headers, and a producer fun
-that drives chunk emission:
+that drives chunk emission. You need it when you want to emit
+response body bytes incrementally rather than buffering the whole
+payload in memory.
+
+## Stream from a file
 
 ```erlang
 download(_Req) ->
@@ -71,7 +68,7 @@ end.
 
 The test adapter always returns `ok`.
 
-## NDJSON
+## Stream NDJSON
 
 `livery_resp:ndjson/2` does the JSON encoding and the `\n` framing
 for you:
@@ -90,6 +87,6 @@ Each `Emit(Term)` calls `json:encode(Term)` and appends a literal
 
 ## See also
 
-- Recipe: [Return Server-Sent Events](server-sent-events.md)
+- Guide: [Return Server-Sent Events](server-sent-events.md)
 - Tutorial: [Stream a response](../tutorials/streaming-responses.md)
 - Concepts: [Streaming and backpressure](../concepts/streaming-and-backpressure.md)

@@ -1,11 +1,11 @@
 # How to return Server-Sent Events
 
-## Problem
+`livery_resp:sse/2` streams `text/event-stream` framing to the
+client. You need it when your client uses the EventSource API (or
+any RFC 8895 compatible consumer) and expects a one-way stream of
+events over a long-lived response.
 
-Your client uses the EventSource API (or any RFC 8895 compatible
-consumer) and expects `text/event-stream` framing.
-
-## Solution
+## Stream events
 
 ```erlang
 events(_Req) ->
@@ -20,7 +20,7 @@ events(_Req) ->
 `cache-control: no-cache`. The producer fun runs in the per-request
 process and drives `Emit` with one event at a time.
 
-## Event shape
+## Shape an event
 
 `Emit` accepts:
 
@@ -50,13 +50,13 @@ Emit(<<"plain">>).
 
 Multi-line data is fine: pass an iolist whose bytes contain `\n`
 and Livery emits each line with its own `data:` prefix when you use
-the helper. For multi-line, use `iolist` of lines:
+the helper. For multi-line, use an `iolist` of lines:
 
 ```erlang
 Emit(#{data => [<<"line 1">>, <<"\nline 2">>]}).
 ```
 
-## Heartbeats
+## Keep idle connections alive
 
 To keep idle connections alive through proxies, emit a comment line
 periodically (a line beginning with `:`):
@@ -71,11 +71,11 @@ loop(Emit) ->
     end.
 ```
 
-## Disconnect detection
+## Detect a disconnect
 
 `Emit` returns `{error, closed}` once the client disconnects (the
 H1/H2/H3 adapters surface this; the test adapter always returns
-`ok`).
+`ok`):
 
 ```erlang
 loop(Emit) ->
@@ -89,5 +89,5 @@ loop(Emit) ->
 
 ## See also
 
-- Recipe: [Return a streaming response](stream-chunked.md)
+- Guide: [Return a streaming response](stream-chunked.md)
 - Tutorial: [Stream a response](../tutorials/streaming-responses.md)

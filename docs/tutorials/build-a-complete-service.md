@@ -1,25 +1,25 @@
 # Tutorial: Build a complete service
 
-The other tutorials keep things small and run everything through the
-in-memory test adapter. This one is the big tour. We start a real
-service that listens on a socket, and we walk the whole path together:
-routing, middleware, reading requests and writing responses, streaming,
-WebSockets, serving three protocols at once, shutting down gracefully,
-and finally writing your own adapter. Take your time; it is a longer
-read, maybe twenty-five minutes, and worth it.
+In this tutorial you start a real service that listens on a socket
+and walk the whole path: routing, middleware, reading requests and
+writing responses, streaming, WebSockets, serving three protocols at
+once, shutting down gracefully, and writing your own adapter. It is
+for you once the smaller tutorials feel familiar and you want to see
+the pieces fit together. Take your time; it is a longer read, maybe
+twenty-five minutes.
 
 Every step has a companion in `examples/livery_example_complete.erl`, so
 you can run the finished thing while you read, and in
 `examples/livery_example_adapter.erl` for the adapter at the end.
 
-## 1. The app we will build
+## 1. The app you will build
 
-A tiny notes service. We keep notes in an ETS table and expose them over
-HTTP: list them, create one, fetch one, delete one. Then we add a live
-events feed and a WebSocket echo on top. Nothing fancy, but it touches
-every part of Livery you will reach for in a real service.
+A tiny notes service. You keep notes in an ETS table and expose them
+over HTTP: list them, create one, fetch one, delete one. Then you add a
+live events feed and a WebSocket echo on top. It touches every part of
+Livery you will reach for in a real service.
 
-Let us run it first, so you know where we are going:
+Run it first, so you know where you are going:
 
 ```
 rebar3 as examples shell
@@ -39,7 +39,7 @@ curl -XDELETE http://127.0.0.1:8080/notes/1
 ```
 
 When you are done, `livery_example_complete:stop(Pid)` puts everything
-away. Now let us build it from scratch.
+away. Now build it from scratch.
 
 ## 2. Start a service
 
@@ -58,18 +58,18 @@ start(Port) ->
 ```
 
 That is the whole startup. The `http` key asks for an HTTP/1.1 listener
-on `Port`; `router` and `middleware` we define in the next sections. You
+on `Port`; `router` and `middleware` you define in the next sections. You
 get back `{ok, Pid}`, and `livery:stop_service(Pid)` later stops it.
 
 If you only ever want one protocol, `livery:start_listener/2` gives you a
 single adapter directly, for example
 `livery:start_listener(livery_h1, Opts)`. The service is the friendlier
 choice when you want several protocols sharing one set of handlers, which
-is exactly where we are headed in section 8.
+is exactly where you are headed in section 8.
 
 ## 3. Routing
 
-A router maps a method and a path to a handler. We compile a list of
+A router maps a method and a path to a handler. You compile a list of
 routes once, at startup:
 
 ```erlang
@@ -95,15 +95,15 @@ show_note(Req) ->
 ```
 
 A handler is `{Module, Function}` or a plain `fun((Req) -> Resp)`. The
-fourth element of a route, when present, is its `Meta`; we use it here to
+fourth element of a route, when present, is its `Meta`; you use it here to
 attach a per-route middleware, which section 5 comes back to. For the full
 matching rules, see [Routing](../concepts/routing.md).
 
 ## 4. Request and response
 
-Handlers in Livery are refreshingly boring: one request value in, one
-response value out, no socket in sight. You read what you need from the
-request, and you build a response with the `livery_resp` helpers.
+Handlers in Livery are plain: one request value in, one response value
+out, no socket in sight. You read what you need from the request, and you
+build a response with the `livery_resp` helpers.
 
 Reading the body deserves a word. The socket adapters hand you the body as
 a stream, so you read it to the end before you decode it:
@@ -125,7 +125,7 @@ decode_body(Req) ->
     end.
 ```
 
-We accept `{buffered, _}` too, so the same handler runs under the test
+You accept `{buffered, _}` too, so the same handler runs under the test
 adapter in section 11. With that in hand, creating a note is small:
 
 ```erlang
@@ -157,11 +157,11 @@ string parameters, reach for `livery_ext:query/2`, covered in
 Middleware is how you do the cross-cutting work: logging, request IDs,
 limits, timing. A Livery middleware is a continuation over immutable
 values, in the Tower and Axum spirit, not the old mutate-and-next style.
-The shape is `call(Req, Next, State)`, or simply a `fun((Req, Next))`. You
+The shape is `call(Req, Next, State)`, or a `fun((Req, Next))`. You
 may change the request before calling `Next`, change the response after,
 short-circuit by never calling `Next`, or all three.
 
-Here is our timing middleware, written as a fun:
+Here is a timing middleware, written as a fun:
 
 ```erlang
 timing() ->
@@ -177,7 +177,7 @@ timing() ->
     end.
 ```
 
-We stack it after the built-ins, and the whole stack runs for every
+You stack it after the built-ins, and the whole stack runs for every
 request, in order:
 
 ```erlang
@@ -191,7 +191,7 @@ base_stack() ->
 ```
 
 Sometimes a rule belongs to one route only. That is what the route `Meta`
-was for in section 3: the `middleware` key holds a stack that runs just
+was for in section 3: the `middleware` key holds a stack that runs only
 for that route, nested inside the service-wide one.
 
 ```erlang
@@ -262,7 +262,7 @@ extended CONNECT. Same handler, no extra plumbing.
 
 ## 8. Serve three protocols at once
 
-This is where the service really earns its keep. Add an `https` key and an
+This is where the service pays off. Add an `https` key and an
 `http3` key to the same map, point all three at the same router, and you
 are serving HTTP/1.1, HTTP/2 over TLS, and HTTP/3 over QUIC from one set of
 handlers.
@@ -303,10 +303,10 @@ many requests are still in flight. More in
 
 ## 10. Write your own adapter
 
-So far we have used the adapters that ship with Livery. What if you have a
+So far you have used the adapters that ship with Livery. What if you have a
 transport they do not cover? You write an adapter. It is less work than it
 sounds, because an adapter owns almost no logic: framing and TLS live in
-the wire library, routing and middleware live above. The adapter just
+the wire library, routing and middleware live above. The adapter
 translates between the two.
 
 An adapter implements the `livery_adapter` behaviour, eight callbacks:

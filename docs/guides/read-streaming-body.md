@@ -1,11 +1,10 @@
 # How to read a streaming request body
 
-## Problem
+`livery_body` lets a handler consume the request body chunk by chunk.
+You need it when the body is too large to buffer, or when you want to
+process bytes as they arrive.
 
-The request body is too large to buffer, or you want to process it
-incrementally as bytes arrive.
-
-## Solution
+## Drain the stream
 
 When `livery_req:body/1` returns `{stream, Reader}`, drain it via
 `livery_body:read/2` or `livery_body:read_all/2`:
@@ -53,12 +52,12 @@ livery_resp:text(401, <<"nope">>).
 Combine with `livery_body_limit` (buffered only today) or call
 `livery_body:read/2` with a maximum byte count tracked yourself.
 
-## Backpressure
+## Signal backpressure
 
 `livery_body:signal_demand(R, N)` hints the adapter that the handler
-is ready for `N` more bytes. The H1/H2/H3 adapters translate this
-into engine-level window updates. This is a no-op for the test
-adapter; the H1 adapter wires it to `h1`'s read size.
+is ready for `N` more bytes. The H1/H2/H3 adapters translate this into
+engine-level window updates. This is a no-op for the test adapter; the
+H1 adapter wires it to `h1`'s read size.
 
 ## See also
 

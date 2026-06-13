@@ -1,6 +1,11 @@
 # How to send an empty or redirect response
 
-## Empty response
+Some responses carry no body: a `204 No Content` after a successful
+delete, a `304 Not Modified`, or a redirect that points the client
+elsewhere. `livery_resp` gives you small builders for both, so you
+return the right status without assembling headers by hand.
+
+## Send an empty response
 
 ```erlang
 livery_resp:empty(204).   %% No Content

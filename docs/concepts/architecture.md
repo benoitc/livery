@@ -1,9 +1,11 @@
 # Architecture
 
-Here is the whole shape of Livery in one picture, before we zoom in. It
-is a single OTP application that sits on top of three external wire
-libraries and exposes one developer-facing surface, so you write your
-handlers once and they serve every protocol.
+This page explains the overall shape of Livery: how the pieces fit
+together and why they are split the way they are. Read it when you
+want a mental model of where your code runs before you dive into any
+single part. Livery is one OTP application that sits on top of three
+external wire libraries and exposes one developer-facing surface, so
+you write your handlers once and they serve every protocol.
 
 ```
                  ┌─────────────────────┐
@@ -82,7 +84,7 @@ page follows this path step by step.
 - Handlers see one request value regardless of protocol.
 - Bug fixes in framing or congestion control land in `h1`/`h2`/`quic`
   as dep bumps, not Livery patches.
-- A future protocol just needs a new adapter implementing the same
+- A future protocol needs only a new adapter implementing the same
   callbacks; the router, middleware, and handlers do not change.
 
 ## See also

@@ -1,19 +1,19 @@
 # How to serve a file
 
-## Problem
+`livery_resp:file/2,3` sends a file from disk as the response body,
+streaming it straight to the wire instead of reading it all into
+memory. You need it for downloads, static assets, or any response
+backed by a file on disk.
 
-You want to send a file from disk as the response body without
-reading it all into memory first.
-
-## Solution
+## Send a file
 
 ```erlang
 livery_resp:file(200, <<"/var/www/index.html">>).
 ```
 
-Livery streams the file in 64 KiB chunks straight to the wire on
-H1, H2, and H3. `Content-Length` is set from the file size unless
-your handler already set it.
+Livery streams the file in 64 KiB chunks on H1, H2, and H3.
+`Content-Length` is set from the file size unless your handler
+already set it.
 
 Set the content type yourself; Livery does not guess it:
 
@@ -28,7 +28,8 @@ end.
 
 Pass `{Offset, Length}` to send a slice. `Length` may be `eof` to
 read to the end of the file. Livery adds a `Content-Range` header
-and `Content-Length` for the slice:
+and `Content-Length` for the slice. Set the status to `206`
+yourself when you serve a partial range:
 
 ```erlang
 %% bytes 1024-2047 of the file
@@ -38,9 +39,7 @@ livery_resp:file(206, Path, {1024, 1024}).
 livery_resp:file(206, Path, {1024, eof}).
 ```
 
-Set the status to `206` yourself when you serve a partial range.
-
-## Security: never pass unsanitised paths
+## Confine paths built from request data
 
 `livery_resp:file/2,3` serves exactly the path you give it; Livery
 does not confine it to a directory. If you build the path from

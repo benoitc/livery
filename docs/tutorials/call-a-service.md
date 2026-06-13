@@ -1,10 +1,10 @@
 # Tutorial: Call another service
 
-Almost no service lives alone. Sooner or later yours has to call someone
-else: an API for payments, an internal service for users, a webhook out
-to a partner. In this tutorial we build a client for one of those, step
-by step, and add the resilience you would want in production: a timeout,
-retries, a circuit breaker. About 15 minutes.
+In this tutorial you build an HTTP client for an upstream service
+and add the resilience you would want in production: a timeout,
+retries, a circuit breaker. It is for you once your own service has
+to call someone else, an API for payments, an internal service for
+users, a webhook out to a partner. About 15 minutes.
 
 The client is the outbound twin of Livery's middleware. If you have
 written a middleware stack, this will feel familiar: you stack layers
@@ -13,8 +13,8 @@ other direction.
 
 ## 1. The smallest possible call
 
-Let us start with the least you can write. Build a client, send a GET,
-read the answer.
+Start with the least you can write. Build a client, send a GET, read
+the answer.
 
 ```erlang
 Client = livery_client:new(#{base_url => <<"https://api.example.com">>}),
@@ -24,13 +24,13 @@ Client = livery_client:new(#{base_url => <<"https://api.example.com">>}),
 ```
 
 Three things are happening. `new/1` builds a client value, here with
-nothing but a base URL, so we can pass paths instead of full URLs. `get/2`
-sends the request and gives back `{ok, Resp}` or `{error, Reason}`. And
-the body comes back tagged: `{full, Body}` is the whole thing in memory,
-which is what you want for a small JSON reply.
+nothing but a base URL, so you can pass paths instead of full URLs.
+`get/2` sends the request and gives back `{ok, Resp}` or
+`{error, Reason}`. And the body comes back tagged: `{full, Body}` is the
+whole thing in memory, which is what you want for a small JSON reply.
 
-The client is just a value. Build it once, share it, call it from as
-many processes as you like.
+The client is a value. Build it once, share it, call it from as many
+processes as you like.
 
 ## 2. Headers and a base URL, set once
 
@@ -77,7 +77,7 @@ decode(Resp) ->
     end.
 ```
 
-Notice we build the path into `Path` before the call rather than inline.
+Notice you build the path into `Path` before the call rather than inline.
 That is a small habit worth keeping: it reads better, and a single
 `<<"/users/", Id/binary>>` expression in one place is easy to change.
 
@@ -102,7 +102,7 @@ end.
 
 `timeout(5000)` gives the whole call five seconds; overrun and it returns
 `{error, timeout}` and tears down the connection underneath. A layer is
-just an entry in the `stack` list, exactly like a middleware entry.
+an entry in the `stack` list, exactly like a middleware entry.
 
 ## 5. Retry the failures worth retrying
 
@@ -208,10 +208,10 @@ error.
 ## 8. Stream a response to your process
 
 A streamed response with `stream => true` gives you a `{stream, Reader}`
-body and `livery_client:read/2`, a blocking pull. That is perfect for a
+body and `livery_client:read/2`, a blocking pull. That is right for a
 process whose only job is to drain the body, but it forces a worker that
 also wants to react to its own messages, a cancel signal, a progress
-tick, into a second process just to run the read loop.
+tick, into a second process to run the read loop.
 
 Push mode turns the body around. Set `stream_to` to a pid and the chunks
 arrive as messages, so the worker can selectively receive body chunks and

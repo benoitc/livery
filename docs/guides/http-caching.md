@@ -1,15 +1,12 @@
 # How to add HTTP caching (ETag and Cache-Control)
 
-## Problem
-
 You want clients and CDNs to revalidate cheaply: hold a copy, send
 `If-None-Match`, and get a bodyless `304 Not Modified` when nothing
-changed. You also want to set `Cache-Control`.
+changed, plus a way to set `Cache-Control`. Add `livery_etag` to the
+stack: it gives a strong ETag to cacheable `GET`/`HEAD` responses and
+answers `304` on a matching `If-None-Match`.
 
-## Solution
-
-Add `livery_etag` to the stack. It gives a strong ETag to cacheable
-`GET`/`HEAD` responses and answers `304` on a matching `If-None-Match`:
+## Add it to the stack
 
 ```erlang
 Stack = [
@@ -18,14 +15,14 @@ Stack = [
 ].
 ```
 
-A first request returns `200` with an `ETag`; a later request that sends
-that ETag in `If-None-Match` gets a `304` with no body.
+A first request returns `200` with an `ETag`; a later request that
+sends that ETag in `If-None-Match` gets a `304` with no body.
 
-## Setting your own ETag and Cache-Control
+## Set your own ETag and Cache-Control
 
 The middleware computes an ETag automatically from `{full, _}` bodies
-that don't already have one. A handler can set its own (respected on any
-body type, including `file`/`chunked`):
+that don't already have one. A handler can set its own (respected on
+any body type, including `file`/`chunked`):
 
 ```erlang
 show(Req) ->
@@ -39,7 +36,7 @@ show(Req) ->
 `must_revalidate`, `proxy_revalidate`, `no_transform`, `{max_age, N}`,
 `{s_maxage, N}`, `{stale_while_revalidate, N}`, `{stale_if_error, N}`).
 
-## Options
+## Tune the options
 
 ```erlang
 {livery_etag, #{
@@ -51,10 +48,10 @@ show(Req) ->
 
 With `auto => false` the middleware only acts on handler-set ETags.
 
-## Placement relative to compression
+## Place it relative to compression
 
-Put `livery_etag` OUTSIDE `livery_compress` (earlier in the stack list)
-so the ETag covers the bytes actually sent on the wire:
+Put `livery_etag` OUTSIDE `livery_compress` (earlier in the stack
+list) so the ETag covers the bytes actually sent on the wire:
 
 ```erlang
 Stack = [{livery_etag, #{}}, {livery_compress, #{}} | Rest].
@@ -67,15 +64,15 @@ distinct.
 
 ## Notes
 
-- `If-None-Match: *` matches any current representation; weak comparison
-  (RFC 9110) is used, so `W/"x"` and `"x"` match.
-- The `304` is bodyless and drops `content-*` headers while preserving
-  `ETag`, `Cache-Control`, and `Vary`.
-- Only `GET`/`HEAD` are handled; unsafe-method preconditions (`412`) are
-  out of scope.
+- `If-None-Match: *` matches any current representation; weak
+  comparison (RFC 9110) is used, so `W/"x"` and `"x"` match.
+- The `304` is bodyless and drops `content-*` headers while
+  preserving `ETag`, `Cache-Control`, and `Vary`.
+- Only `GET`/`HEAD` are handled; unsafe-method preconditions (`412`)
+  are out of scope.
 
 ## See also
 
 - Reference: `livery_etag`, `livery_resp` (`with_etag/2`,
   `with_cache_control/2`)
-- Recipe: [Compress responses](compress-responses.md)
+- Guide: [Compress responses](compress-responses.md)

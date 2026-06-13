@@ -1,15 +1,15 @@
 # How to set security headers
 
-## Problem
+`livery_security_headers` is a middleware that adds baseline
+hardening headers to responses (`X-Content-Type-Options`,
+`X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`,
+optionally `Content-Security-Policy`). You need it when you want
+these defaults applied across your service without setting them in
+every handler.
 
-You want responses to carry baseline hardening headers
-(`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
-`Strict-Transport-Security`, optionally `Content-Security-Policy`).
+## Add it to the stack
 
-## Solution
-
-Add `livery_security_headers` to the stack. With no config it applies
-sensible defaults:
+With no config it applies sensible defaults:
 
 ```erlang
 Stack = [
@@ -48,7 +48,7 @@ A wrong CSP breaks pages, so there is no default. Set it explicitly:
 {livery_security_headers, #{csp => <<"default-src 'self'">>}}
 ```
 
-## Overriding per header
+## Override per header
 
 Any key set to a value replaces the default; set it to `false` to drop
 that header entirely:
@@ -60,11 +60,13 @@ that header entirely:
 }}
 ```
 
-A header the handler already set on the response is preserved, so a
-handler can override any of these per response.
+## Notes
+
+- A header the handler already set on the response is preserved, so a
+  handler can override any of these per response.
 
 ## See also
 
 - Reference: `livery_security_headers`, `livery_cors`
-- Recipe: [Enable CORS](enable-cors.md)
-- Recipe: [Write a custom middleware](custom-middleware.md)
+- Guide: [Enable CORS](enable-cors.md)
+- Guide: [Write a custom middleware](custom-middleware.md)

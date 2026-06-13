@@ -1,18 +1,13 @@
 # How to cancel work when the client disconnects
 
-## Problem
+A request sometimes triggers expensive work (an LLM inference, a long
+query). You need this when the client disconnects mid-request: instead
+of finishing the work for nobody, you want to stop it. Livery signals
+the request handler when the client resets the stream or closes the
+connection, across HTTP/1.1, HTTP/2, and HTTP/3. There are two ways to
+react, depending on how your handler is shaped.
 
-A request triggers expensive work (an LLM inference, a long query).
-If the client disconnects mid-request, you want to stop that work
-instead of finishing it for nobody.
-
-## Solution
-
-Livery signals the request handler when the client resets the stream
-or closes the connection, across HTTP/1.1, HTTP/2, and HTTP/3. There
-are two ways to react, depending on how your handler is shaped.
-
-### Streaming handler in a receive loop
+## React in a streaming receive loop
 
 A producer that streams tokens already loops on its data source. It
 also matches the disconnect message, and stops when `Emit` reports a
@@ -42,7 +37,7 @@ stream(Emit, InferRef) ->
 producers all propagate the send error now, so returning `{error, _}`
 from the producer also stops the terminal write.
 
-### Blocking handler
+## React from a blocking handler
 
 A handler that blocks in a NIF cannot loop. Register a cancel
 callback; Livery runs it in a separate process the moment the client
@@ -64,7 +59,7 @@ unaffected).
 
 - Default is signal-only: Livery does not kill your handler. It runs
   any cleanup it likes, then returns. A handler that ignores the
-  signal simply keeps running.
+  signal keeps running.
 - HTTP/1.1 is half-duplex. A disconnect is detected when the
   connection closes (via the connection monitor) or when a send
   fails; a paused streaming response that never sends again may not

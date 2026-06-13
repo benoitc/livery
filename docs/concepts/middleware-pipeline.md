@@ -1,9 +1,12 @@
 # The middleware pipeline
 
-Middleware is the code that runs around your handlers: the cross-cutting
-work that does not belong to any one route but to many. A request id on
-every response, an access log line, a body-size cap, an auth check, a
-CORS preflight, a timeout. You write each concern once and stack it.
+This page explains what middleware is in Livery, the shape it takes, and
+why it is a continuation over values rather than a mutable response you
+write into. Read it when you have cross-cutting work to add. Middleware
+is the code that runs around your handlers: the work that does not belong
+to any one route but to many. A request id on every response, an access
+log line, a body-size cap, an auth check, a CORS preflight, a timeout.
+You write each concern once and stack it.
 
 A Livery middleware is a function over immutable values, in the
 Tower/Axum style: it receives the request and a `Next` continuation, and
@@ -49,9 +52,9 @@ call(Req, Next, State) ->
 Why it matters:
 
 - **Immutable values.** `Req` and `Resp` are plain records, never a
-  shared mutable handle: safe to pass between processes, trivial to test.
+  shared mutable handle: safe to pass between processes, easy to test.
 - **Composition is a value.** `Next` *is* "the rest of the pipeline" as a
-  function; wrapping it in `try`/`catch`, a timeout, or a span is just
+  function; wrapping it in `try`/`catch`, a timeout, or a span means
   calling it inside your own code.
 - **Pairs with extractors.** Typed input comes from `livery_ext`
   (`json/1`, `query/2`, `bearer_token/1`), not from mutating the request.

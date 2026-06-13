@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-14
+
+Maintenance release: an `instrument` bump and a documentation pass.
+
+### Changed
+
+- Upgrade `instrument` 1.1.3 -> 1.1.4.
+
+### Documentation
+
+- Rewrote the guides, tutorials, and concept pages in a task-oriented
+  style. Each page opens with what it is and when you need it, then the
+  concrete steps.
+- Added an Ecosystem page linking the sibling libraries `livery_grpc`,
+  `livery_s3`, and `livery_stripe`, on the site and in the API reference.
+
 ## [0.3.0] - 2026-06-13
 
 Adds deferred responses, per-SNI certificate selection on HTTP/3, and
@@ -317,6 +333,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.3.1]: https://github.com/benoitc/livery/releases/tag/v0.3.1
 [0.3.0]: https://github.com/benoitc/livery/releases/tag/v0.3.0
 [0.2.7]: https://github.com/benoitc/livery/releases/tag/v0.2.7
 [0.2.6]: https://github.com/benoitc/livery/releases/tag/v0.2.6

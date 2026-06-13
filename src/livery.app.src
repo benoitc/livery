@@ -1,6 +1,6 @@
 {application, livery, [
     {description, "Livery: a modern Erlang web framework over HTTP/1.1, HTTP/2, and HTTP/3"},
-    {vsn, "0.3.1"},
+    {vsn, "0.3.2"},
     {registered, [livery_sup]},
     {mod, {livery_app, []}},
     {applications, [

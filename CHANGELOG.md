@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-14
+
+Maintenance release: dependency updates.
+
+### Changed
+
+- Bump `h2` 0.9.0 -> 0.10.1, `hackney` 4.3.0 -> 4.4.0, and `barrel_mcp`
+  2.2.2 -> 2.2.3.
+- Require the wire dependencies (`h1`, `h2`, `quic`, `ws`, `instrument`,
+  `webtransport`, `hackney`, `barrel_mcp`) with `~>` so patch releases
+  are accepted automatically.
+- Bump the cowboy comparison harness to cowboy 2.16.1 and cowlib 2.17.1,
+  and `proper` to 1.5.0, in the test and bench profiles.
+
 ## [0.3.1] - 2026-06-14
 
 Maintenance release: an `instrument` bump and a documentation pass.
@@ -333,6 +347,7 @@ release; the framework is still under active development.
   QUIC round trip because the client and server share one BEAM. Measure
   H3 with an external native QUIC client.
 
+[0.3.2]: https://github.com/benoitc/livery/releases/tag/v0.3.2
 [0.3.1]: https://github.com/benoitc/livery/releases/tag/v0.3.1
 [0.3.0]: https://github.com/benoitc/livery/releases/tag/v0.3.0
 [0.2.7]: https://github.com/benoitc/livery/releases/tag/v0.2.7

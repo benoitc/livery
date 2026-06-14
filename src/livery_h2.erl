@@ -417,16 +417,28 @@ reject_overload(Stream) ->
     livery_body:reader()
 ) -> livery_req:req().
 build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
+    Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
+    Headers1 = normalize_authority_headers(Authority, Headers),
     livery_req:new(#{
         protocol => h2,
         method => Method,
+        authority => Authority,
         path => Path,
-        headers => Headers,
+        headers => Headers1,
         body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
         engine_pid => Conn
     }).
+
+-spec normalize_authority_headers(binary(), h2:headers()) -> h2:headers().
+normalize_authority_headers(Authority, Headers) ->
+    Headers1 = lists:filter(fun({Name, _Value}) -> Name =/= <<":authority">> end, Headers),
+    case {Authority, proplists:is_defined(<<"host">>, Headers1)} of
+        {<<>>, _} -> Headers1;
+        {_, true} -> Headers1;
+        {_, false} -> [{<<"host">>, Authority} | Headers1]
+    end.
 
 -spec split_query(binary()) -> {binary(), binary()}.
 split_query(Path) ->

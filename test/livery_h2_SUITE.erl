@@ -23,6 +23,7 @@
     streaming_chunked_response/1,
     sse_response/1,
     echo_buffered_body/1,
+    authority_request/1,
     error_500_on_crash/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
@@ -41,6 +42,7 @@ all() ->
         streaming_chunked_response,
         sse_response,
         echo_buffered_body,
+        authority_request,
         error_500_on_crash,
         response_with_trailers,
         cancel_on_connection_close,
@@ -115,6 +117,10 @@ echo_buffered_body(Config) ->
     {200, _, Body, _} = post(Config, <<"/">>, <<"echo me">>),
     ?assertEqual(<<"echo me">>, Body).
 
+authority_request(Config) ->
+    {200, _, Body, _} = get_authority(Config, <<"example.localhost">>),
+    ?assertEqual(<<"example.localhost|example.localhost|none">>, Body).
+
 error_500_on_crash(Config) ->
     {Status, _, Body, _} = get(Config, <<"/">>),
     ?assertEqual(500, Status),
@@ -155,6 +161,13 @@ handler_for(echo_buffered_body) ->
         {stream, Reader} = livery_req:body(R),
         {ok, Bytes, _} = livery_body:read_all(Reader, 5000),
         livery_resp:text(200, Bytes)
+    end;
+handler_for(authority_request) ->
+    fun(R) ->
+        Authority = livery_req:authority(R),
+        Host = livery_req:header(<<"host">>, R, <<>>),
+        PseudoAuthority = livery_req:header(<<":authority">>, R, <<"none">>),
+        livery_resp:text(200, [Authority, <<"|">>, Host, <<"|">>, PseudoAuthority])
     end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
@@ -229,6 +242,19 @@ send_to_gone_client_is_closed(_Config) ->
 
 get(Config, Path) ->
     request(<<"GET">>, Config, Path, <<>>).
+
+get_authority(Config, Authority) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, StreamId} = h2:request(Conn, [
+        {<<":method">>, <<"GET">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"http">>},
+        {<<":authority">>, Authority}
+    ]),
+    Result = collect_response(Conn, StreamId, undefined, [], [], undefined),
+    h2:close(Conn),
+    Result.
 
 post(Config, Path, Body) ->
     request(<<"POST">>, Config, Path, Body).

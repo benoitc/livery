@@ -208,7 +208,7 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
                 {ok, Socket, _BufferedBytes} ->
                     WsReq = build_ws_req(Req),
                     ws:accept(
-                        ws_transport_gen_tcp,
+                        ws_transport(Socket),
                         Socket,
                         WsReq,
                         HandlerMod,
@@ -220,6 +220,12 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
         {error, Reason} ->
             {error, {bad_request, Reason}}
     end.
+
+-spec ws_transport(term()) -> ws_transport_gen_tcp | ws_transport_ssl.
+ws_transport(Socket) when is_tuple(Socket), element(1, Socket) =:= sslsocket ->
+    ws_transport_ssl;
+ws_transport(_Socket) ->
+    ws_transport_gen_tcp.
 
 -spec build_ws_req(livery_req:req()) -> map().
 build_ws_req(Req) ->

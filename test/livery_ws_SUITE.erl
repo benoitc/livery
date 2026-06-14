@@ -23,6 +23,7 @@
 
 -export([
     h1_echo_text_frame/1,
+    h1_ssl_echo_text_frame/1,
     h1_rejects_request_without_upgrade_headers/1,
     h2_echo_text_frame/1,
     h2_rejects_plain_get/1,
@@ -43,6 +44,7 @@ suite() ->
 all() ->
     [
         h1_echo_text_frame,
+        h1_ssl_echo_text_frame,
         h1_echo_text_frame_ipv6,
         h1_rejects_request_without_upgrade_headers,
         h2_echo_text_frame,
@@ -84,6 +86,22 @@ init_per_testcase(TC, Config) when
         {adapter, h2},
         {listener, Listener},
         {port, h2:server_port(Listener)}
+        | Config
+    ];
+init_per_testcase(h1_ssl_echo_text_frame, Config) ->
+    {CertFile, KeyFile} = livery_test_certs:paths(),
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        transport => ssl,
+        cert => CertFile,
+        key => KeyFile,
+        stack => [],
+        handler => fun ws_handler/1
+    }),
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
         | Config
     ];
 init_per_testcase(h1_echo_text_frame_ipv6, Config) ->
@@ -187,6 +205,17 @@ h1_echo_text_frame(Config) ->
     ]),
     ?assertEqual(ok, ws_echo_roundtrip(Url)).
 
+%% Same echo round-trip over TLS. This covers the accepted SSL socket handoff
+%% to the ws session after the HTTP/1.1 upgrade.
+h1_ssl_echo_text_frame(Config) ->
+    Port = ?config(port, Config),
+    Url = iolist_to_binary([
+        <<"wss://127.0.0.1:">>,
+        integer_to_binary(Port),
+        <<"/">>
+    ]),
+    ?assertEqual(ok, ws_echo_roundtrip(Url, #{ssl_opts => [{verify, verify_none}]})).
+
 %% Same echo round-trip over an IPv6-bound listener (`ip => ::1'),
 %% proving the listen-address options carry through to the WS upgrade.
 %% The listener is bound v6 in init_per_testcase, which skips the case
@@ -206,27 +235,35 @@ h1_echo_text_frame_ipv6(Config) ->
 ws_echo_roundtrip(Url) ->
     ws_echo_roundtrip(Url, 1).
 
-ws_echo_roundtrip(Url, Attempts) ->
-    ws_echo_roundtrip(Url, Attempts, {error, not_attempted}).
+ws_echo_roundtrip(Url, Attempts) when is_integer(Attempts) ->
+    ws_echo_roundtrip(Url, #{}, Attempts, {error, not_attempted});
+ws_echo_roundtrip(Url, Opts) when is_map(Opts) ->
+    ws_echo_roundtrip(Url, Opts, 1, {error, not_attempted}).
 
-ws_echo_roundtrip(_Url, 0, Last) ->
+ws_echo_roundtrip(_Url, _Opts, 0, Last) ->
     Last;
-ws_echo_roundtrip(Url, N, _Last) ->
-    case ws_echo_attempt(Url) of
+ws_echo_roundtrip(Url, Opts, N, _Last) ->
+    case ws_echo_attempt(Url, Opts) of
         ok -> ok;
-        {error, _} = E -> ws_echo_roundtrip(Url, N - 1, E)
+        {error, _} = E -> ws_echo_roundtrip(Url, Opts, N - 1, E)
     end.
 
 %% One connect + ready + echo round-trip. Returns `ok' or `{error, Reason}'
 %% (never raises), so the retry wrapper can try a fresh session. Drains any
 %% frames captured during teardown so a retry starts with a clean mailbox.
-ws_echo_attempt(Url) ->
+ws_echo_attempt(Url, Opts) ->
     Self = self(),
     case
-        ws_client:connect(Url, #{
-            handler => livery_ws_client_capture,
-            handler_opts => #{parent => Self}
-        })
+        ws_client:connect(
+            Url,
+            maps:merge(
+                #{
+                    handler => livery_ws_client_capture,
+                    handler_opts => #{parent => Self}
+                },
+                Opts
+            )
+        )
     of
         {ok, Sess} ->
             try

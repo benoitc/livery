@@ -117,9 +117,13 @@ echo_buffered_body(Config) ->
     {200, _, Body, _} = post(Config, <<"/">>, <<"echo me">>),
     ?assertEqual(<<"echo me">>, Body).
 
+%% h2 0.10.2 keeps `:authority'/`:scheme' in the handler header list. The
+%% adapter exposes them via livery_req:authority/1 and scheme/1, synthesizes
+%% a `host' header from the authority when the client omits one, and strips
+%% the pseudo-headers from the application-visible headers.
 authority_request(Config) ->
     {200, _, Body, _} = get_authority(Config, <<"example.localhost">>),
-    ?assertEqual(<<"example.localhost|example.localhost|none">>, Body).
+    ?assertEqual(<<"example.localhost|example.localhost|http|none|none">>, Body).
 
 error_500_on_crash(Config) ->
     {Status, _, Body, _} = get(Config, <<"/">>),
@@ -164,10 +168,14 @@ handler_for(echo_buffered_body) ->
     end;
 handler_for(authority_request) ->
     fun(R) ->
-        Authority = livery_req:authority(R),
-        Host = livery_req:header(<<"host">>, R, <<>>),
-        PseudoAuthority = livery_req:header(<<":authority">>, R, <<"none">>),
-        livery_resp:text(200, [Authority, <<"|">>, Host, <<"|">>, PseudoAuthority])
+        Fields = [
+            livery_req:authority(R),
+            livery_req:header(<<"host">>, R, <<"none">>),
+            livery_req:scheme(R),
+            livery_req:header(<<":authority">>, R, <<"none">>),
+            livery_req:header(<<":scheme">>, R, <<"none">>)
+        ],
+        livery_resp:text(200, lists:join(<<"|">>, Fields))
     end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
@@ -243,6 +251,8 @@ send_to_gone_client_is_closed(_Config) ->
 get(Config, Path) ->
     request(<<"GET">>, Config, Path, <<>>).
 
+%% Send an explicit `:authority' and no `host' header, so the test can
+%% assert the adapter populates the authority and synthesizes `host'.
 get_authority(Config, Authority) ->
     Port = ?config(port, Config),
     {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),

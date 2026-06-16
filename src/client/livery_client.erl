@@ -32,6 +32,7 @@ The transport is a `livery_client_adapter`; the default,
 -export([read/2, read_body/1]).
 -export([stream_next/1, stop_stream/1]).
 -export([timeout/1, concurrency/1, retry/1, circuit_breaker/1, balance/1]).
+-export([cookie_jar/0, cookie_jar/1]).
 -export([add_endpoint/2, remove_endpoint/2]).
 -export([before/1, after_response/1, wrap/1]).
 -export([rebase/2]).
@@ -248,6 +249,19 @@ With `balance` you pass paths; the chosen endpoint supplies the host.
 """.
 -spec balance(map()) -> entry().
 balance(Opts) -> {livery_client_balance, Opts}.
+
+-doc """
+A cookie jar (RFC 6265 client subset). Stores the `Set-Cookie` cookies a
+response carries and sends the matching ones (host, path, secure) on later
+requests through this layer, in an in-memory per-jar store shared across
+the client's request processes. `Opts`: `max_cookies` (default 3000),
+`store` (a `livery_client_cookie_store` callback module; default ETS).
+""".
+-spec cookie_jar() -> entry().
+cookie_jar() -> {livery_client_cookie, livery_client_cookie:jar()}.
+
+-spec cookie_jar(map()) -> entry().
+cookie_jar(Opts) -> {livery_client_cookie, livery_client_cookie:jar(Opts)}.
 
 -doc "Add an endpoint to a balance pool at runtime.".
 -spec add_endpoint(term(), endpoint()) -> ok.

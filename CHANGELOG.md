@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-16
+
+Adds early-response draining on HTTP/1.1 and request authority/scheme on
+HTTP/2, with wire-dependency bumps.
+
+### Added
+
+- Early-response inbound drain on HTTP/1.1. When a handler commits a full
+  response before the request body is read (for example a 413 rejecting an
+  oversized upload), the leftover inbound body is drained before the socket
+  closes, so the client reads the response instead of a connection reset.
+  New per-response `early_response_drain` field on the response, with
+  `livery_resp:with_early_response_drain/2` and `early_response_drain/1`,
+  and `livery_resp:json/4` and `text/4` taking a response-options map. New
+  `early_response_drain` and `lingering_timeout` listener options. The
+  per-response override applies to full responses; streaming responses use
+  the listener budget.
+- HTTP/2 requests populate `livery_req:authority/1` and `livery_req:scheme/1`
+  from the `:authority` and `:scheme` pseudo-headers, and synthesize a
+  `host` header from the authority when the client omits one, so host-based
+  routing works without a `host` header. The pseudo-headers are stripped
+  from the application-visible headers.
+
+### Changed
+
+- Bump `h1` 0.6.2 -> 0.7.0 and `h2` 0.10.1 -> 0.10.2.
+- HTTP/1.1 over TLS records `tls` on the request, so `livery_req:tls/1`
+  reflects a secure connection.
+
+### Fixed
+
+- `wss://` (HTTPS WebSocket) upgrades on HTTP/1.1. The adapter now hands the
+  ws session the TLS transport for an accepted SSL socket instead of always
+  using the plain-TCP transport.
+- An HTTP/1.1 request body that exceeds the listener `max_body` no longer
+  resets the stream: the handler's response is delivered and the rest of the
+  inbound body is drained before closing.
+
 ## [0.3.2] - 2026-06-14
 
 Maintenance release: dependency updates.

@@ -70,6 +70,7 @@ solution.
 **Calling out**
 - [Make outbound HTTP requests](guides/make-http-requests.md)
 - [Load-balance outbound requests](guides/load-balance-requests.md)
+- [Use a cookie jar](guides/use-a-cookie-jar.md)
 
 **Operations**
 - [Shut down gracefully](guides/graceful-shutdown.md)

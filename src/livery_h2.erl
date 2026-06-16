@@ -418,27 +418,38 @@ reject_overload(Stream) ->
 ) -> livery_req:req().
 build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
     Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
-    Headers1 = normalize_authority_headers(Authority, Headers),
+    Scheme = proplists:get_value(<<":scheme">>, Headers, <<"http">>),
     livery_req:new(#{
         protocol => h2,
         method => Method,
+        scheme => Scheme,
         authority => Authority,
         path => Path,
-        headers => Headers1,
+        headers => app_headers(Authority, Headers),
         body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
         engine_pid => Conn
     }).
 
--spec normalize_authority_headers(binary(), h2:headers()) -> h2:headers().
-normalize_authority_headers(Authority, Headers) ->
-    Headers1 = lists:filter(fun({Name, _Value}) -> Name =/= <<":authority">> end, Headers),
-    case {Authority, proplists:is_defined(<<"host">>, Headers1)} of
-        {<<>>, _} -> Headers1;
-        {_, true} -> Headers1;
-        {_, false} -> [{<<"host">>, Authority} | Headers1]
+%% h2 (>= 0.10.2) keeps `:authority' and `:scheme' in the handler header
+%% list. Drop them from the application-visible headers (they are exposed
+%% via livery_req:authority/1 and scheme/1), and synthesize a `host'
+%% header from the authority when the client sent none, so host-based
+%% routing works even when a compliant HTTP/2 client omits `host'.
+-spec app_headers(binary(), h2:headers()) -> h2:headers().
+app_headers(Authority, Headers) ->
+    Stripped = [H || {Name, _} = H <- Headers, not is_pseudo_header(Name)],
+    case {Authority, proplists:is_defined(<<"host">>, Stripped)} of
+        {<<>>, _} -> Stripped;
+        {_, true} -> Stripped;
+        {_, false} -> [{<<"host">>, Authority} | Stripped]
     end.
+
+-spec is_pseudo_header(binary()) -> boolean().
+is_pseudo_header(<<":authority">>) -> true;
+is_pseudo_header(<<":scheme">>) -> true;
+is_pseudo_header(_) -> false.
 
 -spec split_query(binary()) -> {binary(), binary()}.
 split_query(Path) ->

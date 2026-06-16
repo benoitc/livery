@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-16
+
+Maintenance release: dependency updates.
+
+### Changed
+
+- Bump `webtransport` 0.4.0 -> 0.4.1, `hackney` 4.4.0 -> 4.4.2, and
+  `barrel_mcp` 2.2.3 -> 2.2.4.
+
 ## [0.4.0] - 2026-06-16
 
 Adds early-response draining on HTTP/1.1 and request authority/scheme on

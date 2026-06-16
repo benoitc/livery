@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-06-17
+
+Adds a cookie jar client layer.
+
+### Added
+
+- Cookie jar client layer (`livery_client:cookie_jar/0,1`). Stores the
+  cookies a response sets and sends the matching ones (host, path, secure)
+  on later requests through the layer, following the RFC 6265 client
+  subset. Backed by a pluggable `livery_client_cookie_store` (default
+  in-memory ETS); `max_cookies` caps the jar before the oldest are evicted.
+
 ## [0.4.1] - 2026-06-16
 
 Maintenance release: dependency updates.

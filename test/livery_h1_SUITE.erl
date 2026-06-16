@@ -26,6 +26,8 @@
     sse_response/1,
     echo_buffered_body/1,
     body_ceiling_rejects_oversize/1,
+    oversize_upload_delivers_413/1,
+    early_response_no_read_delivers_413/1,
     error_500_on_crash/1,
     cancel_on_client_disconnect/1
 ]).
@@ -45,6 +47,8 @@ all() ->
         sse_response,
         echo_buffered_body,
         body_ceiling_rejects_oversize,
+        oversize_upload_delivers_413,
+        early_response_no_read_delivers_413,
         error_500_on_crash,
         cancel_on_client_disconnect
     ].
@@ -141,6 +145,33 @@ body_ceiling_rejects_oversize(Config) ->
     {ok, Over, _, _} = post(Config, <<"/">>, binary:copy(<<"x">>, 256)),
     ?assertEqual(413, Over).
 
+%% A large upload past the listener's `max_body' cap must still deliver the
+%% handler's 413: the cap aborts the body read, the handler responds, and
+%% h1's early-response drain reads the rest before closing so the client
+%% reads the response instead of a reset. Looped to shake the race.
+oversize_upload_delivers_413(Config) ->
+    %% max_body is 1 MiB for this case; the body is 2 MiB.
+    Body = binary:copy(<<"x">>, 2 * 1024 * 1024),
+    lists:foreach(
+        fun(_) ->
+            {ok, Status, _, RBody} = post_no_pool(Config, <<"/">>, Body),
+            ?assertEqual(413, Status),
+            ?assertEqual(<<"{\"error\":\"too_big\"}">>, RBody)
+        end,
+        lists:seq(1, 25)
+    ).
+
+%% A handler that commits a 413 without reading the (large, in-flight) body
+%% must still deliver it. h1 drains the leftover inbound body before closing.
+early_response_no_read_delivers_413(Config) ->
+    Body = binary:copy(<<"x">>, 2 * 1024 * 1024),
+    lists:foreach(
+        fun(_) ->
+            ?assertMatch({ok, 413, _, _}, post_no_pool(Config, <<"/">>, Body))
+        end,
+        lists:seq(1, 25)
+    ).
+
 error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(500, Status),
@@ -177,6 +208,7 @@ stack_for(_TC) -> [].
 
 %% Small ceiling for the over-size case; default for everything else.
 max_body_for(body_ceiling_rejects_oversize) -> 64;
+max_body_for(oversize_upload_delivers_413) -> 1024 * 1024;
 max_body_for(_TC) -> 16 * 1024 * 1024.
 
 handler_for(text_response) ->
@@ -227,6 +259,17 @@ handler_for(body_ceiling_rejects_oversize) ->
             {error, body_too_large, _} -> livery_resp:text(413, <<"too large">>)
         end
     end;
+handler_for(oversize_upload_delivers_413) ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 5000) of
+            {ok, Bytes, _} -> livery_resp:text(200, Bytes);
+            {error, body_too_large, _} -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>)
+        end
+    end;
+handler_for(early_response_no_read_delivers_413) ->
+    %% Commit a 413 without reading the body at all.
+    fun(_R) -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>) end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
 handler_for(cancel_on_client_disconnect) ->
@@ -268,6 +311,29 @@ request(Method, Config, Path, Body) ->
             [with_body, {recv_timeout, ?REQUEST_TIMEOUT}]
         ),
     {ok, Status, normalize(RespHeaders), RespBody}.
+
+%% POST without hackney's connection pool so each request rides a fresh
+%% socket. Used by the early-response cases, where the server closes the
+%% connection after delivering the response. Returns hackney's error tuple
+%% verbatim so a lost response (the bug) fails the assertion clearly.
+post_no_pool(Config, Path, Body) ->
+    Port = ?config(port, Config),
+    Url = iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port), Path]),
+    Headers = [{<<"Content-Length">>, integer_to_binary(byte_size(Body))}],
+    case
+        hackney:request(
+            <<"POST">>,
+            Url,
+            Headers,
+            Body,
+            [with_body, {pool, false}, {recv_timeout, ?REQUEST_TIMEOUT}]
+        )
+    of
+        {ok, Status, RespHeaders, RespBody} ->
+            {ok, Status, normalize(RespHeaders), RespBody};
+        {error, _} = Error ->
+            Error
+    end.
 
 normalize(Headers) ->
     [{string:lowercase(N), V} || {N, V} <- Headers].

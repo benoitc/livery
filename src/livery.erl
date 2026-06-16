@@ -211,19 +211,27 @@ emit(Adapter, Stream, #livery_resp{} = Resp) ->
     Headers = livery_resp:headers(Resp),
     Body = livery_resp:body(Resp),
     Trailers = livery_resp:trailers(Resp),
-    emit_body(Adapter, Stream, Status, Headers, Body, Trailers).
+    EndOpts = drain_opts(livery_resp:early_response_drain(Resp)),
+    emit_body(Adapter, Stream, Status, Headers, Body, Trailers, EndOpts).
 
-emit_body(_Adapter, _Stream, _Status, _Hs, taken_over, _Trailers) ->
+%% Base send-opts carrying the per-response early-response drain budget.
+%% `default' adds nothing, so the adapter falls back to the listener
+%% budget; any other value is passed through for the adapter to honor on
+%% the stream-terminating call.
+drain_opts(default) -> #{};
+drain_opts(Drain) -> #{early_response_drain => Drain}.
+
+emit_body(_Adapter, _Stream, _Status, _Hs, taken_over, _Trailers, _EndOpts) ->
     %% Stream/socket was handed off (e.g. via livery_ws:upgrade/3).
     %% The adapter no longer owns it; nothing more to emit.
     ok;
-emit_body(Adapter, Stream, Status, Hs, empty, _Trailers) ->
-    Adapter:send_headers(Stream, Status, Hs, #{end_stream => true});
-emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers) ->
+emit_body(Adapter, Stream, Status, Hs, empty, _Trailers, EndOpts) ->
+    Adapter:send_headers(Stream, Status, Hs, EndOpts#{end_stream => true});
+emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers, EndOpts) ->
     HasTrailers = Trailers =/= undefined,
     case iolist_size(IoData) of
         0 when not HasTrailers ->
-            Adapter:send_headers(Stream, Status, Hs, #{end_stream => true});
+            Adapter:send_headers(Stream, Status, Hs, EndOpts#{end_stream => true});
         0 ->
             case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
                 ok -> emit_trailers(Adapter, Stream, Trailers);
@@ -237,12 +245,12 @@ emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers) ->
                 true ->
                     %% Coalesce headers + body into one adapter call (and
                     %% one socket write) when the adapter supports it.
-                    Adapter:send_full(Stream, Status, Hs, IoData, #{end_stream => true});
+                    Adapter:send_full(Stream, Status, Hs, IoData, EndOpts#{end_stream => true});
                 false ->
                     emit_full_granular(Adapter, Stream, Status, Hs, IoData, Trailers)
             end
     end;
-emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers) ->
+emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers, _EndOpts) ->
     case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
         ok ->
             Emit = fun(Chunk) ->
@@ -252,7 +260,7 @@ emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers) ->
         Other ->
             Other
     end;
-emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers) ->
+emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers, _EndOpts) ->
     case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
         ok ->
             Emit = fun(Event) ->
@@ -266,14 +274,14 @@ emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers) ->
         Other ->
             Other
     end;
-emit_body(Adapter, Stream, _Status, Hs, {deferred, Resolver}, _Trailers) ->
+emit_body(Adapter, Stream, _Status, Hs, {deferred, Resolver}, _Trailers, _EndOpts) ->
     %% The resolver runs here, in the worker, before any header write,
     %% so it can still choose the status and body shape. The outer Hs
     %% carries any headers added by wrapping middleware; the decision
     %% wins on a name conflict.
     Resolved = livery_resp:resolve_deferred(Hs, Resolver()),
     emit(Adapter, Stream, Resolved);
-emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers) ->
+emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) ->
     case file_segment(Path, Range) of
         {error, enoent} ->
             Adapter:send_headers(Stream, 404, [], #{end_stream => true});
@@ -335,7 +343,7 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers) ->
                     end
             end
     end;
-emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers) ->
+emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers, _EndOpts) ->
     %% Upgrades are handled at the adapter level (livery_ws, livery_wt).
     Adapter:reset(Stream, upgrade_not_handled_at_emit),
     {error, not_implemented}.

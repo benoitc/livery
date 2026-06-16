@@ -123,6 +123,43 @@ events(_Req) ->
 Chunked bodies, NDJSON, file responses with byte ranges, WebSocket and
 WebTransport over H2/H3 work the same way.
 
+## Early-response semantics
+
+Sometimes a handler answers before it has read the request body, like
+rejecting an oversized upload with a `413`. On HTTP/1.1 the connection
+would normally close right after the response, and with a large upload
+still in flight the close can reach the client before it reads your
+`413`, so the client sees a reset instead.
+
+Livery handles this for you. When you return a full response before the
+body is drained, it reads and discards the rest of the inbound body
+before closing, so the client gets the response:
+
+```erlang
+reject(_Req) ->
+    livery_resp:json(413, [], <<"{\"error\":\"too_big\"}">>).
+```
+
+The drain is bounded by a budget you set per listener (defaults to no
+byte cap and a 30 s deadline):
+
+```erlang
+{ok, _} = livery:start_listener(livery_h1, #{
+    port => 8080,
+    early_response_drain => {16#400000, 5000},  %% 4 MiB / 5 s
+    handler => fun reject/1
+}).
+```
+
+Override it for a single response, or disable the drain with `none`:
+
+```erlang
+livery_resp:json(413, [], Body, #{early_response_drain => {16#400000, 5000}}).
+```
+
+The per-response override applies to full responses. Streaming responses
+(SSE, NDJSON, chunked, files) use the listener budget.
+
 ## Features
 
 - **One handler, three wires** — write a handler once; serve it over

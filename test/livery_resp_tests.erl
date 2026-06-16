@@ -161,6 +161,35 @@ resolve_deferred_merges_outer_headers_decision_wins_test() ->
     ?assertEqual(<<"application/json">>, header(R, <<"content-type">>)).
 
 %%====================================================================
+%% Early-response drain
+%%====================================================================
+
+early_response_drain_defaults_to_default_test() ->
+    R = livery_resp:json(200, <<"{}">>),
+    ?assertEqual(default, livery_resp:early_response_drain(R)).
+
+with_early_response_drain_sets_field_test() ->
+    R0 = livery_resp:json(413, <<"{}">>),
+    R1 = livery_resp:with_early_response_drain({16#400000, 5000}, R0),
+    ?assertEqual({16#400000, 5000}, livery_resp:early_response_drain(R1)),
+    R2 = livery_resp:with_early_response_drain(none, R0),
+    ?assertEqual(none, livery_resp:early_response_drain(R2)).
+
+json_opts_sets_drain_and_keeps_content_type_test() ->
+    R = livery_resp:json(413, [], <<"{}">>, #{early_response_drain => {16#400000, 5000}}),
+    ?assertEqual({16#400000, 5000}, livery_resp:early_response_drain(R)),
+    ?assertEqual(<<"application/json">>, header(R, <<"content-type">>)).
+
+text_opts_sets_drain_test() ->
+    R = livery_resp:text(413, [], <<"too big">>, #{early_response_drain => none}),
+    ?assertEqual(none, livery_resp:early_response_drain(R)),
+    ?assertEqual({full, <<"too big">>}, livery_resp:body(R)).
+
+opts_without_drain_key_keeps_default_test() ->
+    R = livery_resp:json(200, [], <<"{}">>, #{}),
+    ?assertEqual(default, livery_resp:early_response_drain(R)).
+
+%%====================================================================
 %% Helpers
 %%====================================================================
 

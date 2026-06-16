@@ -88,6 +88,11 @@ in-flight requests finish, use `livery:drain/1,2`.
     ),
     settings => map(),
     quic_opts => map(),
+    %% HTTP/1.1 early-response inbound-drain budget (lingering close).
+    %% See `livery_h1' `listen_opts()'. `lingering_timeout => Ms' is the
+    %% time-only form. Ignored by the H2/H3 listeners.
+    early_response_drain => 0 | {non_neg_integer() | infinity, non_neg_integer() | infinity},
+    lingering_timeout => timeout(),
     %% Per-listener config; overrides the service-wide `config'.
     config => term()
 }.

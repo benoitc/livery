@@ -23,6 +23,7 @@ error after the handler returns but before anything is written.
     headers/1,
     body/1,
     trailers/1,
+    early_response_drain/1,
 
     with_status/2,
     with_header/3,
@@ -32,13 +33,16 @@ error after the handler returns but before anything is written.
     with_body/2,
     with_etag/2,
     with_cache_control/2,
+    with_early_response_drain/2,
 
     text/2,
     text/3,
+    text/4,
     html/2,
     html/3,
     json/2,
     json/3,
+    json/4,
 
     empty/1,
 
@@ -61,7 +65,18 @@ error after the handler returns but before anything is written.
     upgrade/2
 ]).
 
--export_type([resp/0, body/0, deferred_decision/0, cache_directive/0]).
+-export_type([resp/0, body/0, deferred_decision/0, cache_directive/0, drain/0, resp_opts/0]).
+
+%% Early-response inbound-drain budget. `default' keeps the listener's
+%% budget, `none' disables the drain (close immediately), and a
+%% `{MaxBytes, MaxMs}' tuple (either component `infinity') bounds it for
+%% this one response.
+-type drain() ::
+    default
+    | none
+    | {non_neg_integer() | infinity, non_neg_integer() | infinity}.
+
+-type resp_opts() :: #{early_response_drain => drain()}.
 
 -type cache_directive() ::
     no_cache
@@ -136,6 +151,10 @@ body(#livery_resp{body = B}) -> B.
     | fun(() -> [{header_name(), header_value()}]).
 trailers(#livery_resp{trailers = T}) -> T.
 
+-doc "The response's early-response inbound-drain budget. See `with_early_response_drain/2`.".
+-spec early_response_drain(resp()) -> drain().
+early_response_drain(#livery_resp{early_response_drain = D}) -> D.
+
 -spec with_status(100..599, resp()) -> resp().
 with_status(Status, Resp) -> Resp#livery_resp{status = Status}.
 
@@ -205,6 +224,21 @@ Pass a verbatim binary, or a list of directives: the atoms `no_cache`,
 with_cache_control(Value, Resp) ->
     with_header(<<"cache-control">>, format_cache_control(Value), Resp).
 
+-doc """
+Set the early-response inbound-drain budget for this response.
+
+When a handler commits a response before reading the request body
+(e.g. rejecting an oversized upload with 413), HTTP/1.1 drains the
+leftover inbound body before closing so the client reads the
+response. `default` keeps the listener's budget; `none` disables the
+drain and closes immediately; `{MaxBytes, MaxMs}` (either component
+`infinity`) bounds it for this response only. Honored on full
+responses; streaming responses use the listener budget.
+""".
+-spec with_early_response_drain(drain(), resp()) -> resp().
+with_early_response_drain(Drain, Resp) ->
+    Resp#livery_resp{early_response_drain = Drain}.
+
 %%====================================================================
 %% Convenience builders
 %%====================================================================
@@ -225,6 +259,11 @@ text(Status, ExtraHeaders, Body) ->
         ),
         {full, Body}
     ).
+
+-doc "`text/3` with response options (e.g. `early_response_drain`).".
+-spec text(100..599, [{header_name(), header_value()}], iodata(), resp_opts()) -> resp().
+text(Status, ExtraHeaders, Body, Opts) ->
+    apply_opts(text(Status, ExtraHeaders, Body), Opts).
 
 -doc "`text/html; charset=utf-8` response.".
 -spec html(100..599, iodata()) -> resp().
@@ -265,6 +304,17 @@ json(Status, ExtraHeaders, Body) ->
         ),
         {full, Body}
     ).
+
+-doc """
+`json/3` with response options.
+
+Use the `early_response_drain` key to tune the inbound drain for an
+early reject, e.g.
+`json(413, [], Body, #{early_response_drain => {16#400000, 5000}})`.
+""".
+-spec json(100..599, [{header_name(), header_value()}], iodata(), resp_opts()) -> resp().
+json(Status, ExtraHeaders, Body, Opts) ->
+    apply_opts(json(Status, ExtraHeaders, Body), Opts).
 
 -doc "Headers-only response.".
 -spec empty(100..599) -> resp().
@@ -467,6 +517,13 @@ upgrade(Kind, State) when Kind =:= ws; Kind =:= wt ->
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+-spec apply_opts(resp(), resp_opts()) -> resp().
+apply_opts(Resp, Opts) ->
+    case maps:find(early_response_drain, Opts) of
+        {ok, Drain} -> with_early_response_drain(Drain, Resp);
+        error -> Resp
+    end.
 
 -spec with_default(
     header_name(),

@@ -42,7 +42,18 @@
     trailers ::
         undefined
         | [{binary(), binary()}]
-        | fun(() -> [{binary(), binary()}])
+        | fun(() -> [{binary(), binary()}]),
+    %% Early-response inbound-drain budget for HTTP/1.1. When a handler
+    %% commits this response before the request body is fully read, h1
+    %% drains the leftover inbound body before closing so the client
+    %% reads the response. `default' uses the listener budget; `none'
+    %% disables the drain (close immediately); `{MaxBytes, MaxMs}' (either
+    %% component `infinity') bounds it for this response only. Honored on
+    %% full responses; streaming responses use the listener budget.
+    early_response_drain = default ::
+        default
+        | none
+        | {non_neg_integer() | infinity, non_neg_integer() | infinity}
 }).
 
 -endif.

@@ -55,7 +55,11 @@ here.
 
 -type send_opts() :: #{
     end_stream => boolean(),
-    flush => boolean()
+    flush => boolean(),
+    %% Per-response early-response inbound-drain budget. Honored by the
+    %% HTTP/1.1 adapter on the stream-terminating call; ignored by
+    %% adapters that read only `end_stream'.
+    early_response_drain => livery_resp:drain()
 }.
 
 -type capabilities() :: #{

@@ -72,6 +72,14 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     idle_timeout => timeout(),
     request_timeout => timeout(),
     handshake_timeout => timeout(),
+    %% Early-response inbound-drain budget (lingering close): when a
+    %% handler responds before the request body is fully read, h1 drains
+    %% the leftover body before closing so the client reads the response.
+    %% `{MaxBytes, MaxMs}' (either component `infinity'), `0' disables.
+    %% Defaults to h1's `{infinity, 30000}'. `lingering_timeout => Ms' is
+    %% the time-only form.
+    early_response_drain => 0 | {non_neg_integer() | infinity, non_neg_integer() | infinity},
+    lingering_timeout => timeout(),
     max_keepalive_requests => pos_integer() | infinity,
     %% Shared service config, readable in handlers via livery_req:config/1.
     config => term(),
@@ -121,14 +129,17 @@ stop(Listener) ->
 ) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
-    case h1:send_response(Conn, StreamId, Status, Headers) of
-        ok ->
-            case maps:get(end_stream, Opts, false) of
-                true -> h1:send_data(Conn, StreamId, <<>>, true);
-                false -> ok
-            end;
-        Other ->
-            Other
+    case {maps:get(end_stream, Opts, false), drain_opts(Opts)} of
+        {true, {ok, RespOpts}} ->
+            %% Empty-body early response with a per-response drain budget:
+            %% commit it via respond/6 so h1 honors the budget on close.
+            h1:respond(Conn, StreamId, Status, Headers, <<>>, RespOpts);
+        {EndStream, _} ->
+            case h1:send_response(Conn, StreamId, Status, Headers) of
+                ok when EndStream -> h1:send_data(Conn, StreamId, <<>>, true);
+                ok -> ok;
+                Other -> Other
+            end
     end.
 
 -spec send_full(
@@ -142,9 +153,13 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
 %% Coalesce a full response (headers + body) into a single content-length
 %% write via h1:respond/5, instead of the granular send_headers/send_data
 %% path which frames the body as chunked. livery:emit/3 picks this up
-%% because the callback is exported.
-send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
-    h1:respond(Conn, StreamId, Status, Headers, IoData).
+%% because the callback is exported. A per-response early-response drain
+%% budget routes through respond/6 so h1 honors it on an early close.
+send_full({Conn, StreamId}, Status, Headers, IoData, Opts) ->
+    case drain_opts(Opts) of
+        {ok, RespOpts} -> h1:respond(Conn, StreamId, Status, Headers, IoData, RespOpts);
+        none -> h1:respond(Conn, StreamId, Status, Headers, IoData)
+    end.
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
@@ -176,6 +191,23 @@ capabilities(_Listener) ->
         datagrams => false,
         capsules => false
     }.
+
+%% Translate the per-response `early_response_drain' send-opt into the
+%% h1:respond/6 options map. Absent or `default' yields `none' (h1 uses
+%% the listener budget); any other value produces the per-response map.
+-spec drain_opts(livery_adapter:send_opts()) -> {ok, h1:respond_opts()} | none.
+drain_opts(Opts) ->
+    case maps:get(early_response_drain, Opts, default) of
+        default -> none;
+        Drain -> {ok, #{early_response_drain => to_h1(Drain)}}
+    end.
+
+%% `none' disables the drain (h1's `0'); a `{MaxBytes, MaxMs}' budget
+%% passes straight through.
+-spec to_h1(none | {non_neg_integer() | infinity, non_neg_integer() | infinity}) ->
+    h1:early_response_drain().
+to_h1(none) -> 0;
+to_h1({MaxBytes, MaxMs}) -> {MaxBytes, MaxMs}.
 
 %%====================================================================
 %% WebSocket handoff (called by livery_ws:upgrade/3)
@@ -257,6 +289,8 @@ build_h1_opts(Opts, Stack, Handler) ->
             handshake_timeout,
             idle_timeout,
             request_timeout,
+            early_response_drain,
+            lingering_timeout,
             max_keepalive_requests
         ],
         Opts,
@@ -432,7 +466,7 @@ translate_until_done(
                     WorkerPid ! {livery_body, BodyRef, eof},
                     Loop(Cbs, Fired, Bytes1);
                 _ ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    abort_body(WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {h1_stream, StreamId, {data, Chunk, false}} ->
@@ -443,7 +477,7 @@ translate_until_done(
                 aborted ->
                     Loop(Cbs, Fired, aborted);
                 over ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    abort_body(WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {h1_stream, StreamId, {trailers, Headers}} ->
@@ -466,10 +500,15 @@ translate_until_done(
             ok
     end.
 
-%% Signal the worker that the body exceeded `max_body' and cut the
-%% stream so the client stops sending. Bounds the worker mailbox.
--spec abort_body(stream(), pid(), reference()) -> ok.
-abort_body(Stream, WorkerPid, BodyRef) ->
+%% Signal the worker that the body exceeded `max_body' and switch the
+%% translator to drop-mode (the caller loops with `aborted'), which
+%% bounds the worker mailbox. We deliberately do NOT reset the stream:
+%% the handler can still commit a response (typically 413) and h1's
+%% early-response drain reads and discards the rest of the inbound body
+%% before closing, so the client reads the response instead of an RST.
+%% The leftover inbound is bounded by h1's drain budget and the
+%% request timeout; the worker mailbox is bounded by drop-mode.
+-spec abort_body(pid(), reference()) -> ok.
+abort_body(WorkerPid, BodyRef) ->
     WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    _ = reset(Stream, body_too_large),
     ok.

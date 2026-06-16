@@ -240,7 +240,7 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
                 {ok, Socket, _BufferedBytes} ->
                     WsReq = build_ws_req(Req),
                     ws:accept(
-                        ws_transport_gen_tcp,
+                        ws_transport(Req),
                         Socket,
                         WsReq,
                         HandlerMod,
@@ -262,6 +262,18 @@ build_ws_req(Req) ->
         headers => livery_req:headers(Req)
     }.
 
+%% Pick the ws transport from the connection's security, which the
+%% listener records on the request (an ssl listener sets `tls'). This
+%% reads the listener's own configuration rather than inspecting the
+%% opaque socket representation. Mirrors `ws_client', which selects the
+%% transport from the `ws://' / `wss://' scheme.
+-spec ws_transport(livery_req:req()) -> ws_transport_gen_tcp | ws_transport_ssl.
+ws_transport(Req) ->
+    case livery_req:tls(Req) of
+        undefined -> ws_transport_gen_tcp;
+        _ -> ws_transport_ssl
+    end.
+
 %%====================================================================
 %% Internals: per-request dispatch
 %%====================================================================
@@ -273,9 +285,12 @@ build_ws_req(Req) ->
 ) -> map().
 build_h1_opts(Opts, Stack, Handler) ->
     MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
+    Transport = maps:get(transport, Opts, tcp),
     Base = #{
-        transport => maps:get(transport, Opts, tcp),
-        handler => make_handler_fun(Stack, Handler, MaxBody, maps:get(config, Opts, undefined))
+        transport => Transport,
+        handler => make_handler_fun(
+            Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport
+        )
     },
     copy_keys(
         [
@@ -310,7 +325,8 @@ copy_keys([K | Rest], Src, Dst) ->
     livery_middleware:stack(),
     livery_middleware:handler(),
     non_neg_integer() | infinity,
-    term()
+    term(),
+    tcp | ssl
 ) ->
     fun(
         (
@@ -321,7 +337,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h1:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler, MaxBody, Config) ->
+make_handler_fun(Stack, Handler, MaxBody, Config, Transport) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -332,7 +348,8 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
             Stack,
             Handler,
             MaxBody,
-            Config
+            Config,
+            Transport
         )
     end.
 
@@ -345,9 +362,12 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
     livery_middleware:stack(),
     livery_middleware:handler(),
     non_neg_integer() | infinity,
-    term()
+    term(),
+    tcp | ssl
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config) ->
+dispatch_request(
+    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport
+) ->
     %% This function runs in the per-request worker spawned by
     %% h1_server. Body and trailer events arrive as
     %% `{h1_stream, StreamId, _}' messages in this process's
@@ -356,7 +376,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
-    Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
+    Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader, Transport),
     %% The dispatch process (this one) runs the translator loop, so it
     %% is the disconnect notifier the handler registers with.
     Req1 = Req#livery_req{
@@ -405,9 +425,10 @@ reject_overload(Stream) ->
     binary(),
     binary(),
     h1:headers(),
-    livery_body:reader()
+    livery_body:reader(),
+    tcp | ssl
 ) -> livery_req:req().
-build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
+build_req(Conn, StreamId, Method, Path, Headers, Reader, Transport) ->
     livery_req:new(#{
         protocol => h1,
         method => Method,
@@ -416,8 +437,16 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
-        engine_pid => Conn
+        engine_pid => Conn,
+        tls => tls_info(Transport)
     }).
+
+%% Mark TLS connections so handlers and the WebSocket handoff can tell a
+%% secure listener from a plaintext one. h1 does not surface certificate
+%% details, so this is an empty map rather than undefined.
+-spec tls_info(tcp | ssl) -> undefined | map().
+tls_info(ssl) -> #{};
+tls_info(_) -> undefined.
 
 -spec split_query(binary()) -> {binary(), binary()}.
 split_query(Path) ->

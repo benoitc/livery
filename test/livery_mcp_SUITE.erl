@@ -20,17 +20,22 @@
 -export([
     initialize_returns_session/1,
     tools_list_returns_registered_tool/1,
-    tools_call_runs_tool/1
+    tools_call_runs_tool/1,
+    disconnect_mid_reply_is_quiet/1
 ]).
 
-%% Tool callback (registered in init_per_suite).
--export([echo_tool/1]).
+%% Tool callbacks (registered in init_per_suite).
+-export([echo_tool/1, slow_tool/1]).
+
+%% logger handler callback (used by disconnect_mid_reply_is_quiet).
+-export([log/2]).
 
 all() ->
     [
         initialize_returns_session,
         tools_list_returns_registered_tool,
-        tools_call_runs_tool
+        tools_call_runs_tool,
+        disconnect_mid_reply_is_quiet
     ].
 
 init_per_suite(Config) ->
@@ -47,10 +52,15 @@ init_per_suite(Config) ->
             }
         }
     }),
+    ok = barrel_mcp:reg_tool(<<"slow">>, ?MODULE, slow_tool, #{
+        description => <<"Sleeps then replies">>,
+        input_schema => #{<<"type">> => <<"object">>, <<"properties">> => #{}}
+    }),
     Config.
 
 end_per_suite(_Config) ->
     catch barrel_mcp:unreg_tool(<<"echo">>),
+    catch barrel_mcp:unreg_tool(<<"slow">>),
     _ = application:stop(hackney),
     ok.
 
@@ -78,6 +88,11 @@ end_per_testcase(_TC, Config) ->
 echo_tool(Args) ->
     Value = maps:get(<<"value">>, Args, <<"default">>),
     <<"echo: ", Value/binary>>.
+
+%% Tool callback: sleeps so the client can disconnect before the reply.
+slow_tool(_Args) ->
+    timer:sleep(300),
+    <<"slow done">>.
 
 %%====================================================================
 %% Cases
@@ -133,6 +148,54 @@ tools_call_runs_tool(Config) ->
     ],
     Joined = iolist_to_binary(Texts),
     ?assertNotEqual(nomatch, binary:match(Joined, <<"echo: hi">>)).
+
+%% The client closes before the slow tool's reply is written. The MCP
+%% responder writes into the now-dead connection: that must end the
+%% request quietly (no ERROR/CRASH log), and the server must stay healthy.
+disconnect_mid_reply_is_quiet(Config) ->
+    Url = ?config(url, Config),
+    Port = h1:server_port(?config(listener, Config)),
+    {200, Headers, _} = initialize(Url),
+    Sid = session_id(Headers),
+    ok = initialized(Url, Sid),
+    HandlerId = mcp_disconnect_log,
+    ok = logger:add_handler(HandlerId, ?MODULE, #{config => self(), level => all}),
+    try
+        ReqBody = iolist_to_binary(
+            json:encode(#{
+                <<"jsonrpc">> => <<"2.0">>,
+                <<"id">> => 9,
+                <<"method">> => <<"tools/call">>,
+                <<"params">> => #{<<"name">> => <<"slow">>, <<"arguments">> => #{}}
+            })
+        ),
+        Raw = [
+            <<"POST /mcp HTTP/1.1\r\n">>,
+            <<"Host: x\r\n">>,
+            <<"Content-Type: application/json\r\n">>,
+            <<"Accept: application/json, text/event-stream\r\n">>,
+            <<"Mcp-Session-Id: ">>,
+            Sid,
+            <<"\r\n">>,
+            <<"Content-Length: ">>,
+            integer_to_binary(byte_size(ReqBody)),
+            <<"\r\n\r\n">>,
+            ReqBody
+        ],
+        {ok, Sock} = gen_tcp:connect(
+            "127.0.0.1", Port, [binary, {active, false}], 5000
+        ),
+        ok = gen_tcp:send(Sock, Raw),
+        timer:sleep(50),
+        ok = gen_tcp:close(Sock),
+        %% Let the slow tool finish and the responder write into the dead conn.
+        timer:sleep(600),
+        ok = assert_no_error_logged(),
+        %% Server is still healthy: a fresh session initializes.
+        ?assertMatch({200, _, _}, initialize(Url))
+    after
+        logger:remove_handler(HandlerId)
+    end.
 
 %%====================================================================
 %% MCP client helpers (hackney)
@@ -198,3 +261,20 @@ with_session(Headers, Sid) -> [{<<"mcp-session-id">>, Sid} | Headers].
 session_id(Headers) ->
     Lower = [{string:lowercase(K), V} || {K, V} <- Headers],
     proplists:get_value(<<"mcp-session-id">>, Lower, undefined).
+
+%%====================================================================
+%% Log capture (for disconnect_mid_reply_is_quiet)
+%%====================================================================
+
+log(Event, #{config := Pid}) ->
+    Pid ! {log_event, Event},
+    ok.
+
+assert_no_error_logged() ->
+    receive
+        {log_event, #{level := error} = Event} ->
+            ct:fail({unexpected_error_log, Event});
+        {log_event, _Other} ->
+            assert_no_error_logged()
+    after 200 -> ok
+    end.

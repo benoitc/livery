@@ -24,7 +24,8 @@
     echo_buffered_body/1,
     error_500_on_crash/1,
     response_with_trailers/1,
-    cancel_on_connection_close/1
+    cancel_on_connection_close/1,
+    send_to_gone_client_is_closed/1
 ]).
 
 %%====================================================================
@@ -41,7 +42,8 @@ all() ->
         echo_buffered_body,
         error_500_on_crash,
         response_with_trailers,
-        cancel_on_connection_close
+        cancel_on_connection_close,
+        send_to_gone_client_is_closed
     ].
 
 init_per_suite(Config) ->
@@ -159,6 +161,8 @@ handler_for(echo_buffered_body) ->
     end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
+handler_for(send_to_gone_client_is_closed) ->
+    fun(_R) -> livery_resp:text(200, <<"unused">>) end;
 handler_for(response_with_trailers) ->
     fun(_R) ->
         Resp = livery_resp:text(200, <<"hello">>),
@@ -177,6 +181,24 @@ handler_for(cancel_on_connection_close) ->
             end
         end)
     end.
+
+%% A send to a connection whose process has died returns {error, closed}
+%% rather than letting the gen_statem:call noproc exit propagate.
+send_to_gone_client_is_closed(_Config) ->
+    Dead = spawn(fun() -> ok end),
+    Ref = monitor(process, Dead),
+    receive
+        {'DOWN', Ref, process, Dead, _} -> ok
+    after 5000 -> ct:fail(proc_not_dead)
+    end,
+    Stream = {Dead, 1},
+    ?assertEqual(
+        {error, closed}, livery_h3:send_data(Stream, <<"body">>, #{end_stream => true})
+    ),
+    ?assertEqual(
+        {error, closed}, livery_h3:send_headers(Stream, 200, [], #{end_stream => true})
+    ),
+    ?assertEqual({error, closed}, livery_h3:send_trailers(Stream, [{<<"x">>, <<"y">>}])).
 
 cancel_on_connection_close(Config) ->
     Port = ?config(port, Config),

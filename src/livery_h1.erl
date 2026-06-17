@@ -129,18 +129,20 @@ stop(Listener) ->
 ) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
-    case {maps:get(end_stream, Opts, false), drain_opts(Opts)} of
-        {true, {ok, RespOpts}} ->
-            %% Empty-body early response with a per-response drain budget:
-            %% commit it via respond/6 so h1 honors the budget on close.
-            h1:respond(Conn, StreamId, Status, Headers, <<>>, RespOpts);
-        {EndStream, _} ->
-            case h1:send_response(Conn, StreamId, Status, Headers) of
-                ok when EndStream -> h1:send_data(Conn, StreamId, <<>>, true);
-                ok -> ok;
-                Other -> Other
-            end
-    end.
+    closed_guard(fun() ->
+        case {maps:get(end_stream, Opts, false), drain_opts(Opts)} of
+            {true, {ok, RespOpts}} ->
+                %% Empty-body early response with a per-response drain budget:
+                %% commit it via respond/6 so h1 honors the budget on close.
+                h1:respond(Conn, StreamId, Status, Headers, <<>>, RespOpts);
+            {EndStream, _} ->
+                case h1:send_response(Conn, StreamId, Status, Headers) of
+                    ok when EndStream -> h1:send_data(Conn, StreamId, <<>>, true);
+                    ok -> ok;
+                    Other -> Other
+                end
+        end
+    end).
 
 -spec send_full(
     stream(),
@@ -156,21 +158,37 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
 %% because the callback is exported. A per-response early-response drain
 %% budget routes through respond/6 so h1 honors it on an early close.
 send_full({Conn, StreamId}, Status, Headers, IoData, Opts) ->
-    case drain_opts(Opts) of
-        {ok, RespOpts} -> h1:respond(Conn, StreamId, Status, Headers, IoData, RespOpts);
-        none -> h1:respond(Conn, StreamId, Status, Headers, IoData)
-    end.
+    closed_guard(fun() ->
+        case drain_opts(Opts) of
+            {ok, RespOpts} -> h1:respond(Conn, StreamId, Status, Headers, IoData, RespOpts);
+            none -> h1:respond(Conn, StreamId, Status, Headers, IoData)
+        end
+    end).
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
 send_data({Conn, StreamId}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
-    h1:send_data(Conn, StreamId, IoData, EndStream).
+    closed_guard(fun() -> h1:send_data(Conn, StreamId, IoData, EndStream) end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
 send_trailers({Conn, StreamId}, Trailers) ->
-    h1:send_trailers(Conn, StreamId, Trailers).
+    closed_guard(fun() -> h1:send_trailers(Conn, StreamId, Trailers) end).
+
+%% A send to a connection whose process has gone away (peer closed) exits
+%% the underlying gen_statem:call with noproc/normal/shutdown. Map that to
+%% {error, closed} so livery:emit/3 treats it as a normal disconnect, not a
+%% handler crash. See livery_h2:closed_guard/1 for the full rationale.
+-spec closed_guard(fun(() -> R)) -> R | {error, closed}.
+closed_guard(Fun) ->
+    try
+        Fun()
+    catch
+        exit:{noproc, _} -> {error, closed};
+        exit:{normal, _} -> {error, closed};
+        exit:{{shutdown, _}, _} -> {error, closed}
+    end.
 
 -spec reset(stream(), term()) -> ok.
 reset({Conn, StreamId}, Reason) ->

@@ -29,8 +29,13 @@
     oversize_upload_delivers_413/1,
     early_response_no_read_delivers_413/1,
     error_500_on_crash/1,
-    cancel_on_client_disconnect/1
+    cancel_on_client_disconnect/1,
+    send_to_gone_client_is_closed/1,
+    disconnect_mid_response_is_quiet/1
 ]).
+
+%% logger handler callback (used by disconnect_mid_response_is_quiet).
+-export([log/2]).
 
 %%====================================================================
 %% Suite plumbing
@@ -50,7 +55,9 @@ all() ->
         oversize_upload_delivers_413,
         early_response_no_read_delivers_413,
         error_500_on_crash,
-        cancel_on_client_disconnect
+        cancel_on_client_disconnect,
+        send_to_gone_client_is_closed,
+        disconnect_mid_response_is_quiet
     ].
 
 init_per_suite(Config) ->
@@ -200,6 +207,52 @@ cancel_on_client_disconnect(Config) ->
     after 5000 -> ct:fail(cancel_callback_not_run)
     end.
 
+%% A send to a connection whose process has died returns {error, closed}
+%% rather than letting the gen_statem:call noproc exit propagate.
+send_to_gone_client_is_closed(_Config) ->
+    Dead = spawn(fun() -> ok end),
+    Ref = monitor(process, Dead),
+    receive
+        {'DOWN', Ref, process, Dead, _} -> ok
+    after 5000 -> ct:fail(proc_not_dead)
+    end,
+    Stream = {Dead, 1},
+    ?assertEqual({error, closed}, livery_h1:send_full(Stream, 200, [], <<"body">>, #{})),
+    ?assertEqual(
+        {error, closed}, livery_h1:send_data(Stream, <<"body">>, #{end_stream => true})
+    ),
+    ?assertEqual(
+        {error, closed}, livery_h1:send_headers(Stream, 200, [], #{end_stream => true})
+    ),
+    ?assertEqual({error, closed}, livery_h1:send_trailers(Stream, [{<<"x">>, <<"y">>}])).
+
+%% The client closes before the slow handler writes its response. The
+%% worker emits into the now-dead connection: that must end the request
+%% quietly (no ERROR/CRASH log), and the server must stay healthy for the
+%% next request.
+disconnect_mid_response_is_quiet(Config) ->
+    Port = ?config(port, Config),
+    HandlerId = h1_disconnect_log,
+    ok = logger:add_handler(HandlerId, ?MODULE, #{config => self(), level => all}),
+    try
+        {ok, Sock} = gen_tcp:connect(
+            "127.0.0.1", Port, [binary, {active, false}], 5000
+        ),
+        ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nHost: x\r\n\r\n">>),
+        receive
+            handler_ready -> ok
+        after 5000 -> ct:fail(handler_did_not_start)
+        end,
+        ok = gen_tcp:close(Sock),
+        %% Let the handler wake and emit into the dead connection.
+        timer:sleep(400),
+        ok = assert_no_error_logged(),
+        %% Server is still healthy: a fresh request returns 200.
+        ?assertMatch({ok, 200, _, <<"awake">>}, get(Config, <<"/">>))
+    after
+        logger:remove_handler(HandlerId)
+    end.
+
 %%====================================================================
 %% Handlers
 %%====================================================================
@@ -272,6 +325,15 @@ handler_for(early_response_no_read_delivers_413) ->
     fun(_R) -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>) end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
+handler_for(send_to_gone_client_is_closed) ->
+    fun(_R) -> livery_resp:text(200, <<"unused">>) end;
+handler_for(disconnect_mid_response_is_quiet) ->
+    Test = self(),
+    fun(_R) ->
+        Test ! handler_ready,
+        timer:sleep(200),
+        livery_resp:text(200, <<"awake">>)
+    end;
 handler_for(cancel_on_client_disconnect) ->
     Test = self(),
     fun(R) ->
@@ -337,6 +399,23 @@ post_no_pool(Config, Path, Body) ->
 
 normalize(Headers) ->
     [{string:lowercase(N), V} || {N, V} <- Headers].
+
+%%====================================================================
+%% Log capture (for disconnect_mid_response_is_quiet)
+%%====================================================================
+
+log(Event, #{config := Pid}) ->
+    Pid ! {log_event, Event},
+    ok.
+
+assert_no_error_logged() ->
+    receive
+        {log_event, #{level := error} = Event} ->
+            ct:fail({unexpected_error_log, Event});
+        {log_event, _Other} ->
+            assert_no_error_logged()
+    after 200 -> ok
+    end.
 
 header(Name, Headers) ->
     LName = string:lowercase(Name),

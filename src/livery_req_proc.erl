@@ -65,11 +65,32 @@ dispatch(#{
     Req = ensure_started_at(Req0),
     try
         Resp = livery:dispatch(Stack, Handler, Req),
-        _ = livery:emit(Adapter, Stream, Resp)
+        case livery:emit(Adapter, Stream, Resp) of
+            {error, closed} -> peer_closed();
+            _ -> ok
+        end
     catch
         Class:Reason:Stack0 ->
-            handle_crash(Adapter, Stream, Class, Reason, Stack0)
+            case disconnect_reason(Class, Reason) of
+                true -> peer_closed();
+                false -> handle_crash(Adapter, Stream, Class, Reason, Stack0)
+            end
     end,
+    ok.
+
+%% A disconnect (socket/stream closed, connection process gone) is normal,
+%% not a handler fault. Covers the gen_statem:call exits a dead connection
+%% raises and the disconnect reason the adapters report.
+-spec disconnect_reason(throw | error | exit, term()) -> boolean().
+disconnect_reason(exit, {noproc, _}) -> true;
+disconnect_reason(exit, {normal, _}) -> true;
+disconnect_reason(exit, {{shutdown, _}, _}) -> true;
+disconnect_reason(_Class, {connection_closed, _}) -> true;
+disconnect_reason(_Class, _Reason) -> false.
+
+-spec peer_closed() -> ok.
+peer_closed() ->
+    logger:debug(#{msg => "livery_request_peer_closed"}),
     ok.
 
 -spec ensure_started_at(livery_req:req()) -> livery_req:req().
@@ -95,5 +116,10 @@ handle_crash(Adapter, Stream, Class, Reason, Stack) ->
         stacktrace => Stack
     }),
     Resp = livery_resp:text(500, <<"internal server error">>),
-    _ = livery:emit(Adapter, Stream, Resp),
-    ok.
+    %% The 500 goes to the same connection the handler was using; if the
+    %% peer is already gone the emit must not crash the worker a second time.
+    try livery:emit(Adapter, Stream, Resp) of
+        _ -> ok
+    catch
+        _Class:_Reason -> peer_closed()
+    end.

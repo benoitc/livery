@@ -128,26 +128,43 @@ stop(Name) when is_atom(Name) ->
 ) ->
     livery_adapter:send_result().
 send_headers({Conn, StreamId}, Status, Headers, Opts) ->
-    case quic_h3:send_response(Conn, StreamId, Status, Headers) of
-        ok ->
-            case maps:get(end_stream, Opts, false) of
-                true -> quic_h3:send_data(Conn, StreamId, <<>>, true);
-                false -> ok
-            end;
-        Other ->
-            Other
-    end.
+    closed_guard(fun() ->
+        case quic_h3:send_response(Conn, StreamId, Status, Headers) of
+            ok ->
+                case maps:get(end_stream, Opts, false) of
+                    true -> quic_h3:send_data(Conn, StreamId, <<>>, true);
+                    false -> ok
+                end;
+            Other ->
+                Other
+        end
+    end).
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
 send_data({Conn, StreamId}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
-    quic_h3:send_data(Conn, StreamId, iolist_to_binary(IoData), EndStream).
+    Bin = iolist_to_binary(IoData),
+    closed_guard(fun() -> quic_h3:send_data(Conn, StreamId, Bin, EndStream) end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
 send_trailers({Conn, StreamId}, Trailers) ->
-    quic_h3:send_trailers(Conn, StreamId, Trailers).
+    closed_guard(fun() -> quic_h3:send_trailers(Conn, StreamId, Trailers) end).
+
+%% A send to a connection whose process has gone away (peer closed) exits
+%% the underlying gen_statem:call with noproc/normal/shutdown. Map that to
+%% {error, closed} so livery:emit/3 treats it as a normal disconnect, not a
+%% handler crash. See livery_h2:closed_guard/1 for the full rationale.
+-spec closed_guard(fun(() -> R)) -> R | {error, closed}.
+closed_guard(Fun) ->
+    try
+        Fun()
+    catch
+        exit:{noproc, _} -> {error, closed};
+        exit:{normal, _} -> {error, closed};
+        exit:{{shutdown, _}, _} -> {error, closed}
+    end.
 
 -spec reset(stream(), term()) -> ok.
 reset({Conn, StreamId}, _Reason) ->

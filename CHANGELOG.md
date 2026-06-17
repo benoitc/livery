@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-06-17
+
+Maintenance release: a disconnect-handling fix and a dependency bump.
+
+### Fixed
+
+- Handle a peer disconnect mid-response gracefully. A client closing the
+  connection before the response was written crashed the request worker
+  twice and logged ERROR and CRASH reports for a normal disconnect. The
+  H1 and H3 send paths now map a dead connection to `{error, closed}` (as
+  H2 already did), and the worker treats a closed connection as a benign
+  early termination instead of a handler crash.
+
+### Changed
+
+- Bump `hackney` 4.4.2 -> 4.4.3.
+
 ## [0.4.2] - 2026-06-17
 
 Adds a cookie jar client layer.

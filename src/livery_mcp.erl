@@ -154,14 +154,14 @@ responder(Adapter, Stream) ->
         reply => fun(Status, Headers, Body) ->
             Bin = iolist_to_binary(Body),
             Hdrs = ensure_content_length(Headers, byte_size(Bin)),
-            _ = Adapter:send_headers(
-                Stream,
-                Status,
-                Hdrs,
-                #{end_stream => false}
-            ),
-            _ = Adapter:send_data(Stream, Bin, #{end_stream => true}),
-            ok
+            case Adapter:send_headers(Stream, Status, Hdrs, #{end_stream => false}) of
+                {error, closed} ->
+                    %% Peer gone: drop the body, the stream is already over.
+                    ok;
+                _ ->
+                    _ = Adapter:send_data(Stream, Bin, #{end_stream => true}),
+                    ok
+            end
         end,
         stream_start => fun(Status, Headers) ->
             _ = Adapter:send_headers(

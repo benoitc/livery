@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `hackney` 4.4.3 -> 4.4.5.
+
 ## [0.4.3] - 2026-06-17
 
 Maintenance release: a disconnect-handling fix and a dependency bump.

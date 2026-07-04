@@ -296,7 +296,7 @@ transport.
 - **REST:** router, extractors, JSON response builder (user-chosen
   codec), content negotiation helpers, ranges on file responses.
 - **OpenAPI:** routes carry metadata, `livery_openapi:build/1`
-  emits a 3.1 document, `/openapi.json` is served, optional
+  emits a 3.2 document, `/openapi.json` is served, optional
   request/response validation middleware, Redoc and Swagger UI
   from `priv/`.
 - **MCP:** Streamable HTTP handler mounted at a user-chosen path,

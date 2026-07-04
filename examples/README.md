@@ -40,13 +40,15 @@ started with a TLS/QUIC listener and extended CONNECT enabled.
 The end-to-end notes service from the [Build a complete
 service](../docs/tutorials/build-a-complete-service.md) tutorial: a
 service, a router with path params, a service-wide and a per-route
-middleware, JSON CRUD, an SSE feed, and a WebSocket echo. Start it with
+middleware, JSON CRUD, a QUERY search, an SSE feed, and a WebSocket
+echo. Start it with
 `livery_example_complete:start(8080)`, or `start_tls/1` to serve H1, H2,
 and H3 at once from the vendored `test/certs`.
 
 ```
 curl http://127.0.0.1:8080/notes
 curl -XPOST --data '{"text":"buy bread"}' http://127.0.0.1:8080/notes
+curl -XQUERY --data '{"text":"bread"}' http://127.0.0.1:8080/notes
 curl http://127.0.0.1:8080/notes/1
 curl -N http://127.0.0.1:8080/events
 ```

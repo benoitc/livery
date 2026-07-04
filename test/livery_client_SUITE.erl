@@ -9,8 +9,10 @@
 -export([
     get_round_trip/1,
     post_round_trip/1,
+    query_round_trip/1,
     timeout_layer/1,
     retry_layer/1,
+    query_retry_idempotent/1,
     concurrency_layer/1,
     circuit_layer/1,
     circuit_store_recovers/1,
@@ -29,8 +31,10 @@ all() ->
     [
         get_round_trip,
         post_round_trip,
+        query_round_trip,
         timeout_layer,
         retry_layer,
+        query_retry_idempotent,
         concurrency_layer,
         circuit_layer,
         circuit_store_recovers,
@@ -54,8 +58,10 @@ init_per_suite(Config) ->
     Router = livery_router:compile([
         {<<"GET">>, <<"/ok">>, fun handle_ok/1},
         {<<"POST">>, <<"/echo">>, fun handle_echo/1},
+        {<<"QUERY">>, <<"/search">>, fun handle_echo/1},
         {<<"GET">>, <<"/slow">>, fun handle_slow/1},
         {<<"GET">>, <<"/flaky">>, fun handle_flaky/1},
+        {<<"QUERY">>, <<"/flaky">>, fun handle_flaky/1},
         {<<"GET">>, <<"/big">>, fun handle_big/1},
         {<<"GET">>, <<"/chunks">>, fun handle_chunks/1},
         {<<"GET">>, <<"/block">>, fun handle_block/1},
@@ -149,6 +155,12 @@ post_round_trip(Config) ->
     ?assertEqual(200, livery_client:status(Resp)),
     ?assertEqual({full, <<"hello">>}, livery_client:body(Resp)).
 
+query_round_trip(Config) ->
+    C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:query(C, <<"/search">>, <<"{\"q\":\"boots\"}">>),
+    ?assertEqual(200, livery_client:status(Resp)),
+    ?assertEqual({full, <<"{\"q\":\"boots\"}">>}, livery_client:body(Resp)).
+
 timeout_layer(Config) ->
     C = livery_client:new(#{
         base_url => ?config(base, Config),
@@ -163,6 +175,17 @@ retry_layer(Config) ->
         stack => [livery_client:retry(#{max => 5, backoff => {10, 1.2}})]
     }),
     {ok, Resp} = livery_client:get(C, <<"/flaky">>),
+    ?assertEqual(200, livery_client:status(Resp)),
+    ?assertEqual({full, <<"recovered">>}, livery_client:body(Resp)).
+
+%% QUERY is idempotent (RFC 10008), so the retry layer replays it.
+query_retry_idempotent(Config) ->
+    atomics:put(?config(counter, Config), 1, 0),
+    C = livery_client:new(#{
+        base_url => ?config(base, Config),
+        stack => [livery_client:retry(#{max => 5, backoff => {10, 1.2}})]
+    }),
+    {ok, Resp} = livery_client:query(C, <<"/flaky">>, <<"{}">>),
     ?assertEqual(200, livery_client:status(Resp)),
     ?assertEqual({full, <<"recovered">>}, livery_client:body(Resp)).
 

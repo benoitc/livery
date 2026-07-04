@@ -1,8 +1,8 @@
 -module(livery_openapi).
 -moduledoc """
-OpenAPI 3.1 document generation from route metadata.
+OpenAPI 3.2 document generation from route metadata.
 
-`build/1` turns a list of routes into an OpenAPI 3.1 document
+`build/1` turns a list of routes into an OpenAPI 3.2 document
 (a JSON-encodable map). Each route is
 `{Method, Path, Handler}` or `{Method, Path, Handler, Meta}`; the
 optional `Meta` map carries operation-level fields:
@@ -67,7 +67,7 @@ JsonBytes = livery_openapi:to_json(Doc).
 %% Build
 %%====================================================================
 
--doc "Build an OpenAPI 3.1 document map from routes + info.".
+-doc "Build an OpenAPI 3.2 document map from routes + info.".
 -spec build(build_opts()) -> document().
 build(Opts) ->
     Info = maps:get(info, Opts, #{
@@ -76,7 +76,7 @@ build(Opts) ->
     }),
     Routes = maps:get(routes, Opts, []),
     Base = #{
-        <<"openapi">> => <<"3.1.0">>,
+        <<"openapi">> => <<"3.2.0">>,
         <<"info">> => normalize_info(Info),
         <<"paths">> => build_paths(Routes)
     },

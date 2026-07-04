@@ -55,7 +55,7 @@ idempotent(_Method, #{retry_non_idempotent := true}) ->
 idempotent(Method, _Opts) ->
     lists:member(
         normalize(Method),
-        [<<"get">>, <<"head">>, <<"put">>, <<"delete">>, <<"options">>]
+        [<<"get">>, <<"head">>, <<"put">>, <<"delete">>, <<"options">>, <<"query">>]
     ).
 
 normalize(M) when is_atom(M) -> normalize(atom_to_binary(M, utf8));

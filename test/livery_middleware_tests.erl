@@ -36,6 +36,23 @@ before_transforms_request_test() ->
     Resp = livery_middleware:run(Stack, Handler, req()),
     ?assertEqual(200, livery_resp:status(Resp)).
 
+query_method_passes_through_middleware_test() ->
+    Stack = [
+        livery_middleware:before(fun(R) ->
+            livery_req:set_meta(marker, yes, R)
+        end)
+    ],
+    Handler = fun(R) ->
+        <<"QUERY">> = livery_req:method(R),
+        yes = livery_req:meta(marker, R),
+        livery_resp:text(200, <<"queried">>)
+    end,
+    Req = livery_req:new(#{
+        protocol => h1, method => <<"QUERY">>, path => <<"/search">>
+    }),
+    Resp = livery_middleware:run(Stack, Handler, Req),
+    ?assertEqual(200, livery_resp:status(Resp)).
+
 after_response_transforms_response_test() ->
     Stack = [
         livery_middleware:after_response(fun(Resp) ->

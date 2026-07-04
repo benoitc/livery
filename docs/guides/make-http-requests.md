@@ -38,8 +38,9 @@ case livery_client:get(Client, <<"/users/42">>) of
 end.
 ```
 
-`post/3`, `put/3`, `delete/2`, and `request/3,4` round it out. With a
-`base_url` set you pass paths; without one you pass full URLs.
+`post/3`, `put/3`, `delete/2`, `query/3` (the RFC 10008 QUERY method),
+and `request/3,4` round it out. With a `base_url` set you pass paths;
+without one you pass full URLs.
 
 ## A real client, end to end
 

@@ -229,6 +229,7 @@ default_methods() ->
         <<"PATCH">>,
         <<"POST">>,
         <<"DELETE">>,
+        <<"QUERY">>,
         <<"OPTIONS">>
     ].
 

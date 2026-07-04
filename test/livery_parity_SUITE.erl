@@ -30,6 +30,7 @@
     json_response/1,
     empty_response/1,
     echo_buffered_body/1,
+    query_with_body/1,
     streaming_chunked_response/1,
     sse_response/1,
     ndjson_response/1,
@@ -64,6 +65,7 @@ groups() ->
         json_response,
         empty_response,
         echo_buffered_body,
+        query_with_body,
         streaming_chunked_response,
         sse_response,
         ndjson_response,
@@ -205,6 +207,31 @@ echo_buffered_body(Config) ->
         }
     ),
     ?assertEqual(<<"echo me">>, body(Resp)).
+
+%% QUERY (RFC 10008) is a safe method that carries a request body;
+%% it must dispatch and deliver its body exactly like POST.
+query_with_body(Config) ->
+    Handler = fun(R) ->
+        <<"QUERY">> = livery_req:method(R),
+        case livery_req:body(R) of
+            {buffered, IoData} ->
+                livery_resp:json(200, IoData);
+            {stream, Reader} ->
+                {ok, Bytes, _} = livery_body:read_all(Reader, 5000),
+                livery_resp:json(200, Bytes)
+        end
+    end,
+    Resp = drive(
+        Config,
+        [],
+        Handler,
+        #{
+            method => <<"QUERY">>,
+            body => {buffered, <<"{\"q\":\"boots\"}">>}
+        }
+    ),
+    ?assertEqual(200, status(Resp)),
+    ?assertEqual(<<"{\"q\":\"boots\"}">>, body(Resp)).
 
 streaming_chunked_response(Config) ->
     Producer = fun(Emit) ->

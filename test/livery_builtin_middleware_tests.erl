@@ -282,11 +282,10 @@ cors_preflight_returns_204_and_skips_handler_test() ->
         <<"http://app.test">>,
         livery_test_adapter:header(<<"access-control-allow-origin">>, Cap)
     ),
-    ?assert(
-        is_binary(
-            livery_test_adapter:header(<<"access-control-allow-methods">>, Cap)
-        )
-    ).
+    Methods = livery_test_adapter:header(<<"access-control-allow-methods">>, Cap),
+    ?assert(is_binary(Methods)),
+    %% QUERY is part of the default allow-methods set.
+    ?assertNotEqual(nomatch, binary:match(Methods, <<"QUERY">>)).
 
 cors_simple_allowed_origin_echoes_and_varies_test() ->
     Cap = run_cors(

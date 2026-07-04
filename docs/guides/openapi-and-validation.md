@@ -1,13 +1,13 @@
 # How to generate OpenAPI docs and validate requests
 
-Livery can turn your route metadata into an OpenAPI 3.1 spec, serve a
+Livery can turn your route metadata into an OpenAPI 3.2 spec, serve a
 browsable docs page from it, and reject malformed request bodies. You
 need this when you want a machine-readable contract for your routes and
 automatic validation against it.
 
 ## Generate the spec
 
-`livery_openapi:build/1` turns route metadata into an OpenAPI 3.1
+`livery_openapi:build/1` turns route metadata into an OpenAPI 3.2
 document. Livery path templates (`:param`, `*wildcard`) become `{param}`
 and gain synthesised path parameters:
 

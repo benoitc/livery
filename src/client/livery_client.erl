@@ -4,7 +4,7 @@ A composable HTTP client: the outbound twin of the server middleware.
 
 Build a client once with `new/1` (a transport adapter, a base URL,
 default headers, and a layer stack), then call it with `get/2`, `post/3`,
-`request/3,4`. Layers run outermost-first and each is
+`query/3`, `request/3,4`. Layers run outermost-first and each is
 `call(Request, Next, State) -> {ok, response()} | {error, term()}`, the
 same shape as server middleware, with errors threaded as values.
 
@@ -27,7 +27,7 @@ The transport is a `livery_client_adapter`; the default,
 """.
 
 -export([new/1]).
--export([get/2, post/3, put/3, delete/2, request/3, request/4, run/2]).
+-export([get/2, post/3, put/3, delete/2, query/3, request/3, request/4, run/2]).
 -export([status/1, headers/1, header/2, header/3, body/1, method/1, url/1, set_header/3]).
 -export([read/2, read_body/1]).
 -export([stream_next/1, stop_stream/1]).
@@ -101,6 +101,10 @@ put(Client, Path, Body) -> request(Client, put, Path, #{body => {full, Body}}).
 
 -spec delete(client(), binary()) -> result().
 delete(Client, Path) -> request(Client, delete, Path, #{}).
+
+-doc "Send a QUERY request (RFC 10008): safe and idempotent, with a body.".
+-spec query(client(), binary(), iodata()) -> result().
+query(Client, Path, Body) -> request(Client, query, Path, #{body => {full, Body}}).
 
 -spec request(client(), atom() | binary(), binary()) -> result().
 request(Client, Method, Path) -> request(Client, Method, Path, #{}).

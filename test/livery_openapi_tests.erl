@@ -7,12 +7,12 @@
 %% build/1
 %%====================================================================
 
-emits_openapi_31_and_info_test() ->
+emits_openapi_32_and_info_test() ->
     Doc = livery_openapi:build(#{
         info => #{title => <<"My API">>, version => <<"2.1.0">>},
         routes => []
     }),
-    ?assertEqual(<<"3.1.0">>, maps:get(<<"openapi">>, Doc)),
+    ?assertEqual(<<"3.2.0">>, maps:get(<<"openapi">>, Doc)),
     ?assertEqual(
         #{<<"title">> => <<"My API">>, <<"version">> => <<"2.1.0">>},
         maps:get(<<"info">>, Doc)
@@ -80,6 +80,26 @@ metadata_populates_operation_test() ->
         maps:get(<<"responses">>, Post)
     ).
 
+query_route_emits_query_operation_test() ->
+    Doc = livery_openapi:build(#{
+        info => #{title => <<"A">>, version => <<"1">>},
+        routes => [
+            {<<"QUERY">>, <<"/documents/search">>, {docs, search}, #{
+                operation_id => <<"searchDocuments">>,
+                request_body => #{<<"required">> => true},
+                responses => #{200 => #{description => <<"matches">>}}
+            }}
+        ]
+    }),
+    Item = maps:get(<<"/documents/search">>, maps:get(<<"paths">>, Doc)),
+    Query = maps:get(<<"query">>, Item),
+    ?assertEqual(<<"searchDocuments">>, maps:get(<<"operationId">>, Query)),
+    ?assertMatch(#{<<"required">> := true}, maps:get(<<"requestBody">>, Query)),
+    ?assertMatch(
+        #{<<"200">> := #{<<"description">> := <<"matches">>}},
+        maps:get(<<"responses">>, Query)
+    ).
+
 multiple_methods_same_path_test() ->
     Doc = livery_openapi:build(#{
         info => #{title => <<"A">>, version => <<"1">>},
@@ -115,7 +135,7 @@ to_json_roundtrips_test() ->
     Json = livery_openapi:to_json(Doc),
     ?assert(is_binary(Json)),
     Decoded = json:decode(Json),
-    ?assertEqual(<<"3.1.0">>, maps:get(<<"openapi">>, Decoded)).
+    ?assertEqual(<<"3.2.0">>, maps:get(<<"openapi">>, Decoded)).
 
 handler_serves_json_test() ->
     Doc = livery_openapi:build(#{
@@ -130,4 +150,4 @@ handler_serves_json_test() ->
         livery_test_adapter:header(<<"content-type">>, Cap)
     ),
     Decoded = json:decode(livery_test_adapter:body(Cap)),
-    ?assertEqual(<<"3.1.0">>, maps:get(<<"openapi">>, Decoded)).
+    ?assertEqual(<<"3.2.0">>, maps:get(<<"openapi">>, Decoded)).

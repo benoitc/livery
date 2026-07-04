@@ -166,3 +166,14 @@ invalid decision crashes before any byte, surfacing as a clean 500. Tests:
 The original reproducer is `barrel_inference`'s `chat_busy_returns_429/1`
 CT case (saturates a concurrency=1/depth=1 queue, asserts a racing request
 reports `429`/`504`).
+
+## HTTP QUERY method (RFC 10008)
+
+DONE: QUERY is first-class end to end. The core was already
+method-agnostic (router dispatch, the 405 `Allow` header, body
+reading, all three adapters), so the changes are the deliberate
+opt-ins: `livery_client:query/3`, QUERY in the client retry
+idempotent set and in the CORS default allow-methods, and OpenAPI
+3.2 output where a QUERY route emits a `query` operation. Locked by
+the parity SUITE (`query_with_body`) across H1/H2/H3 and by a QUERY
+search step in the e2e journey. See `docs/guides/query-method.md`.

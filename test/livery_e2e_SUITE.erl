@@ -97,7 +97,7 @@ end_per_group(_Proto, _Config) ->
     ok.
 
 %%====================================================================
-%% The journey: CRUD + list (with middleware headers) + SSE
+%% The journey: CRUD + QUERY search + list (with middleware headers) + SSE
 %%====================================================================
 
 journey(Config) ->
@@ -125,14 +125,21 @@ journey(Config) ->
     ?assertNotEqual(undefined, header(<<"x-request-id">>, ListHs)),
     ?assertNotEqual(undefined, header(<<"x-response-time-ms">>, ListHs)),
 
-    %% 4. Delete.
+    %% 4. Search with QUERY (RFC 10008): a safe method that carries its
+    %% criteria in the body, dispatched and middleware-wrapped like POST.
+    SearchReq = iolist_to_binary(json:encode(#{<<"text">> => Tag})),
+    {200, SearchHs, SearchBody} = req(Config, <<"QUERY">>, <<"/notes">>, SearchReq),
+    ?assert(lists:member(Id, [maps:get(<<"id">>, N) || N <- json:decode(SearchBody)])),
+    ?assertNotEqual(undefined, header(<<"x-request-id">>, SearchHs)),
+
+    %% 5. Delete.
     {204, _, DeleteBody} = req(Config, <<"DELETE">>, Path, <<>>),
     ?assertEqual(<<>>, DeleteBody),
 
-    %% 5. Gone.
+    %% 6. Gone.
     {404, _, _} = req(Config, <<"GET">>, Path, <<>>),
 
-    %% 6. SSE feed: three `event: notes' frames, then the stream ends.
+    %% 7. SSE feed: three `event: notes' frames, then the stream ends.
     {200, EventsHs, EventsBody} = req(Config, <<"GET">>, <<"/events">>, <<>>),
     ?assertEqual(<<"text/event-stream">>, header(<<"content-type">>, EventsHs)),
     ?assert(count_occurrences(EventsBody, <<"event: notes">>) >= 3).

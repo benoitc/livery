@@ -56,6 +56,7 @@ solution.
 
 **Routing & middleware**
 - [Mount a router on a service](guides/mount-a-router.md)
+- [Handle QUERY requests](guides/query-method.md)
 - [Write a custom middleware](guides/custom-middleware.md)
 - [Cap request body size](guides/cap-body-size.md)
 - [Add per-request deadlines](guides/add-deadlines.md)

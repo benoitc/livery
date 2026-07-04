@@ -270,7 +270,8 @@ router_handler_not_found_test() ->
 router_handler_method_not_allowed_sets_allow_test() ->
     Router = livery_router:compile([
         {<<"GET">>, <<"/x">>, {?MODULE, rh_index}},
-        {<<"POST">>, <<"/x">>, {?MODULE, rh_index}}
+        {<<"POST">>, <<"/x">>, {?MODULE, rh_index}},
+        {<<"QUERY">>, <<"/x">>, {?MODULE, rh_index}}
     ]),
     H = livery:router_handler(Router),
     Cap = livery_test_adapter:run(
@@ -281,7 +282,8 @@ router_handler_method_not_allowed_sets_allow_test() ->
     ?assertEqual(405, livery_test_adapter:status(Cap)),
     Allow = livery_test_adapter:header(<<"allow">>, Cap),
     ?assertNotEqual(nomatch, binary:match(Allow, <<"GET">>)),
-    ?assertNotEqual(nomatch, binary:match(Allow, <<"POST">>)).
+    ?assertNotEqual(nomatch, binary:match(Allow, <<"POST">>)),
+    ?assertNotEqual(nomatch, binary:match(Allow, <<"QUERY">>)).
 
 router_handler_custom_fallbacks_test() ->
     Router = livery_router:compile([{<<"GET">>, <<"/">>, {?MODULE, rh_index}}]),

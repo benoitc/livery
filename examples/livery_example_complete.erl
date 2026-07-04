@@ -15,6 +15,7 @@
 %%
 %%     curl http://127.0.0.1:8080/notes
 %%     curl -XPOST --data '{"text":"buy bread"}' http://127.0.0.1:8080/notes
+%%     curl -XQUERY --data '{"text":"bread"}' http://127.0.0.1:8080/notes
 %%     curl http://127.0.0.1:8080/notes/1
 %%     curl -XDELETE http://127.0.0.1:8080/notes/1
 %%     curl -N http://127.0.0.1:8080/events
@@ -33,7 +34,7 @@
 %% reusable pieces (handy for embedding the service in a test harness)
 -export([base_stack/0, ensure_table/0]).
 %% route handlers
--export([list_notes/1, create_note/1, show_note/1, delete_note/1, events/1, ws/1]).
+-export([list_notes/1, create_note/1, search_notes/1, show_note/1, delete_note/1, events/1, ws/1]).
 %% ws_handler callbacks
 -export([init/2, handle_in/2, handle_info/2, terminate/2]).
 
@@ -102,6 +103,9 @@ router() ->
     livery_router:compile([
         {<<"GET">>, <<"/notes">>, {?MODULE, list_notes}, #{middleware => [list_marker()]}},
         {<<"POST">>, <<"/notes">>, {?MODULE, create_note}},
+        %% QUERY (RFC 10008): a safe search over the same resource, with
+        %% the criteria in a JSON body instead of the URL.
+        {<<"QUERY">>, <<"/notes">>, {?MODULE, search_notes}},
         {<<"GET">>, <<"/notes/:id">>, {?MODULE, show_note}},
         {<<"DELETE">>, <<"/notes/:id">>, {?MODULE, delete_note}},
         {<<"GET">>, <<"/events">>, {?MODULE, events}},
@@ -162,6 +166,23 @@ create_note(Req) ->
             Location = <<"/notes/", Id/binary>>,
             Resp = livery_resp:json(201, json:encode(Note)),
             livery_resp:with_header(<<"location">>, Location, Resp);
+        {ok, _} ->
+            livery_resp:json(422, <<"{\"error\":\"text is required\"}">>);
+        {error, _} ->
+            livery_resp:json(400, <<"{\"error\":\"invalid json\"}">>)
+    end.
+
+%% Search notes with a QUERY request: same body handling as POST, but
+%% safe and idempotent, so clients and caches may repeat it freely.
+search_notes(Req) ->
+    case decode_body(Req) of
+        {ok, #{<<"text">> := Text}} when is_binary(Text) ->
+            Matches = [
+                Note
+             || Note <- all_notes(),
+                binary:match(maps:get(<<"text">>, Note), Text) =/= nomatch
+            ],
+            livery_resp:json(200, json:encode(Matches));
         {ok, _} ->
             livery_resp:json(422, <<"{\"error\":\"text is required\"}">>);
         {error, _} ->

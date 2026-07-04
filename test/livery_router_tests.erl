@@ -60,12 +60,14 @@ wildcard_captures_rest_test() ->
 method_filter_test() ->
     R = livery_router:compile([
         {<<"GET">>, <<"/x">>, show},
-        {<<"POST">>, <<"/x">>, create}
+        {<<"POST">>, <<"/x">>, create},
+        {<<"QUERY">>, <<"/x">>, search}
     ]),
     ?assertMatch({ok, show, _, _}, livery_router:match(<<"GET">>, <<"/x">>, R)),
     ?assertMatch({ok, create, _, _}, livery_router:match(<<"POST">>, <<"/x">>, R)),
+    ?assertMatch({ok, search, _, _}, livery_router:match(<<"QUERY">>, <<"/x">>, R)),
     ?assertEqual(
-        {error, {method_not_allowed, [<<"GET">>, <<"POST">>]}},
+        {error, {method_not_allowed, [<<"GET">>, <<"POST">>, <<"QUERY">>]}},
         livery_router:match(<<"DELETE">>, <<"/x">>, R)
     ).
 

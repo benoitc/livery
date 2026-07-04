@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-04
+
+Adds first-class support for the HTTP QUERY method (RFC 10008), end to
+end: server, client, OpenAPI, example, and docs.
+
+### Added
+
+- HTTP QUERY method support. The core was already method-agnostic
+  (router dispatch, the 405 `Allow` header, body reading, all three
+  adapters), and the parity suite now locks QUERY-with-body behaviour
+  across HTTP/1.1, HTTP/2, and HTTP/3.
+- `livery_client:query/3`, mirroring `post/3`. The retry layer treats
+  QUERY as idempotent and replays it.
+- A `QUERY /notes` search endpoint in the complete example, exercised
+  by the e2e journey, and a new guide: `docs/guides/query-method.md`.
+
+### Changed
+
+- `livery_openapi` emits OpenAPI 3.2.0 documents (previously 3.1.0);
+  QUERY routes appear as the `query` operation, a first-class key in
+  3.2.
+- `livery_cors` includes `QUERY` in the default allow-methods.
+- Bump `hackney` 4.4.5 -> 4.5.1.
+
 ## [0.4.4] - 2026-06-18
 
 Maintenance release: dependency update.

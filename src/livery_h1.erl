@@ -64,6 +64,10 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     cacerts => [binary()],
     ssl_opts => [ssl:tls_server_option()],
     acceptors => pos_integer(),
+    %% Authoritative request-body ceiling: a body past it yields a graceful
+    %% 413, `infinity' disables it, default 16 MiB. This drives h1's parser
+    %% cap too (h1's own 8 MiB default is disabled in its favour), so a value
+    %% above 8 MiB takes effect instead of being silently capped.
     max_body => non_neg_integer() | infinity,
     %% Slow-client guards, passed through to `h1'. They have finite
     %% defaults there (idle_timeout 300000 ms, request_timeout 60000 ms),
@@ -306,6 +310,14 @@ build_h1_opts(Opts, Stack, Handler) ->
     Transport = maps:get(transport, Opts, tcp),
     Base = #{
         transport => Transport,
+        %% Disable h1's own parser-level body cap and enforce `max_body' in
+        %% the translator instead. h1's parser runs upstream of the translate
+        %% cap and, on exceed, tears the connection down, which would pre-empt
+        %% the graceful 413 the translator delivers via h1's early-response
+        %% drain (see abort_body/2). h1's 8 MiB default previously did exactly
+        %% that, silently capping any `max_body' above 8 MiB. Requires
+        %% erlang_h1 >= 0.7.1, which forwards max_body_size from server opts.
+        max_body_size => infinity,
         handler => make_handler_fun(
             Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport
         )

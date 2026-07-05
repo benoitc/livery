@@ -26,6 +26,8 @@
     http3_listener_forwards_sni_callback/1,
     service_without_handler_or_router_fails/1,
     stop_accepting_refuses_new_connections/1,
+    max_body_raises_h1_parser_cap/1,
+    default_max_body_authoritative/1,
     drain_lets_inflight_finish/1,
     drain_times_out_on_stuck_request/1
 ]).
@@ -45,6 +47,8 @@ all() ->
         http3_listener_forwards_sni_callback,
         service_without_handler_or_router_fails,
         stop_accepting_refuses_new_connections,
+        max_body_raises_h1_parser_cap,
+        default_max_body_authoritative,
         drain_lets_inflight_finish,
         drain_times_out_on_stuck_request
     ].
@@ -256,6 +260,44 @@ stop_accepting_refuses_new_connections(_Config) ->
     ?assertMatch({error, _}, http_try(Port, <<"/">>)),
     livery:stop_service(Pid).
 
+%% A 20 MiB upload, well past h1's 8 MiB parser default, must succeed when the
+%% listener raises `max_body'. The handler streams the body one chunk at a
+%% time via livery_body:read, mirroring barrel_server's attachment path. Before
+%% the fix, h1's parser cap won and the upload was lost past 8 MiB.
+max_body_raises_h1_parser_cap(_Config) ->
+    Size = 20 * 1024 * 1024,
+    {ok, Pid} = livery:start_service(#{
+        http => #{port => 0, max_body => 32 * 1024 * 1024},
+        handler => count_body_handler()
+    }),
+    try
+        Port = maps:get(h1, livery:which_listeners(Pid)),
+        Body = binary:copy(<<"x">>, Size),
+        ?assertEqual({200, integer_to_binary(Size)}, http_put(Port, <<"/">>, Body))
+    after
+        livery:stop_service(Pid)
+    end.
+
+%% The default `max_body' (16 MiB) is authoritative, not h1's old 8 MiB parser
+%% cap: a 12 MiB body (past 8 MiB) succeeds, while a 20 MiB body past 16 MiB
+%% gets a graceful 413.
+default_max_body_authoritative(_Config) ->
+    {ok, Pid} = livery:start_service(#{
+        http => #{port => 0}, handler => count_body_handler()
+    }),
+    try
+        Port = maps:get(h1, livery:which_listeners(Pid)),
+        Under = 12 * 1024 * 1024,
+        ?assertEqual(
+            {200, integer_to_binary(Under)},
+            http_put(Port, <<"/">>, binary:copy(<<"x">>, Under))
+        ),
+        {StatusOver, _} = http_put(Port, <<"/">>, binary:copy(<<"x">>, 20 * 1024 * 1024)),
+        ?assertEqual(413, StatusOver)
+    after
+        livery:stop_service(Pid)
+    end.
+
 drain_lets_inflight_finish(_Config) ->
     Self = self(),
     Ref = make_ref(),
@@ -392,6 +434,24 @@ http_try(Port, Path) ->
         ]
     ).
 
+%% PUT a body over a fresh connection (pool disabled): the oversize case
+%% closes the connection after the 413, so a pooled socket would be poisoned.
+http_put(Port, Path, Body) ->
+    Url = iolist_to_binary([
+        <<"http://127.0.0.1:">>,
+        integer_to_binary(Port),
+        Path
+    ]),
+    Headers = [{<<"Content-Length">>, integer_to_binary(byte_size(Body))}],
+    {ok, Status, _Hs, RBody} = hackney:request(
+        <<"PUT">>,
+        Url,
+        Headers,
+        Body,
+        [with_body, {pool, false}, {recv_timeout, 10000}]
+    ),
+    {Status, RBody}.
+
 body_via_h1(Port) ->
     Url = url(<<"http">>, Port),
     {ok, 200, _, Body} = hackney:request(
@@ -525,6 +585,24 @@ url(Scheme, Port) ->
         integer_to_binary(Port),
         <<"/">>
     ]).
+
+%% Stream the request body one chunk at a time and reply with its byte count,
+%% or 413 if the body cap aborts the read.
+count_body_handler() ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case drain_count(Reader, 0) of
+            {ok, Count} -> livery_resp:text(200, integer_to_binary(Count));
+            {error, _} -> livery_resp:text(413, <<"too large">>)
+        end
+    end.
+
+drain_count(Reader, Acc) ->
+    case livery_body:read(Reader, 5000) of
+        {ok, Chunk, Reader1} -> drain_count(Reader1, Acc + iolist_size(Chunk));
+        {done, _} -> {ok, Acc};
+        {error, Reason, _} -> {error, Reason}
+    end.
 
 collect_h2(Conn, StreamId, _Status, _Headers, BodyAcc) ->
     receive

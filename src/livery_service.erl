@@ -80,6 +80,11 @@ in-flight requests finish, use `livery:drain/1,2`.
     key => binary() | string() | term(),
     cacerts => [binary()],
     acceptors => pos_integer(),
+    %% Request-body ceiling. A body past this yields a graceful 413;
+    %% `infinity' disables it, default 16 MiB. Honored by all three adapters;
+    %% the H1 adapter enforces it in place of h1's own parser cap, so a value
+    %% above h1's 8 MiB default takes effect instead of being silently capped.
+    max_body => non_neg_integer() | infinity,
     %% H3 per-SNI certificate selection, forwarded to `quic' (>= 1.6.5).
     sni_callback => fun(
         (binary() | undefined) ->

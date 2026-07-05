@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `max_body` now governs the HTTP/1.1 request-body limit end to end.
+  It previously bounded only livery's translator while h1's parser kept
+  its own 8 MiB default, so any `max_body` above 8 MiB was silently
+  capped and uploads past 8 MiB were lost. The H1 adapter now disables
+  h1's parser cap and enforces `max_body` itself, returning a graceful
+  413 on exceed. Requires erlang_h1 >= 0.7.1.
+
+### Changed
+
+- `livery:start_service/1` listener options accept `max_body`
+  (`non_neg_integer() | infinity`, default 16 MiB), now documented and
+  type-checked.
+
 ## [0.5.0] - 2026-07-04
 
 Adds first-class support for the HTTP QUERY method (RFC 10008), end to

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-07
+
+### Changed
+
+- Bump wire dependencies to their latest hex releases: hackney 4.5.2,
+  h2 0.10.4, webtransport 0.4.3, quic 1.7.0.
+
 ## [0.5.1] - 2026-07-05
 
 ### Fixed

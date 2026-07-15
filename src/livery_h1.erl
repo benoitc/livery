@@ -239,9 +239,11 @@ to_h1({MaxBytes, MaxMs}) -> {MaxBytes, MaxMs}.
 Hand the stream's socket to the `ws` library to run a WebSocket
 session.
 
-Validates the RFC 6455 handshake headers, replies 101 via
+Validates the RFC 6455 handshake headers (negotiating a
+subprotocol when `Opts` carries `subprotocols`), replies 101 via
 `h1:accept_upgrade/3`, takes ownership of the raw socket, and
-calls `ws:accept/5` with the supplied handler module and opts.
+calls `ws:accept/6` with the supplied handler module, opts, and
+any `idle_timeout`. The handler's `Req` carries the socket `peer`.
 
 Returns `{ok, SessionPid}` on success or `{error, _}` on a bad
 handshake or socket transfer failure.
@@ -254,19 +256,21 @@ handshake or socket transfer failure.
 ) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
+    {ValidateOpts, AcceptOpts} = livery_ws:handshake_opts(Opts),
     Headers = livery_req:headers(Req),
-    case ws_h1_upgrade:validate_request(Headers) of
+    case ws_h1_upgrade:validate_request(Headers, ValidateOpts) of
         {ok, Info} ->
             RespHeaders = ws_h1_upgrade:response_headers(Info),
             case h1:accept_upgrade(Conn, StreamId, RespHeaders) of
                 {ok, Socket, _BufferedBytes} ->
-                    WsReq = build_ws_req(Req),
+                    WsReq = build_ws_req(Req, Socket),
                     ws:accept(
                         ws_transport(Req),
                         Socket,
                         WsReq,
                         HandlerMod,
-                        Opts
+                        Opts,
+                        AcceptOpts
                     );
                 {error, Reason} ->
                     {error, {accept_upgrade_failed, Reason}}
@@ -275,14 +279,31 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
             {error, {bad_request, Reason}}
     end.
 
--spec build_ws_req(livery_req:req()) -> map().
-build_ws_req(Req) ->
+-spec build_ws_req(livery_req:req(), term()) -> map().
+build_ws_req(Req, Socket) ->
     #{
         method => livery_req:method(Req),
         path => livery_req:path(Req),
         query => livery_req:query(Req),
-        headers => livery_req:headers(Req)
+        headers => livery_req:headers(Req),
+        peer => socket_peer(Req, Socket)
     }.
+
+%% The h1 library does not carry the peer on the request, but the accepted
+%% upgrade socket does. Read it with the transport matching the listener's
+%% security (same branch as ws_transport/1).
+-spec socket_peer(livery_req:req(), term()) ->
+    {inet:ip_address(), inet:port_number()} | undefined.
+socket_peer(Req, Socket) ->
+    Res =
+        case livery_req:tls(Req) of
+            undefined -> inet:peername(Socket);
+            _ -> ssl:peername(Socket)
+        end,
+    case Res of
+        {ok, Peer} -> Peer;
+        {error, _} -> undefined
+    end.
 
 %% Pick the ws transport from the connection's security, which the
 %% listener records on the request (an ssl listener sets `tls'). This

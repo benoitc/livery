@@ -25,7 +25,7 @@ via `livery_ws_h3`).
 
 -include("livery.hrl").
 
--export([upgrade/3]).
+-export([upgrade/3, handshake_opts/1]).
 
 -export_type([handler_module/0, handler_opts/0]).
 
@@ -36,8 +36,20 @@ via `livery_ws_h3`).
 Upgrade the current request to a WebSocket session.
 
 `HandlerMod` must implement the `ws_handler` behaviour. `Opts`
-is opaque and forwarded as `HMod:init(Req, Opts)`'s second
-argument by the `ws` library.
+is a map forwarded as `HMod:init(Req, Opts)`'s second argument by
+the `ws` library. Two keys are also interpreted by the handshake
+(and left in `Opts`, so the handler still sees them):
+
+- `subprotocols => [binary()]` drives subprotocol negotiation: the
+  first of these the client also offers is echoed in the response
+  `Sec-WebSocket-Protocol`, and a client offering none of them is
+  rejected. Omit to skip negotiation.
+- `idle_timeout => timeout()` overrides the session idle timeout
+  (`infinity` never idle-closes). Omit for the `ws` default.
+
+The handler's `Req` carries `peer => {IpAddress, Port}`, the client
+address from the socket (H1), the h2 connection (H2), or the QUIC
+connection (H3).
 
 Returns a `#livery_resp{}` value:
 
@@ -82,6 +94,30 @@ upgrade(Req, HandlerMod, Opts) ->
                 <<"WebSocket upgrade not supported on this protocol">>
             )
     end.
+
+-doc """
+Split upgrade `Opts` into the two handshake option maps the adapters
+need: `{ValidateOpts, AcceptOpts}`. `ValidateOpts` drives
+`ws_hN_upgrade:validate_request/2` (subprotocol negotiation) and
+`AcceptOpts` drives `ws:accept/6` (idle timeout). Both are `#{}` when the
+respective key is absent, which makes the calls equivalent to the /1 and
+/5 forms. Called by the H1/H2/H3 adapters.
+""".
+-spec handshake_opts(handler_opts()) -> {map(), map()}.
+handshake_opts(Opts) when is_map(Opts) ->
+    ValidateOpts =
+        case maps:get(subprotocols, Opts, undefined) of
+            [_ | _] = Subs -> #{required_subprotocols => Subs};
+            _ -> #{}
+        end,
+    AcceptOpts =
+        case maps:get(idle_timeout, Opts, undefined) of
+            undefined -> #{};
+            Timeout -> #{idle_timeout => Timeout}
+        end,
+    {ValidateOpts, AcceptOpts};
+handshake_opts(_Opts) ->
+    {#{}, #{}}.
 
 -spec adapter_supports_ws(module()) -> boolean().
 adapter_supports_ws(livery_h1) -> true;

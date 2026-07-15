@@ -25,9 +25,14 @@
     h1_echo_text_frame/1,
     h1_ssl_echo_text_frame/1,
     h1_rejects_request_without_upgrade_headers/1,
+    h1_echoes_subprotocol/1,
+    h1_surfaces_peer/1,
+    h1_idle_timeout_closes/1,
     h2_echo_text_frame/1,
     h2_rejects_plain_get/1,
+    h2_surfaces_peer/1,
     h3_echo_text_frame/1,
+    h3_surfaces_peer/1,
     h1_echo_text_frame_ipv6/1
 ]).
 
@@ -47,9 +52,14 @@ all() ->
         h1_ssl_echo_text_frame,
         h1_echo_text_frame_ipv6,
         h1_rejects_request_without_upgrade_headers,
+        h1_echoes_subprotocol,
+        h1_surfaces_peer,
+        h1_idle_timeout_closes,
         h2_echo_text_frame,
         h2_rejects_plain_get,
-        h3_echo_text_frame
+        h2_surfaces_peer,
+        h3_echo_text_frame,
+        h3_surfaces_peer
     ].
 
 init_per_suite(Config) ->
@@ -81,6 +91,20 @@ init_per_testcase(TC, Config) when
         enable_connect_protocol => true,
         stack => [],
         handler => fun ws_handler/1
+    }),
+    [
+        {adapter, h2},
+        {listener, Listener},
+        {port, h2:server_port(Listener)}
+        | Config
+    ];
+init_per_testcase(h2_surfaces_peer, Config) ->
+    {ok, Listener} = livery_h2:start(#{
+        port => 0,
+        transport => tcp,
+        enable_connect_protocol => true,
+        stack => [],
+        handler => fun ws_peer_handler/1
     }),
     [
         {adapter, h2},
@@ -133,6 +157,39 @@ init_per_testcase(h3_echo_text_frame, Config) ->
     }),
     {ok, Port} = quic:get_server_port(Listener),
     [{adapter, h3}, {listener, Listener}, {port, Port} | Config];
+init_per_testcase(h3_surfaces_peer, Config) ->
+    {ok, Listener} = livery_h3:start(#{
+        port => 0,
+        cert => ?config(cert, Config),
+        key => ?config(key, Config),
+        settings => #{enable_connect_protocol => 1},
+        stack => [],
+        handler => fun ws_peer_handler/1
+    }),
+    {ok, Port} = quic:get_server_port(Listener),
+    [{adapter, h3}, {listener, Listener}, {port, Port} | Config];
+init_per_testcase(TC, Config) when
+    TC =:= h1_echoes_subprotocol;
+    TC =:= h1_surfaces_peer;
+    TC =:= h1_idle_timeout_closes
+->
+    Handler =
+        case TC of
+            h1_echoes_subprotocol -> fun ws_subproto_handler/1;
+            h1_surfaces_peer -> fun ws_peer_handler/1;
+            h1_idle_timeout_closes -> fun ws_idle_handler/1
+        end,
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        stack => [],
+        handler => Handler
+    }),
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
+        | Config
+    ];
 init_per_testcase(_TC, Config) ->
     {ok, Listener} = livery_h1:start(#{
         port => 0,
@@ -157,6 +214,18 @@ end_per_testcase(_TC, Config) ->
 %% Shared handler: upgrade to the echo ws_handler.
 ws_handler(R) ->
     livery_ws:upgrade(R, livery_ws_echo_handler, #{}).
+
+%% Require the `sip' subprotocol so the 101 echoes it back.
+ws_subproto_handler(R) ->
+    livery_ws:upgrade(R, livery_ws_echo_handler, #{subprotocols => [<<"sip">>]}).
+
+%% Probe handler reports the peer address it saw on the Req.
+ws_peer_handler(R) ->
+    livery_ws:upgrade(R, livery_ws_probe_handler, #{}).
+
+%% Short idle timeout so an idle connection is closed quickly.
+ws_idle_handler(R) ->
+    livery_ws:upgrade(R, livery_ws_echo_handler, #{idle_timeout => 300}).
 
 %% Probe the IPv6 loopback with a real connect round-trip, not just a
 %% listen: CI runners can bind `::1' yet fail to connect to it. A false
@@ -308,6 +377,82 @@ h1_rejects_request_without_upgrade_headers(Config) ->
     ?assertEqual(400, Status),
     ?assertMatch(<<"bad ws upgrade:", _/binary>>, Body).
 
+ws_url(Port) ->
+    iolist_to_binary([<<"ws://127.0.0.1:">>, integer_to_binary(Port), <<"/">>]).
+
+%% The server requires the `sip' subprotocol; the client offers it and must
+%% see it echoed. The negotiated protocol reaches the client handler's
+%% init/2 as Req = #{response := #{subprotocol := <<"sip">>}}.
+h1_echoes_subprotocol(Config) ->
+    Port = ?config(port, Config),
+    Self = self(),
+    {ok, Sess} = ws_client:connect(ws_url(Port), #{
+        handler => livery_ws_client_capture,
+        handler_opts => #{parent => Self},
+        subprotocols => [<<"sip">>]
+    }),
+    try
+        receive
+            {ws_init, #{response := Response}} ->
+                ?assertEqual(<<"sip">>, maps:get(subprotocol, Response, undefined))
+        after 15000 ->
+            ct:fail(no_ws_init)
+        end
+    after
+        catch ws:close(Sess, 1000, <<"bye">>),
+        catch ws:stop(Sess),
+        drain_captured()
+    end.
+
+%% The probe handler emits the peer it saw on the Req; over loopback it must
+%% be a real 127.0.0.1 address, proving the adapter surfaced it (not undefined).
+h1_surfaces_peer(Config) ->
+    Port = ?config(port, Config),
+    Self = self(),
+    {ok, Sess} = ws_client:connect(ws_url(Port), #{
+        handler => livery_ws_client_capture,
+        handler_opts => #{parent => Self}
+    }),
+    try
+        receive
+            {captured, {text, Peer}} ->
+                ?assertMatch(<<"peer:127.0.0.1:", _/binary>>, Peer)
+        after 15000 ->
+            ct:fail(no_peer_frame)
+        end
+    after
+        catch ws:close(Sess, 1000, <<"bye">>),
+        catch ws:stop(Sess),
+        drain_captured()
+    end.
+
+%% The server sets a 300ms idle timeout; the client sends nothing, so the
+%% server closes the idle session (1001) and the client session ends. Proven
+%% by the session pid going DOWN quickly (it would idle for 60s by default).
+h1_idle_timeout_closes(Config) ->
+    Port = ?config(port, Config),
+    Self = self(),
+    {ok, Sess} = ws_client:connect(ws_url(Port), #{
+        handler => livery_ws_client_capture,
+        handler_opts => #{parent => Self}
+    }),
+    MRef = monitor(process, Sess),
+    try
+        receive
+            {captured, {text, <<"ready">>}} -> ok
+        after 15000 -> ct:fail(no_ready_frame)
+        end,
+        receive
+            {'DOWN', MRef, process, Sess, _} -> ok
+        after 5000 -> ct:fail(no_idle_close)
+        end
+    after
+        demonitor(MRef, [flush]),
+        catch ws:close(Sess, 1000, <<"bye">>),
+        catch ws:stop(Sess),
+        drain_captured()
+    end.
+
 %%====================================================================
 %% H2 (RFC 8441 extended CONNECT)
 %%====================================================================
@@ -361,6 +506,32 @@ h2_rejects_plain_get(Config) ->
         h2:close(Conn)
     end.
 
+%% Over H2 the probe handler's first frame carries the peer address the
+%% adapter read via h2:peername/1; assert it is a real address.
+h2_surfaces_peer(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    try
+        {ok, StreamId} = h2:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":scheme">>, <<"http">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{protocol => <<"websocket">>}
+        ),
+        200 = wait_h2_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {{text, PeerFrame}, _Parser1} = recv_ws_frame(Conn, StreamId, Parser0),
+        ?assertMatch(<<"peer:", _/binary>>, PeerFrame),
+        ?assertNotEqual(<<"peer:undefined">>, PeerFrame)
+    after
+        h2:close(Conn)
+    end.
+
 %%====================================================================
 %% H3 (RFC 9220 extended CONNECT)
 %%====================================================================
@@ -397,6 +568,42 @@ h3_echo_text_frame(Config) ->
         ok = quic_h3:send_data(Conn, StreamId, Frame, false),
         {Echo, _Parser2} = recv_ws_frame_h3(Conn, StreamId, Parser1),
         ?assertEqual({text, <<"over-h3">>}, Echo)
+    after
+        catch quic_h3:close(Conn)
+    end.
+
+%% Over H3 the probe handler's first frame carries the QUIC peer address;
+%% assert it is a real address, proving quic_h3:get_quic_conn/1 +
+%% quic_connection:peername/1 surfaced it (not undefined).
+h3_surfaces_peer(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>,
+        Port,
+        #{
+            verify => verify_none,
+            sync => true,
+            settings => #{enable_connect_protocol => 1}
+        }
+    ),
+    try
+        {ok, StreamId} = quic_h3:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":protocol">>, <<"websocket">>},
+                {<<":scheme">>, <<"https">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{end_stream => false}
+        ),
+        200 = wait_h3_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {{text, PeerFrame}, _Parser1} = recv_ws_frame_h3(Conn, StreamId, Parser0),
+        ?assertMatch(<<"peer:", _/binary>>, PeerFrame),
+        ?assertNotEqual(<<"peer:undefined">>, PeerFrame)
     after
         catch quic_h3:close(Conn)
     end.

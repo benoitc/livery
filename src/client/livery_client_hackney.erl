@@ -28,7 +28,7 @@ never leaks a connection.
 """.
 -behaviour(livery_client_adapter).
 
--export([request/2, read/2]).
+-export([request/2, read/2, adopt/2]).
 -export([stream/3, stream_next/1, stop_stream/1]).
 
 -spec request(livery_client:request(), map()) ->
@@ -57,6 +57,17 @@ read(Conn, _Timeout) ->
         done -> {done, Conn};
         {error, Reason} -> {error, Reason}
     end.
+
+%% Optional callback: hand a streamed connection to a new owner. hackney
+%% monitors the owner and tears the connection down when it dies, so a
+%% caller that ran the request in a short-lived worker reparents to the
+%% process that will read the body. hackney >= 4.6 accepts set_owner while
+%% the response body is streaming.
+-spec adopt(term(), pid()) -> ok | {error, term()}.
+adopt(ConnPid, NewOwner) when is_pid(ConnPid) ->
+    hackney_conn:set_owner(ConnPid, NewOwner);
+adopt(_State, _NewOwner) ->
+    ok.
 
 %% Optional callback: drive the request in a relay process that pushes
 %% `{livery_response, Ref, _}` messages to `stream_to`.

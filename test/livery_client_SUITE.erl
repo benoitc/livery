@@ -17,6 +17,7 @@
     circuit_layer/1,
     circuit_store_recovers/1,
     stream_response/1,
+    stream_response_through_timeout/1,
     stream_request/1,
     push_stream/1,
     push_stream_stop/1,
@@ -39,6 +40,7 @@ all() ->
         circuit_layer,
         circuit_store_recovers,
         stream_response,
+        stream_response_through_timeout,
         stream_request,
         push_stream,
         push_stream_stop,
@@ -242,6 +244,20 @@ circuit_store_recovers(_Config) ->
 
 stream_response(Config) ->
     C = livery_client:new(#{base_url => ?config(base, Config)}),
+    {ok, Resp} = livery_client:request(C, get, <<"/big">>, #{stream => true}),
+    {stream, Reader} = livery_client:body(Resp),
+    {ok, Body} = livery_client:read_body(Reader),
+    ?assertEqual(100000, byte_size(Body)).
+
+%% The timeout layer runs the request in a worker that exits once the
+%% response returns. A streamed body owns a live connection, so the worker
+%% must hand it to the caller before exiting; otherwise read_body races the
+%% worker's death and crashes with {noproc, _}.
+stream_response_through_timeout(Config) ->
+    C = livery_client:new(#{
+        base_url => ?config(base, Config),
+        stack => [livery_client:timeout(5000)]
+    }),
     {ok, Resp} = livery_client:request(C, get, <<"/big">>, #{stream => true}),
     {stream, Reader} = livery_client:body(Resp),
     {ok, Body} = livery_client:read_body(Reader),

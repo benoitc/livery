@@ -197,8 +197,9 @@ stream to the `ws` library driven by the `livery_ws_h3` transport.
 -spec accept_ws(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
+    {ValidateOpts, AcceptOpts} = livery_ws:handshake_opts(Opts),
     Pseudo = connect_pseudo_headers(Req, <<"websocket">>),
-    case ws_h3_upgrade:validate_request(Pseudo) of
+    case ws_h3_upgrade:validate_request(Pseudo, ValidateOpts) of
         {ok, Info} ->
             RespHeaders = drop_status(ws_h3_upgrade:response_headers(Info)),
             case quic_h3:send_response(Conn, StreamId, 200, RespHeaders) of
@@ -206,14 +207,16 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
                     WsReq = #{
                         method => <<"CONNECT">>,
                         path => livery_req:path(Req),
-                        headers => livery_req:headers(Req)
+                        headers => livery_req:headers(Req),
+                        peer => h3_peer(Conn)
                     },
                     ws:accept(
                         livery_ws_h3,
                         {Conn, StreamId},
                         WsReq,
                         HandlerMod,
-                        Opts
+                        Opts,
+                        AcceptOpts
                     );
                 Err ->
                     {error, {send_response_failed, Err}}
@@ -224,6 +227,15 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
 
 drop_status(Headers) ->
     [{N, V} || {N, V} <- Headers, N =/= <<":status">>].
+
+%% The h3 request does not carry the peer, but the underlying QUIC
+%% connection knows it. Reach it via quic_h3:get_quic_conn/1.
+-spec h3_peer(term()) -> {inet:ip_address(), inet:port_number()} | undefined.
+h3_peer(Conn) ->
+    case quic_connection:peername(quic_h3:get_quic_conn(Conn)) of
+        {ok, Peer} -> Peer;
+        {error, _} -> undefined
+    end.
 
 %%====================================================================
 %% WebTransport handoff (called by livery_wt:upgrade/3)

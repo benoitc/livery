@@ -31,6 +31,12 @@ write your own to front a different client.
   manual`, ask for one more body chunk.
 - `stop_stream(Ref) -> ok` - *optional*; cancel a push stream and release
   its connection.
+- `adopt(Reader, Owner) -> ok | {error, term()}` - *optional*; hand the
+  live connection behind a `{stream, Reader}` response body to `Owner`. A
+  layer that runs the request in a short-lived worker (e.g.
+  `livery_client_timeout`) calls this to reparent the connection to the
+  process that will read it, before the worker exits. Only adapters whose
+  streamed reader is tied to its owning process need it.
 """.
 
 -type stream_ref() :: term().
@@ -50,4 +56,6 @@ write your own to front a different client.
 
 -callback stop_stream(stream_ref()) -> ok.
 
--optional_callbacks([read/2, stream/3, stream_next/1, stop_stream/1]).
+-callback adopt(term(), pid()) -> ok | {error, term()}.
+
+-optional_callbacks([read/2, stream/3, stream_next/1, stop_stream/1, adopt/2]).

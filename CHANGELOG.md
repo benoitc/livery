@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-16
+
+### Added
+
+- `livery_ws:upgrade/3` negotiates a WebSocket subprotocol. Pass
+  `subprotocols => [binary()]` in the upgrade options: the first one the
+  client also offers is echoed in the handshake response, and a client
+  that offers none of them is rejected. Works on H1, H2, and H3.
+- `livery_ws:upgrade/3` accepts `idle_timeout => timeout()` to override
+  the session idle timeout (`infinity` never idle-closes), for long-lived
+  connections such as SIP-over-WebSocket registrations.
+- The WebSocket handler's `Req` now carries `peer => {IpAddress, Port}`,
+  read from the accepted socket (H1), the h2 connection (H2), or the QUIC
+  connection (H3). Requires h2 >= 0.11.0 and quic >= 1.7.0.
+
+### Fixed
+
+- A streamed client response (`stream => true`) run through
+  `livery_client:timeout/1` no longer crashes with `{noproc, _}`. The
+  timeout worker owned the hackney connection and tore it down on exit
+  before the caller could read the body; it now hands the connection to
+  the caller via a new optional adapter callback `adopt/2`. Requires
+  hackney >= 4.6.0.
+
 ## [0.5.2] - 2026-07-07
 
 ### Changed

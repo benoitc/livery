@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-17
+
+### Changed
+
+- Bump hackney to 4.7.0. HTTP/2 request bodies larger than the peer's
+  flow control window now block until the window opens (bounded by the
+  new `send_timeout` request option) instead of failing with
+  `{error, send_buffer_full}`, HTTP/2 async responses are delivered
+  again, and `{async, once}` honors `stream_next/1`.
+
 ## [0.6.0] - 2026-07-16
 
 ### Added

@@ -25,7 +25,7 @@ via `livery_ws_h3`).
 
 -include("livery.hrl").
 
--export([upgrade/3, handshake_opts/1]).
+-export([upgrade/3, handshake_opts/1, deflate_opts/3]).
 
 -export_type([handler_module/0, handler_opts/0]).
 
@@ -37,7 +37,7 @@ Upgrade the current request to a WebSocket session.
 
 `HandlerMod` must implement the `ws_handler` behaviour. `Opts`
 is a map forwarded as `HMod:init(Req, Opts)`'s second argument by
-the `ws` library. Two keys are also interpreted by the handshake
+the `ws` library. Some keys are also interpreted by the handshake
 (and left in `Opts`, so the handler still sees them):
 
 - `subprotocols => [binary()]` drives subprotocol negotiation: the
@@ -46,6 +46,17 @@ the `ws` library. Two keys are also interpreted by the handshake
   rejected. Omit to skip negotiation.
 - `idle_timeout => timeout()` overrides the session idle timeout
   (`infinity` never idle-closes). Omit for the `ws` default.
+- `max_frame_size => pos_integer()` and
+  `max_message_size => pos_integer()` bound a single frame and a
+  reassembled fragmented message; a peer exceeding them is closed
+  with `1009`. Omit for the `ws` defaults (16 MiB / 64 MiB).
+- `compress => true` negotiates permessage-deflate (RFC 7692) when
+  the client offers it; the session then runs compressed in both
+  directions. Clients not offering it are served uncompressed.
+
+When the session ends because the peer sent a close frame, the
+handler's `terminate/2` receives `{remote, Code, Reason}` (or
+`remote` for a bare close without a status code).
 
 The handler's `Req` carries `peer => {IpAddress, Port}`, the client
 address from the socket (H1), the h2 connection (H2), or the QUIC
@@ -110,14 +121,62 @@ handshake_opts(Opts) when is_map(Opts) ->
             [_ | _] = Subs -> #{required_subprotocols => Subs};
             _ -> #{}
         end,
-    AcceptOpts =
+    AcceptOpts0 =
         case maps:get(idle_timeout, Opts, undefined) of
             undefined -> #{};
             Timeout -> #{idle_timeout => Timeout}
         end,
+    AcceptOpts =
+        case parser_opts(Opts) of
+            Empty when map_size(Empty) =:= 0 -> AcceptOpts0;
+            ParserOpts -> AcceptOpts0#{parser_opts => ParserOpts}
+        end,
     {ValidateOpts, AcceptOpts};
 handshake_opts(_Opts) ->
     {#{}, #{}}.
+
+%% Frame limits forwarded to the ws parser.
+-spec parser_opts(map()) -> map().
+parser_opts(Opts) ->
+    P0 =
+        case maps:get(max_frame_size, Opts, undefined) of
+            undefined -> #{};
+            MaxFrame -> #{max_frame => MaxFrame}
+        end,
+    case maps:get(max_message_size, Opts, undefined) of
+        undefined -> P0;
+        MaxMessage -> P0#{max_message => MaxMessage}
+    end.
+
+-doc """
+Negotiate permessage-deflate for an upgrade when `Opts` carries
+`compress => true` and the client offered it.
+
+`Info` is the validated-request info from `ws_h1_upgrade` /
+`ws_h2_upgrade` / `ws_h3_upgrade` (its `extensions` key holds the
+client's raw offers). Returns extra response headers (the
+`sec-websocket-extensions` acceptance, or none) and the accept opts
+with `deflate` merged in. Called by the H1/H2/H3 adapters.
+""".
+-spec deflate_opts(map(), handler_opts(), map()) ->
+    {[{binary(), binary()}], map()}.
+deflate_opts(Info, Opts, AcceptOpts) when is_map(Opts) ->
+    case maps:get(compress, Opts, false) of
+        true ->
+            case ws_deflate:negotiate(maps:get(extensions, Info, []), #{}) of
+                {ok, RespExt, Negotiated} ->
+                    {
+                        [{<<"sec-websocket-extensions">>, iolist_to_binary(RespExt)}],
+                        AcceptOpts#{deflate => Negotiated}
+                    };
+                ignore ->
+                    {[], AcceptOpts}
+            end;
+        false ->
+            {[], AcceptOpts}
+    end;
+deflate_opts(_Info, _Opts, AcceptOpts) ->
+    {[], AcceptOpts}.
 
 -spec adapter_supports_ws(module()) -> boolean().
 adapter_supports_ws(livery_h1) -> true;

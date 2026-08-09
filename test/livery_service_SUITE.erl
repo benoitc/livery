@@ -29,7 +29,9 @@
     max_body_raises_h1_parser_cap/1,
     default_max_body_authoritative/1,
     drain_lets_inflight_finish/1,
-    drain_times_out_on_stuck_request/1
+    drain_times_out_on_stuck_request/1,
+    stop_service_closes_keepalive_connections/1,
+    drain_closes_idle_keepalive_at_end/1
 ]).
 
 %%====================================================================
@@ -50,7 +52,9 @@ all() ->
         max_body_raises_h1_parser_cap,
         default_max_body_authoritative,
         drain_lets_inflight_finish,
-        drain_times_out_on_stuck_request
+        drain_times_out_on_stuck_request,
+        stop_service_closes_keepalive_connections,
+        drain_closes_idle_keepalive_at_end
     ].
 
 init_per_suite(Config) ->
@@ -336,6 +340,62 @@ drain_lets_inflight_finish(_Config) ->
         end
     ),
     ?assertNot(is_process_alive(Pid)).
+
+%% Probe regression: a kept-alive client must stop being served once
+%% the service is stopped. Before the fix only the listen socket
+%% closed; accepted connections lived on and still answered requests.
+stop_service_closes_keepalive_connections(_Config) ->
+    {ok, Pid} = livery:start_service(#{
+        http => #{port => 0},
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
+    }),
+    Port = maps:get(h1, livery:which_listeners(Pid)),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nhost: x\r\n\r\n">>),
+    ?assertMatch({_, _}, binary:match(raw_recv(Sock), <<"HTTP/1.1 200">>)),
+    ok = livery:stop_service(Pid),
+    %% The kept-alive socket is closed; nothing serves it anymore.
+    ?assertEqual({error, closed}, wait_closed(Sock, 2000)),
+    ?assertMatch(
+        {error, _},
+        gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}], 500)
+    ),
+    gen_tcp:close(Sock).
+
+%% Idle keep-alive connections survive the drain window (still served)
+%% and are closed once the drain completes.
+drain_closes_idle_keepalive_at_end(_Config) ->
+    {ok, Pid} = livery:start_service(#{
+        http => #{port => 0},
+        handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
+    }),
+    Port = maps:get(h1, livery:which_listeners(Pid)),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nhost: x\r\n\r\n">>),
+    ?assertMatch({_, _}, binary:match(raw_recv(Sock), <<"HTTP/1.1 200">>)),
+    %% No in-flight requests: the drain window is a no-op wait; the
+    %% final stop closes the idle keep-alive connection.
+    ?assertEqual(ok, livery:drain(Pid, #{timeout => 5000})),
+    ?assertEqual({error, closed}, wait_closed(Sock, 2000)),
+    gen_tcp:close(Sock).
+
+raw_recv(Sock) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, Data} -> Data;
+        {error, R} -> ct:fail({raw_recv_failed, R})
+    end.
+
+%% Read until the socket reports closed (discarding leftover response
+%% bytes); errors other than closed surface as-is.
+wait_closed(Sock, Timeout) ->
+    case gen_tcp:recv(Sock, 0, Timeout) of
+        {ok, _} -> wait_closed(Sock, Timeout);
+        {error, _} = E -> E
+    end.
 
 drain_times_out_on_stuck_request(_Config) ->
     Self = self(),

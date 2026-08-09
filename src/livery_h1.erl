@@ -32,7 +32,7 @@ content-length write via `send_full/5` -> `h1:respond/5`.
 -define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
 %% Public API
--export([start/1, accept_ws/4]).
+-export([start/1, stop_accepting/1, accept_ws/4]).
 
 %% livery_adapter callbacks
 -export([
@@ -42,6 +42,7 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     send_full/5,
     send_data/3,
     send_trailers/2,
+    send_informational/3,
     reset/2,
     peer_info/1,
     capabilities/1
@@ -121,8 +122,20 @@ start(_Name, Opts, _StartOpts) ->
     h1:start_server(Port, H1Opts).
 
 -spec stop(listener()) -> ok.
+%% Synchronous (h1 >= 0.8.0): closes the listen socket, the acceptor
+%% pool, and every accepted connection before returning.
 stop(Listener) ->
     _ = h1:stop_server(Listener),
+    ok.
+
+-doc """
+Stop accepting new connections while continuing to serve the
+established ones. Used by `livery_drain` for graceful shutdown;
+`stop/1` afterwards closes the remaining connections.
+""".
+-spec stop_accepting(listener()) -> ok.
+stop_accepting(Listener) ->
+    _ = h1:stop_accepting(Listener),
     ok.
 
 -spec send_headers(
@@ -194,16 +207,30 @@ closed_guard(Fun) ->
         exit:{{shutdown, _}, _} -> {error, closed}
     end.
 
+-spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
+    livery_adapter:send_result().
+send_informational({Conn, StreamId}, Status, Headers) ->
+    closed_guard(fun() -> h1:send_informational(Conn, StreamId, Status, Headers) end).
+
 -spec reset(stream(), term()) -> ok.
 reset({Conn, StreamId}, Reason) ->
     _ = h1:cancel_stream(Conn, StreamId, Reason),
     ok.
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
-peer_info({_Conn, _StreamId}) ->
-    %% The h1 library does not surface the peer address, so it stays
-    %% undefined here.
-    #{peer => undefined, tls => undefined, alpn => <<"http/1.1">>}.
+peer_info({Conn, _StreamId}) ->
+    #{peer => conn_peer(Conn), tls => undefined, alpn => <<"http/1.1">>}.
+
+%% The h1 connection records the peer at accept time (h1 >= 0.8.0).
+-spec conn_peer(h1:connection()) ->
+    {inet:ip_address(), inet:port_number()} | undefined.
+conn_peer(Conn) ->
+    try h1:peername(Conn) of
+        {ok, Peer} -> Peer;
+        {error, _} -> undefined
+    catch
+        exit:_ -> undefined
+    end.
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
@@ -211,7 +238,8 @@ capabilities(_Listener) ->
         trailers => true,
         extended_connect => false,
         datagrams => false,
-        capsules => false
+        capsules => false,
+        informational => true
     }.
 
 %% Translate the per-response `early_response_drain' send-opt into the
@@ -256,11 +284,12 @@ handshake or socket transfer failure.
 ) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
-    {ValidateOpts, AcceptOpts} = livery_ws:handshake_opts(Opts),
+    {ValidateOpts, AcceptOpts0} = livery_ws:handshake_opts(Opts),
     Headers = livery_req:headers(Req),
     case ws_h1_upgrade:validate_request(Headers, ValidateOpts) of
         {ok, Info} ->
-            RespHeaders = ws_h1_upgrade:response_headers(Info),
+            {ExtHeaders, AcceptOpts} = livery_ws:deflate_opts(Info, Opts, AcceptOpts0),
+            RespHeaders = ws_h1_upgrade:response_headers(Info) ++ ExtHeaders,
             case h1:accept_upgrade(Conn, StreamId, RespHeaders) of
                 {ok, Socket, _BufferedBytes} ->
                     WsReq = build_ws_req(Req, Socket),
@@ -489,6 +518,7 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader, Transport) ->
         adapter => ?MODULE,
         stream => {Conn, StreamId},
         engine_pid => Conn,
+        peer => conn_peer(Conn),
         tls => tls_info(Transport)
     }).
 

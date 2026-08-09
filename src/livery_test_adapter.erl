@@ -30,6 +30,7 @@ walker that every adapter calls back into.
     body/1,
     body_chunks/1,
     trailers/1,
+    informational/1,
     reset_reason/1,
     end_stream/1,
     run/3,
@@ -42,6 +43,7 @@ walker that every adapter calls back into.
     send_headers/4,
     send_data/3,
     send_trailers/2,
+    send_informational/3,
     reset/2,
     peer_info/1,
     capabilities/1
@@ -55,6 +57,8 @@ walker that every adapter calls back into.
     body_chunks = [] :: [iodata()],
     end_stream = false :: boolean(),
     trailers :: undefined | [{binary(), binary()}],
+    %% Interim (1xx) responses sent before the final one, in order.
+    informational = [] :: [{100..199, [{binary(), binary()}]}],
     reset :: undefined | term()
 }).
 
@@ -131,6 +135,10 @@ body_chunks(#captured{body_chunks = Cs}) ->
 
 -spec trailers(capture()) -> undefined | [{binary(), binary()}].
 trailers(#captured{trailers = T}) -> T.
+
+-doc "Interim (1xx) responses sent before the final one, in order.".
+-spec informational(capture()) -> [{100..199, [{binary(), binary()}]}].
+informational(#captured{informational = Is}) -> lists:reverse(Is).
 
 -spec reset_reason(capture()) -> undefined | term().
 reset_reason(#captured{reset = R}) -> R.
@@ -214,6 +222,12 @@ send_trailers({Tab, Ref}, Trailers) ->
         C#captured{trailers = Trailers, end_stream = true}
     end).
 
+-spec send_informational(stream(), 100..199, [{binary(), binary()}]) -> ok.
+send_informational({Tab, Ref}, Status, Headers) ->
+    update(Tab, Ref, fun(C) ->
+        C#captured{informational = [{Status, Headers} | C#captured.informational]}
+    end).
+
 -spec reset(stream(), term()) -> ok.
 reset({Tab, Ref}, Reason) ->
     update(Tab, Ref, fun(C) -> C#captured{reset = Reason} end).
@@ -228,7 +242,8 @@ capabilities(_) ->
         trailers => true,
         extended_connect => true,
         datagrams => false,
-        capsules => false
+        capsules => false,
+        informational => true
     }.
 
 %%====================================================================

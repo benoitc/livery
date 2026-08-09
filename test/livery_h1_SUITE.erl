@@ -31,7 +31,10 @@
     error_500_on_crash/1,
     cancel_on_client_disconnect/1,
     send_to_gone_client_is_closed/1,
-    disconnect_mid_response_is_quiet/1
+    disconnect_mid_response_is_quiet/1,
+    peer_on_request_tcp/1,
+    peer_on_request_tls/1,
+    early_hints_before_response/1
 ]).
 
 %% logger handler callback (used by disconnect_mid_response_is_quiet).
@@ -57,7 +60,10 @@ all() ->
         error_500_on_crash,
         cancel_on_client_disconnect,
         send_to_gone_client_is_closed,
-        disconnect_mid_response_is_quiet
+        disconnect_mid_response_is_quiet,
+        peer_on_request_tcp,
+        peer_on_request_tls,
+        early_hints_before_response
     ].
 
 init_per_suite(Config) ->
@@ -253,6 +259,66 @@ disconnect_mid_response_is_quiet(Config) ->
         logger:remove_handler(HandlerId)
     end.
 
+%% Regression: livery_req:peer/1 carries the client address on plain
+%% HTTP requests (it used to be undefined on the H1 adapter).
+peer_on_request_tcp(Config) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nhost: x\r\n\r\n">>),
+    {ok, {IP, LPort}} = inet:sockname(Sock),
+    Resp = recv_all(Sock, <<>>),
+    ok = gen_tcp:close(Sock),
+    ?assertMatch({_, _}, binary:match(Resp, peer_bin({IP, LPort}))).
+
+peer_on_request_tls(_Config) ->
+    %% The default per-testcase listener is TCP; run a dedicated TLS
+    %% listener for this case.
+    {CertFile, KeyFile} = livery_test_certs:paths(),
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        transport => ssl,
+        cert => CertFile,
+        key => KeyFile,
+        stack => [],
+        handler => handler_for(peer_on_request_tls)
+    }),
+    try
+        Port = h1:server_port(Listener),
+        {ok, Sock} = ssl:connect(
+            "127.0.0.1",
+            Port,
+            [binary, {active, false}, {packet, raw}, {verify, verify_none}],
+            5000
+        ),
+        ok = ssl:send(Sock, <<"GET / HTTP/1.1\r\nhost: x\r\n\r\n">>),
+        {ok, {IP, LPort}} = ssl:sockname(Sock),
+        Resp = ssl_recv_all(Sock, <<>>),
+        _ = ssl:close(Sock),
+        ?assertMatch({_, _}, binary:match(Resp, peer_bin({IP, LPort})))
+    after
+        livery_h1:stop(Listener)
+    end.
+
+%% Two 103 Early Hints go out ahead of the final 200 on the wire.
+early_hints_before_response(Config) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
+    ),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nhost: x\r\n\r\n">>),
+    Resp = recv_all(Sock, <<>>),
+    ok = gen_tcp:close(Sock),
+    [First, Second, Final | _] = binary:split(Resp, <<"HTTP/1.1 ">>, [global, trim_all]),
+    ?assertMatch(<<"103 ", _/binary>>, First),
+    ?assertMatch(
+        {_, _}, binary:match(First, <<"link: </style.css>; rel=preload; as=style">>)
+    ),
+    ?assertMatch(<<"103 ", _/binary>>, Second),
+    ?assertMatch(<<"200 ", _/binary>>, Final),
+    ?assertMatch({_, _}, binary:match(Final, <<"hinted">>)).
+
 %%====================================================================
 %% Handlers
 %%====================================================================
@@ -264,6 +330,20 @@ max_body_for(body_ceiling_rejects_oversize) -> 64;
 max_body_for(oversize_upload_delivers_413) -> 1024 * 1024;
 max_body_for(_TC) -> 16 * 1024 * 1024.
 
+handler_for(peer_on_request_tcp) ->
+    fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
+handler_for(peer_on_request_tls) ->
+    fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
+handler_for(early_hints_before_response) ->
+    fun(R) ->
+        ok = livery_req:inform(
+            103, [{<<"link">>, <<"</style.css>; rel=preload; as=style">>}], R
+        ),
+        ok = livery_req:inform(
+            103, [{<<"link">>, <<"</app.js>; rel=preload; as=script">>}], R
+        ),
+        livery_resp:text(200, <<"hinted">>)
+    end;
 handler_for(text_response) ->
     fun(_R) -> livery_resp:text(200, <<"hello">>) end;
 handler_for(json_response) ->
@@ -423,4 +503,25 @@ header(Name, Headers) ->
         {_, V} when is_binary(V) -> V;
         {_, V} when is_list(V) -> list_to_binary(V);
         false -> undefined
+    end.
+
+%%====================================================================
+%% Raw-socket helpers (peer + early-hints cases)
+%%====================================================================
+
+peer_bin({IP, Port}) ->
+    iolist_to_binary([inet:ntoa(IP), $:, integer_to_binary(Port)]);
+peer_bin(undefined) ->
+    <<"undefined">>.
+
+recv_all(Sock, Acc) ->
+    case gen_tcp:recv(Sock, 0, 500) of
+        {ok, Data} -> recv_all(Sock, <<Acc/binary, Data/binary>>);
+        {error, _} -> Acc
+    end.
+
+ssl_recv_all(Sock, Acc) ->
+    case ssl:recv(Sock, 0, 500) of
+        {ok, Data} -> ssl_recv_all(Sock, <<Acc/binary, Data/binary>>);
+        {error, _} -> Acc
     end.

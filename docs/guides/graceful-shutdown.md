@@ -19,7 +19,9 @@ ok = livery:drain(Pid, #{timeout => 30000}).
    connections are taken. Connections already open keep serving.
 2. **Waits** up to `timeout` (default 30s) for the requests already
    in flight to finish.
-3. **Stops** the service.
+3. **Stops** the service, closing the remaining connections. Idle
+   keep-alive clients are cut off here, at the end of the window,
+   instead of lingering against a dead service.
 
 It returns `ok` once everything drained, or `{error, timeout}` if
 the window elapsed with requests still running. Either way the

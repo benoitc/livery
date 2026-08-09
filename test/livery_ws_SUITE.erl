@@ -33,7 +33,10 @@
     h2_surfaces_peer/1,
     h3_echo_text_frame/1,
     h3_surfaces_peer/1,
-    h1_echo_text_frame_ipv6/1
+    h1_echo_text_frame_ipv6/1,
+    h1_compressed_echo/1,
+    h1_max_frame_size_closes/1,
+    h1_close_code_reaches_terminate/1
 ]).
 
 %%====================================================================
@@ -59,7 +62,10 @@ all() ->
         h2_rejects_plain_get,
         h2_surfaces_peer,
         h3_echo_text_frame,
-        h3_surfaces_peer
+        h3_surfaces_peer,
+        h1_compressed_echo,
+        h1_max_frame_size_closes,
+        h1_close_code_reaches_terminate
     ].
 
 init_per_suite(Config) ->
@@ -190,6 +196,45 @@ init_per_testcase(TC, Config) when
         {port, h1:server_port(Listener)}
         | Config
     ];
+init_per_testcase(h1_compressed_echo, Config) ->
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        stack => [],
+        handler => fun ws_compress_handler/1
+    }),
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
+        | Config
+    ];
+init_per_testcase(h1_max_frame_size_closes, Config) ->
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        stack => [],
+        handler => fun ws_small_frame_handler/1
+    }),
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
+        | Config
+    ];
+init_per_testcase(h1_close_code_reaches_terminate, Config) ->
+    Self = self(),
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        stack => [],
+        handler => fun(R) ->
+            livery_ws:upgrade(R, livery_ws_term_handler, #{notify => Self})
+        end
+    }),
+    [
+        {adapter, h1},
+        {listener, Listener},
+        {port, h1:server_port(Listener)}
+        | Config
+    ];
 init_per_testcase(_TC, Config) ->
     {ok, Listener} = livery_h1:start(#{
         port => 0,
@@ -226,6 +271,14 @@ ws_peer_handler(R) ->
 %% Short idle timeout so an idle connection is closed quickly.
 ws_idle_handler(R) ->
     livery_ws:upgrade(R, livery_ws_echo_handler, #{idle_timeout => 300}).
+
+%% Negotiate permessage-deflate with clients that offer it.
+ws_compress_handler(R) ->
+    livery_ws:upgrade(R, livery_ws_echo_handler, #{compress => true}).
+
+%% Tiny frame cap so an ordinary frame trips the 1009 close.
+ws_small_frame_handler(R) ->
+    livery_ws:upgrade(R, livery_ws_echo_handler, #{max_frame_size => 64}).
 
 %% Probe the IPv6 loopback with a real connect round-trip, not just a
 %% listen: CI runners can bind `::1' yet fail to connect to it. A false
@@ -357,6 +410,53 @@ ws_echo_frames(Sess) ->
             after 15000 -> {error, no_echo_frame}
             end
     after 15000 -> {error, no_ready_frame}
+    end.
+
+%% Frames round-trip compressed when both sides negotiate
+%% permessage-deflate (compress => true on the upgrade and the client).
+h1_compressed_echo(Config) ->
+    Port = ?config(port, Config),
+    ?assertEqual(ok, ws_echo_roundtrip(ws_url(Port), #{compress => true}, 1)).
+
+%% max_frame_size is enforced by the server: an oversized frame closes
+%% the session with 1009 (message too big), which the client handler
+%% observes as {remote, 1009, _} in terminate/2.
+h1_max_frame_size_closes(Config) ->
+    Port = ?config(port, Config),
+    Self = self(),
+    {ok, Sess} = ws_client:connect(ws_url(Port), #{
+        handler => livery_ws_client_capture,
+        handler_opts => #{parent => Self}
+    }),
+    receive
+        {captured, {text, <<"ready">>}} -> ok
+    after 15000 -> ct:fail(no_ready_frame)
+    end,
+    ok = ws:send(Sess, [{text, binary:copy(<<"x">>, 1024)}]),
+    receive
+        {ws_terminate, Reason} ->
+            ?assertMatch({remote, 1009, _}, Reason)
+    after 15000 -> ct:fail(no_client_terminate)
+    end.
+
+%% The peer's close code and reason surface in the server handler's
+%% terminate/2 as {remote, Code, Reason}.
+h1_close_code_reaches_terminate(Config) ->
+    Port = ?config(port, Config),
+    Self = self(),
+    {ok, Sess} = ws_client:connect(ws_url(Port), #{
+        handler => livery_ws_client_capture,
+        handler_opts => #{parent => Self}
+    }),
+    receive
+        {captured, {text, <<"ready">>}} -> ok
+    after 15000 -> ct:fail(no_ready_frame)
+    end,
+    ok = ws:close(Sess, 4002, <<"done">>),
+    receive
+        {ws_server_terminate, Reason} ->
+            ?assertEqual({remote, 4002, <<"done">>}, Reason)
+    after 15000 -> ct:fail(no_server_terminate)
     end.
 
 h1_rejects_request_without_upgrade_headers(Config) ->

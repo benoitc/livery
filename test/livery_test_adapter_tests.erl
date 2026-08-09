@@ -185,3 +185,45 @@ capabilities_test() ->
         Caps
     ),
     livery_test_adapter:stop(Tab).
+
+%%====================================================================
+%% Interim (1xx) responses
+%%====================================================================
+
+inform_is_captured_in_order_test() ->
+    Tab = livery_test_adapter:start(),
+    Stream = livery_test_adapter:new_stream(Tab),
+    Req = livery_req:new(#{adapter => livery_test_adapter, stream => Stream}),
+    ?assertEqual(
+        ok,
+        livery_req:inform(103, [{<<"link">>, <<"</a.css>; rel=preload">>}], Req)
+    ),
+    ?assertEqual(ok, livery_req:inform(103, [{<<"link">>, <<"</b.js>">>}], Req)),
+    Cap = livery_test_adapter:capture(Stream),
+    ?assertEqual(
+        [
+            {103, [{<<"link">>, <<"</a.css>; rel=preload">>}]},
+            {103, [{<<"link">>, <<"</b.js>">>}]}
+        ],
+        livery_test_adapter:informational(Cap)
+    ),
+    livery_test_adapter:stop(Tab).
+
+inform_without_adapter_is_unsupported_test() ->
+    Req = livery_req:new(#{}),
+    ?assertEqual({error, unsupported}, livery_req:inform(103, [], Req)).
+
+inform_rejects_non_1xx_test() ->
+    Tab = livery_test_adapter:start(),
+    Stream = livery_test_adapter:new_stream(Tab),
+    Req = livery_req:new(#{adapter => livery_test_adapter, stream => Stream}),
+    ?assertError(function_clause, livery_req:inform(200, [], Req)),
+    livery_test_adapter:stop(Tab).
+
+informational_capability_test() ->
+    Tab = livery_test_adapter:start(),
+    ?assertMatch(
+        #{informational := true},
+        livery_test_adapter:capabilities(Tab)
+    ),
+    livery_test_adapter:stop(Tab).

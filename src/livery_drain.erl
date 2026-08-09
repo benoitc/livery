@@ -15,8 +15,11 @@ protocol, runs in a `livery_req_proc` worker it tracks. A
 single-service node drains exactly its own requests; on a
 multi-service node `drain/2` waits for all of them.
 
-Stopping acceptance closes the listen socket (no new connections);
-it does not send GOAWAY on existing keep-alive connections.
+Stopping acceptance closes the listen sockets (no new connections)
+while established HTTP/1.1 connections keep being served through
+the drain window. The final stop then closes every remaining
+connection, so idle keep-alive clients are cut off once the drain
+ends instead of lingering against a dead service.
 
 ```erlang
 {ok, Pid} = livery:start_service(#{http => #{port => 8080}, router => R}),

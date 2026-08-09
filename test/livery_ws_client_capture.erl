@@ -20,5 +20,8 @@ handle_in(Frame, Parent) when is_pid(Parent) ->
 handle_info(_Msg, State) ->
     {ok, State}.
 
+terminate(Reason, Parent) when is_pid(Parent) ->
+    Parent ! {ws_terminate, Reason},
+    ok;
 terminate(_Reason, _State) ->
     ok.

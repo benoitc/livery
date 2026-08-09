@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-08
+
+### Added
+
+- `livery_req:inform/3` sends interim (1xx) responses, primarily
+  `103 Early Hints`, ahead of the final response. Callable several times
+  per request. Backed by a new optional adapter callback
+  `send_informational/3`; supported on HTTP/1.1 (h1 0.8.0, skipped for
+  HTTP/1.0 clients per RFC 9110 §15.2) and HTTP/2 (interim HEADERS, no
+  END_STREAM per RFC 9113); HTTP/3 returns `{error, unsupported}` for
+  now. `capabilities/1` advertises `informational`.
+- `livery_req:peer/1` now carries the client address on plain HTTP
+  requests on all three adapters (it was only set on the WebSocket
+  handoff before), and `peer_info/1` returns the real peer. The H1
+  adapter reads it from the connection (h1 0.8.0); H2/H3 from their
+  connection state.
+- `livery_ws:upgrade/3` accepts `max_frame_size` / `max_message_size`
+  (frame decoder limits; a peer exceeding them is closed with 1009) and
+  `compress => true` to negotiate permessage-deflate (RFC 7692, ws
+  0.4.0) with clients that offer it.
+- The test adapter records interim responses
+  (`livery_test_adapter:informational/1`).
+
+### Changed
+
+- `livery:stop_service/1` now really cuts off in-flight and kept-alive
+  HTTP/1.1 connections: h1 0.8.0 tracks accepted connections and
+  `stop_server/1` closes them synchronously. Previously only the listen
+  socket closed, so kept-alive clients were still served by a stopped
+  service.
+- `livery:drain/2` leaves established HTTP/1.1 connections serving
+  through the drain window (`stop_accepting` no longer kills them) and
+  closes the remaining idle keep-alive connections once the drain
+  completes.
+- WebSocket handlers' `terminate/2` receives `{remote, Code, Reason}`
+  when the peer's close frame carried a status code (`remote` for a bare
+  close), on every adapter (ws 0.4.0).
+- Bump `h1` to 0.8.0, `ws` (erlang_ws) to 0.4.0.
+
 ## [0.6.1] - 2026-07-17
 
 ### Changed

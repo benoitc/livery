@@ -55,6 +55,8 @@ new value for the next stage using the setters.
 
     set_req_id/2,
 
+    inform/3,
+
     on_disconnect/2,
     disconnect_tag/0
 ]).
@@ -298,6 +300,44 @@ config(_Key, #livery_req{}, Default) ->
 -spec set_req_id(binary(), req()) -> req().
 set_req_id(Id, Req) when is_binary(Id) ->
     Req#livery_req{req_id = Id}.
+
+%%====================================================================
+%% Interim responses
+%%====================================================================
+
+-doc """
+Send an interim (1xx) response, e.g. `103` Early Hints, ahead of the
+final response.
+
+May be called several times per request, any time before the handler
+returns its `#livery_resp{}`. The final response is unaffected. `101`
+is reserved for the upgrade machinery and rejected by the adapters.
+
+Support depends on the wire protocol: HTTP/1.1 and HTTP/2 send it
+(HTTP/1.1 skips it for HTTP/1.0 clients, per RFC 9110 §15.2); HTTP/3
+returns `{error, unsupported}` for now. Check
+`Adapter:capabilities/1` for `informational => true`, or just ignore
+the return value — hints are best-effort by nature.
+
+```erlang
+handler(Req) ->
+    _ = livery_req:inform(103,
+        [{<<"link">>, <<"</app.css>; rel=preload; as=style">>}], Req),
+    livery_resp:html(200, render()).
+```
+""".
+-spec inform(100..199, [{header_name(), header_value()}], req()) ->
+    ok | {error, term()}.
+inform(Status, Headers, #livery_req{adapter = Adapter, stream = Stream}) when
+    is_integer(Status), Status >= 100, Status =< 199
+->
+    case
+        Adapter =/= undefined andalso
+            erlang:function_exported(Adapter, send_informational, 3)
+    of
+        true -> Adapter:send_informational(Stream, Status, Headers);
+        false -> {error, unsupported}
+    end.
 
 %%====================================================================
 %% Client disconnect

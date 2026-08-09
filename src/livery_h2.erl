@@ -44,6 +44,7 @@ in `capabilities/1`.
     send_data/3,
     send_full/5,
     send_trailers/2,
+    send_informational/3,
     reset/2,
     peer_info/1,
     capabilities/1
@@ -154,6 +155,14 @@ send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
 send_trailers({Conn, StreamId}, Trailers) ->
     closed_guard(fun() -> h2:send_trailers(Conn, StreamId, Trailers) end).
 
+%% Interim responses ride the normal HEADERS path: a 1xx block carries
+%% no END_STREAM (1xx is not body-forbidden) and the final response
+%% follows on the same stream. h2 itself rejects 101 (RFC 9113 §8.6).
+-spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
+    livery_adapter:send_result().
+send_informational({Conn, StreamId}, Status, Headers) ->
+    closed_guard(fun() -> h2:send_response(Conn, StreamId, Status, Headers) end).
+
 %% A send to a connection whose client has gone away exits the underlying
 %% `gen_statem:call` (e.g. `{{shutdown, {send_failed, closed}}, _}` or
 %% `{noproc, _}`). Map that to `{error, closed}`, the way `gen_tcp:send`
@@ -177,9 +186,9 @@ reset({Conn, StreamId}, _Reason) ->
     ok.
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
-peer_info({_Conn, _StreamId}) ->
+peer_info({Conn, _StreamId}) ->
     %% Future: surface ALPN, peer cert, etc. via h2's connection state.
-    #{peer => undefined, tls => undefined, alpn => <<"h2">>}.
+    #{peer => h2_peer(Conn), tls => undefined, alpn => <<"h2">>}.
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
@@ -187,7 +196,8 @@ capabilities(_Listener) ->
         trailers => true,
         extended_connect => true,
         datagrams => false,
-        capsules => false
+        capsules => false,
+        informational => true
     }.
 
 %%====================================================================
@@ -204,11 +214,12 @@ driven by the `livery_ws_h2` transport.
 -spec accept_ws(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
-    {ValidateOpts, AcceptOpts} = livery_ws:handshake_opts(Opts),
+    {ValidateOpts, AcceptOpts0} = livery_ws:handshake_opts(Opts),
     Pseudo = connect_pseudo_headers(Req, <<"websocket">>),
     case ws_h2_upgrade:validate_request(Pseudo, ValidateOpts) of
         {ok, Info} ->
-            RespHeaders = drop_status(ws_h2_upgrade:response_headers(Info)),
+            {ExtHeaders, AcceptOpts} = livery_ws:deflate_opts(Info, Opts, AcceptOpts0),
+            RespHeaders = drop_status(ws_h2_upgrade:response_headers(Info)) ++ ExtHeaders,
             case h2:send_response(Conn, StreamId, 200, RespHeaders) of
                 ok ->
                     WsReq = #{
@@ -237,12 +248,16 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
 drop_status(Headers) ->
     [{N, V} || {N, V} <- Headers, N =/= <<":status">>].
 
-%% The h2 request does not carry the peer, but the h2 connection knows it.
+%% The h2 request does not carry the peer, but the h2 connection knows
+%% it. A connection that is already gone (client disconnected) reads as
+%% undefined instead of crashing the caller.
 -spec h2_peer(term()) -> {inet:ip_address(), inet:port_number()} | undefined.
 h2_peer(Conn) ->
-    case h2:peername(Conn) of
+    try h2:peername(Conn) of
         {ok, Peer} -> Peer;
         {error, _} -> undefined
+    catch
+        exit:_ -> undefined
     end.
 
 %%====================================================================
@@ -440,7 +455,8 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
-        engine_pid => Conn
+        engine_pid => Conn,
+        peer => h2_peer(Conn)
     }).
 
 %% h2 (>= 0.10.2) keeps `:authority' and `:scheme' in the handler header

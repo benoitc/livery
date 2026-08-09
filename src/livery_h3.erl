@@ -37,6 +37,7 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
     send_headers/4,
     send_data/3,
     send_trailers/2,
+    send_informational/3,
     reset/2,
     peer_info/1,
     capabilities/1
@@ -171,9 +172,15 @@ reset({Conn, StreamId}, _Reason) ->
     _ = quic_h3:cancel(Conn, StreamId),
     ok.
 
+%% Interim (1xx) responses are not surfaced by the h3 engine yet.
+-spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
+    {error, unsupported}.
+send_informational(_Stream, _Status, _Headers) ->
+    {error, unsupported}.
+
 -spec peer_info(stream()) -> livery_adapter:peer_info().
-peer_info({_Conn, _StreamId}) ->
-    #{peer => undefined, tls => undefined, alpn => <<"h3">>}.
+peer_info({Conn, _StreamId}) ->
+    #{peer => h3_peer(Conn), tls => undefined, alpn => <<"h3">>}.
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
@@ -181,7 +188,8 @@ capabilities(_Listener) ->
         trailers => true,
         extended_connect => true,
         datagrams => true,
-        capsules => true
+        capsules => true,
+        informational => false
     }.
 
 %%====================================================================
@@ -197,11 +205,12 @@ stream to the `ws` library driven by the `livery_ws_h3` transport.
 -spec accept_ws(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
-    {ValidateOpts, AcceptOpts} = livery_ws:handshake_opts(Opts),
+    {ValidateOpts, AcceptOpts0} = livery_ws:handshake_opts(Opts),
     Pseudo = connect_pseudo_headers(Req, <<"websocket">>),
     case ws_h3_upgrade:validate_request(Pseudo, ValidateOpts) of
         {ok, Info} ->
-            RespHeaders = drop_status(ws_h3_upgrade:response_headers(Info)),
+            {ExtHeaders, AcceptOpts} = livery_ws:deflate_opts(Info, Opts, AcceptOpts0),
+            RespHeaders = drop_status(ws_h3_upgrade:response_headers(Info)) ++ ExtHeaders,
             case quic_h3:send_response(Conn, StreamId, 200, RespHeaders) of
                 ok ->
                     WsReq = #{
@@ -229,12 +238,16 @@ drop_status(Headers) ->
     [{N, V} || {N, V} <- Headers, N =/= <<":status">>].
 
 %% The h3 request does not carry the peer, but the underlying QUIC
-%% connection knows it. Reach it via quic_h3:get_quic_conn/1.
+%% connection knows it. Reach it via quic_h3:get_quic_conn/1. A
+%% connection that is already gone reads as undefined instead of
+%% crashing the caller.
 -spec h3_peer(term()) -> {inet:ip_address(), inet:port_number()} | undefined.
 h3_peer(Conn) ->
-    case quic_connection:peername(quic_h3:get_quic_conn(Conn)) of
+    try quic_connection:peername(quic_h3:get_quic_conn(Conn)) of
         {ok, Peer} -> Peer;
         {error, _} -> undefined
+    catch
+        exit:_ -> undefined
     end.
 
 %%====================================================================
@@ -452,7 +465,8 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
-        engine_pid => Conn
+        engine_pid => Conn,
+        peer => h3_peer(Conn)
     }).
 
 -spec split_query(binary()) -> {binary(), binary()}.

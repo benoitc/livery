@@ -8,6 +8,8 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+-define(REQUEST_TIMEOUT, 5000).
+
 -export([
     all/0,
     init_per_suite/1,
@@ -27,7 +29,9 @@
     error_500_on_crash/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
-    send_to_gone_client_is_closed/1
+    send_to_gone_client_is_closed/1,
+    peer_on_request/1,
+    early_hints_interim/1
 ]).
 
 %%====================================================================
@@ -46,7 +50,9 @@ all() ->
         error_500_on_crash,
         response_with_trailers,
         cancel_on_connection_close,
-        send_to_gone_client_is_closed
+        send_to_gone_client_is_closed,
+        peer_on_request,
+        early_hints_interim
     ].
 
 init_per_suite(Config) ->
@@ -141,6 +147,24 @@ response_with_trailers(Config) ->
 
 stack_for(_TC) -> [].
 
+handler_for(peer_on_request) ->
+    fun(R) ->
+        Body =
+            case livery_req:peer(R) of
+                {{127, 0, 0, 1}, Port} when is_integer(Port), Port > 0 ->
+                    <<"peer-ok">>;
+                Other ->
+                    iolist_to_binary(io_lib:format("~p", [Other]))
+            end,
+        livery_resp:text(200, Body)
+    end;
+handler_for(early_hints_interim) ->
+    fun(R) ->
+        ok = livery_req:inform(
+            103, [{<<"link">>, <<"</app.css>; rel=preload; as=style">>}], R
+        ),
+        livery_resp:text(200, <<"hinted">>)
+    end;
 handler_for(text_response) ->
     fun(_R) -> livery_resp:text(200, <<"hello">>) end;
 handler_for(json_response) ->
@@ -242,11 +266,51 @@ send_to_gone_client_is_closed(_Config) ->
     ),
     ?assertEqual({error, closed}, livery_h2:send_trailers(Stream, [{<<"x">>, <<"y">>}])).
 
+%% Regression: livery_req:peer/1 carries the client address on plain
+%% HTTP/2 requests (it used to be undefined).
+peer_on_request(Config) ->
+    {Status, _Headers, Body, _} = get(Config, <<"/">>),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"peer-ok">>, Body).
+
+%% A 103 interim HEADERS block reaches the client ahead of the final
+%% response on the same stream.
+early_hints_interim(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>, [
+        {<<"host">>, <<"127.0.0.1">>}
+    ]),
+    {Infos, {Status, _Headers, Body, _}} = collect_with_informational(Conn, StreamId),
+    ?assertMatch([{103, _}], Infos),
+    [{103, Hs}] = Infos,
+    ?assertEqual(
+        <<"</app.css>; rel=preload; as=style">>,
+        header(<<"link">>, Hs)
+    ),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"hinted">>, Body),
+    h2:close(Conn).
+
+collect_with_informational(Conn, StreamId) ->
+    collect_with_informational(Conn, StreamId, []).
+
+%% Interim events strictly precede the final response HEADERS; once
+%% that arrives, hand off to the shared collector for body/trailers.
+collect_with_informational(Conn, StreamId, Infos) ->
+    receive
+        {h2, Conn, {informational, StreamId, S, Hs}} ->
+            collect_with_informational(Conn, StreamId, [{S, Hs} | Infos]);
+        {h2, Conn, {response, StreamId, S, Hs}} ->
+            Result = collect_response(Conn, StreamId, S, Hs, [], undefined),
+            {lists:reverse(Infos), Result}
+    after ?REQUEST_TIMEOUT ->
+        {lists:reverse(Infos), {error, timeout}}
+    end.
+
 %%====================================================================
 %% HTTP/2 client helpers
 %%====================================================================
-
--define(REQUEST_TIMEOUT, 5000).
 
 get(Config, Path) ->
     request(<<"GET">>, Config, Path, <<>>).

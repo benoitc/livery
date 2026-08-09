@@ -28,6 +28,12 @@ here.
   than batch.
 - `send_trailers(Stream, Trailers) -> SendResult` — emit trailers
   (and implicitly close the send half).
+- `send_informational(Stream, Status, Headers) -> SendResult` —
+  optional: emit an interim (1xx) response, e.g. 103 Early Hints,
+  ahead of the final response. May be called several times per
+  stream. Adapters that cannot (or do not) implement it are
+  reported as `informational => false` in `capabilities/1`, and
+  `livery_req:inform/3` returns `{error, unsupported}`.
 - `reset(Stream, Reason) -> ok` — reset a stream with a
   protocol-specific reason.
 - `peer_info(Stream) -> peer_info()` — return peer/TLS info for a
@@ -66,7 +72,8 @@ here.
     trailers => boolean(),
     extended_connect => boolean(),
     datagrams => boolean(),
-    capsules => boolean()
+    capsules => boolean(),
+    informational => boolean()
 }.
 
 -type peer_info() :: #{
@@ -116,4 +123,14 @@ here.
 ) ->
     send_result().
 
--optional_callbacks([send_full/5]).
+%% Optional: emit an interim (1xx) response before the final one.
+%% `livery_req:inform/3' calls it when exported and returns
+%% `{error, unsupported}' otherwise.
+-callback send_informational(
+    stream(),
+    100..199,
+    [{binary(), binary()}]
+) ->
+    send_result().
+
+-optional_callbacks([send_full/5, send_informational/3]).

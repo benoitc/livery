@@ -53,6 +53,30 @@ Modern web/AI framework gaps, in priority order. All 10 items are done.
     `instrument_prometheus`). See `docs/guides/health-checks.md` and
     `docs/guides/export-metrics.md`.
 
+## Server-side gaps (closed in 0.7.0)
+
+1. Peer address on plain HTTP requests. DONE: `livery_req:peer/1` is
+   set on H1 (via `h1:peername/1`, h1 0.8.0), H2, and H3;
+   `peer_info/1` returns the real peer on every adapter. Previously
+   only the WebSocket handoff carried it.
+2. Interim (1xx) responses. DONE: `livery_req:inform/3` (primarily
+   `103 Early Hints`), backed by the optional adapter callback
+   `send_informational/3` and advertised via the `informational`
+   capability. H1 (h1 0.8.0) and H2 send it; H3 returns
+   `{error, unsupported}` until the QUIC stack surfaces interim
+   HEADERS. See `docs/guides/early-hints.md`. Follow-up: implement in
+   `erlang_quic`'s h3 and flip the capability.
+3. Connection teardown on stop. DONE: h1 0.8.0 tracks accepted
+   connections; `h1:stop_server/1` is synchronous and closes them, so
+   `livery:stop_service/1` really cuts off kept-alive clients.
+   `h1:stop_accepting/1` keeps them serving during `livery:drain/2`,
+   which closes the idle ones at the end of the window.
+
+WebSocket extras shipped alongside (ws 0.4.0): `max_frame_size` /
+`max_message_size` and `compress` (permessage-deflate) on
+`livery_ws:upgrade/3`, and the peer's close code delivered to
+`ws_handler:terminate/2` as `{remote, Code, Reason}`.
+
 ## Benchmarking: H3 needs an external client
 
 The in-VM bench harness understates H3. Findings (loopback, 14

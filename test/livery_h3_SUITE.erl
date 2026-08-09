@@ -25,7 +25,9 @@
     error_500_on_crash/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
-    send_to_gone_client_is_closed/1
+    send_to_gone_client_is_closed/1,
+    peer_on_request/1,
+    inform_unsupported/1
 ]).
 
 %%====================================================================
@@ -43,7 +45,9 @@ all() ->
         error_500_on_crash,
         response_with_trailers,
         cancel_on_connection_close,
-        send_to_gone_client_is_closed
+        send_to_gone_client_is_closed,
+        peer_on_request,
+        inform_unsupported
     ].
 
 init_per_suite(Config) ->
@@ -78,6 +82,20 @@ end_per_testcase(_TC, Config) ->
 %%====================================================================
 %% Cases
 %%====================================================================
+
+%% Regression: livery_req:peer/1 carries the client address on plain
+%% HTTP/3 requests (it used to be undefined).
+peer_on_request(Config) ->
+    {Status, _Headers, Body, _} = get(Config, <<"/">>),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"peer-ok">>, Body).
+
+%% The H3 adapter does not implement interim responses yet: inform/3
+%% reports {error, unsupported} instead of crashing the handler.
+inform_unsupported(Config) ->
+    {Status, _Headers, Body, _} = get(Config, <<"/">>),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"unsupported">>, Body).
 
 text_response(Config) ->
     {Status, Headers, Body, _} = get(Config, <<"/">>),
@@ -134,6 +152,26 @@ response_with_trailers(Config) ->
 
 stack_for(_TC) -> [].
 
+handler_for(peer_on_request) ->
+    fun(R) ->
+        Body =
+            case livery_req:peer(R) of
+                {{127, 0, 0, 1}, Port} when is_integer(Port), Port > 0 ->
+                    <<"peer-ok">>;
+                Other ->
+                    iolist_to_binary(io_lib:format("~p", [Other]))
+            end,
+        livery_resp:text(200, Body)
+    end;
+handler_for(inform_unsupported) ->
+    fun(R) ->
+        Body =
+            case livery_req:inform(103, [], R) of
+                {error, unsupported} -> <<"unsupported">>;
+                Other -> iolist_to_binary(io_lib:format("~p", [Other]))
+            end,
+        livery_resp:text(200, Body)
+    end;
 handler_for(text_response) ->
     fun(_R) -> livery_resp:text(200, <<"hello">>) end;
 handler_for(json_response) ->

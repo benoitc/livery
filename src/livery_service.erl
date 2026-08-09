@@ -167,10 +167,14 @@ init(Opts) ->
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
     {reply, term(), #state{}}.
 handle_call(stop_accepting, _From, State) ->
+    %% H2/H3 listeners stop entirely; the H1 listener only stops
+    %% accepting, so established (in-flight and kept-alive) connections
+    %% keep being served through the drain window. The kept ref lets
+    %% terminate/2 close them once the drain ends.
     _ = stop_h3(State#state.h3),
     _ = stop_h2(State#state.h2),
-    _ = stop_h1(State#state.h1),
-    {reply, ok, State#state{h1 = undefined, h2 = undefined, h3 = undefined}};
+    _ = stop_accepting_h1(State#state.h1),
+    {reply, ok, State#state{h2 = undefined, h3 = undefined}};
 handle_call(which_listeners, _From, State) ->
     {reply, listeners_map(State), State};
 handle_call(_, _, State) ->
@@ -308,6 +312,9 @@ ensure_h3_name(Opts) ->
 
 stop_h1(undefined) -> ok;
 stop_h1({Ref, _Port}) -> livery_h1:stop(Ref).
+
+stop_accepting_h1(undefined) -> ok;
+stop_accepting_h1({Ref, _Port}) -> livery_h1:stop_accepting(Ref).
 
 stop_h2(undefined) -> ok;
 stop_h2({Ref, _Port}) -> livery_h2:stop(Ref).

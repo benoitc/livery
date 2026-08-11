@@ -192,7 +192,7 @@ headers_all(Name, #livery_req{headers = Hs}) ->
 -spec has_header(header_name(), req()) -> boolean().
 has_header(Name, #livery_req{headers = Hs}) ->
     LName = lowercase(Name),
-    lists:keyfind(LName, 1, Hs) /= false.
+    lists:keyfind(LName, 1, Hs) =/= false.
 
 -doc "Replace (or insert) a header.".
 -spec set_header(header_name(), header_value(), req()) -> req().

@@ -44,7 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - WebSocket handlers' `terminate/2` receives `{remote, Code, Reason}`
   when the peer's close frame carried a status code (`remote` for a bare
   close), on every adapter (ws 0.4.0).
-- Bump `h1` to 0.8.0, `ws` (erlang_ws) to 0.4.0.
+- Bump `h1` to 0.8.0, `quic` to 1.8.0 (RFC 6125 wildcard SAN matching,
+  Happy Eyeballs backlog delivery on the winning attempt, Retry
+  packet-number continuity, Version Negotiation handling), `ws`
+  (erlang_ws) to 0.5.0 (RFC 8441 `Sec-WebSocket-Version` validation on
+  extended CONNECT), `webtransport` to 0.4.4, `instrument` to 1.1.5
+  (OTLP histogram encoding fixes), `hackney` to 4.7.3, `barrel_mcp` to
+  2.3.0.
+- Bump test and bench dependencies: `cowboy` to 2.18.0, `cowlib` to
+  2.19.0, `ranch` to 2.2.1.
+- Bump tooling: `erlfmt` to 1.8.0, `rebar3_lint` to 5.0.4 (elvis_core
+  5.x), and migrate the elvis config to the new format.
 
 ## [0.6.1] - 2026-07-17
 

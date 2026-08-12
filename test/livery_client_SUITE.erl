@@ -79,7 +79,7 @@ init_per_suite(Config) ->
     %% start_service links to us; unlink so the service survives the
     %% init_per_suite process and lives for the whole suite.
     true = unlink(Pid),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     Base = iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port)]),
     [{service, Pid}, {counter, Counter}, {base, Base} | Config].
 

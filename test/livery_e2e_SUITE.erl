@@ -345,7 +345,7 @@ recv_ws_frame(Proto, Conn, StreamId, Parser) ->
 proto_msgs(h2) -> {h2, ignore};
 proto_msgs(h3) -> {quic_h3, stream_end}.
 
-port(Config, Proto) -> maps:get(Proto, ?config(listeners, Config)).
+port(Config, Proto) -> hd(maps:get(Proto, ?config(listeners, Config))).
 
 body_headers(<<>>) -> [];
 body_headers(_Body) -> [{<<"content-type">>, <<"application/json">>}].

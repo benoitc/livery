@@ -90,9 +90,9 @@ one_call_serves_all_three(Config) ->
     try
         Ports = livery:which_listeners(Pid),
         ?assertMatch(#{h1 := _, h2 := _, h3 := _}, Ports),
-        ?assertEqual(<<"hello">>, body_via_h1(maps:get(h1, Ports))),
-        ?assertEqual(<<"hello">>, body_via_h2(maps:get(h2, Ports))),
-        ?assertEqual(<<"hello">>, body_via_h3(maps:get(h3, Ports), Config))
+        ?assertEqual(<<"hello">>, body_via_h1(hd(maps:get(h1, Ports)))),
+        ?assertEqual(<<"hello">>, body_via_h2(hd(maps:get(h2, Ports)))),
+        ?assertEqual(<<"hello">>, body_via_h3(hd(maps:get(h3, Ports)), Config))
     after
         livery:stop_service(Pid)
     end.
@@ -101,17 +101,19 @@ alt_svc_advertised_on_h1_and_h2_only(Config) ->
     {ok, Pid} = start_full_service(Config),
     try
         Ports = livery:which_listeners(Pid),
-        H3Port = maps:get(h3, Ports),
+        H3Port = hd(maps:get(h3, Ports)),
+        %% The service sets `host', so the advertised authority is
+        %% qualified rather than port-only.
         Expected = iolist_to_binary([
-            <<"h3=\":">>,
+            <<"h3=\"localhost:">>,
             integer_to_binary(H3Port),
             <<"\"; ma=86400">>
         ]),
-        ?assertEqual(Expected, h1_header(maps:get(h1, Ports), <<"alt-svc">>)),
-        ?assertEqual(Expected, h2_header(maps:get(h2, Ports), <<"alt-svc">>)),
+        ?assertEqual(Expected, h1_header(hd(maps:get(h1, Ports)), <<"alt-svc">>)),
+        ?assertEqual(Expected, h2_header(hd(maps:get(h2, Ports)), <<"alt-svc">>)),
         ?assertEqual(
             undefined,
-            h3_header(maps:get(h3, Ports), Config, <<"alt-svc">>)
+            h3_header(H3Port, Config, <<"alt-svc">>)
         )
     after
         livery:stop_service(Pid)
@@ -124,7 +126,7 @@ which_listeners_reports_all_three(Config) ->
         ?assertEqual(3, map_size(Ports)),
         lists:foreach(
             fun(K) ->
-                ?assert(is_integer(maps:get(K, Ports)))
+                ?assertMatch([P] when is_integer(P), maps:get(K, Ports))
             end,
             [h1, h2, h3]
         )
@@ -142,7 +144,7 @@ router_service_dispatches_routes(_Config) ->
     ]),
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, router => Router}),
     try
-        Port = maps:get(h1, livery:which_listeners(Pid)),
+        Port = hd(maps:get(h1, livery:which_listeners(Pid))),
         ?assertEqual({200, <<"root">>}, http_get(Port, <<"/">>)),
         ?assertEqual({200, <<"ada">>}, http_get(Port, <<"/hi/ada">>)),
         %% unknown path -> 404
@@ -166,7 +168,7 @@ config_is_readable_in_handler(_Config) ->
     try
         ?assertEqual(
             {200, <<"service_db">>},
-            http_get(maps:get(h1, livery:which_listeners(P1)), <<"/">>)
+            http_get(hd(maps:get(h1, livery:which_listeners(P1))), <<"/">>)
         )
     after
         livery:stop_service(P1)
@@ -180,7 +182,7 @@ config_is_readable_in_handler(_Config) ->
     try
         ?assertEqual(
             {200, <<"listener_db">>},
-            http_get(maps:get(h1, livery:which_listeners(P2)), <<"/">>)
+            http_get(hd(maps:get(h1, livery:which_listeners(P2))), <<"/">>)
         )
     after
         livery:stop_service(P2)
@@ -206,7 +208,7 @@ https_listener_forwards_ssl_opts(Config) ->
     try
         ?assertEqual(
             <<"ok">>,
-            body_via_h2(maps:get(h2, livery:which_listeners(Pid)))
+            body_via_h2(hd(maps:get(h2, livery:which_listeners(Pid))))
         ),
         receive
             {sni_seen, "localhost"} -> ok
@@ -237,7 +239,7 @@ http3_listener_forwards_sni_callback(Config) ->
     try
         ?assertEqual(
             <<"ok">>,
-            body_via_h3(maps:get(h3, livery:which_listeners(Pid)), Config)
+            body_via_h3(hd(maps:get(h3, livery:which_listeners(Pid))), Config)
         ),
         receive
             {sni_seen, <<"localhost">>} -> ok
@@ -258,7 +260,7 @@ stop_accepting_refuses_new_connections(_Config) ->
         http => #{port => 0},
         handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
     }),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     ?assertMatch({ok, 200, _, <<"ok">>}, http_try(Port, <<"/">>)),
     ok = livery_service:stop_accepting(Pid),
     ?assertMatch({error, _}, http_try(Port, <<"/">>)),
@@ -275,7 +277,7 @@ max_body_raises_h1_parser_cap(_Config) ->
         handler => count_body_handler()
     }),
     try
-        Port = maps:get(h1, livery:which_listeners(Pid)),
+        Port = hd(maps:get(h1, livery:which_listeners(Pid))),
         Body = binary:copy(<<"x">>, Size),
         ?assertEqual({200, integer_to_binary(Size)}, http_put(Port, <<"/">>, Body))
     after
@@ -290,7 +292,7 @@ default_max_body_authoritative(_Config) ->
         http => #{port => 0}, handler => count_body_handler()
     }),
     try
-        Port = maps:get(h1, livery:which_listeners(Pid)),
+        Port = hd(maps:get(h1, livery:which_listeners(Pid))),
         Under = 12 * 1024 * 1024,
         ?assertEqual(
             {200, integer_to_binary(Under)},
@@ -313,7 +315,7 @@ drain_lets_inflight_finish(_Config) ->
         livery_resp:text(200, <<"done">>)
     end,
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     spawn(fun() -> Self ! {client_done, http_get(Port, <<"/">>)} end),
     WPid =
         receive
@@ -349,7 +351,7 @@ stop_service_closes_keepalive_connections(_Config) ->
         http => #{port => 0},
         handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
     }),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     {ok, Sock} = gen_tcp:connect(
         "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
     ),
@@ -371,7 +373,7 @@ drain_closes_idle_keepalive_at_end(_Config) ->
         http => #{port => 0},
         handler => fun(_R) -> livery_resp:text(200, <<"ok">>) end
     }),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     {ok, Sock} = gen_tcp:connect(
         "127.0.0.1", Port, [binary, {active, false}, {packet, raw}]
     ),
@@ -407,7 +409,7 @@ drain_times_out_on_stuck_request(_Config) ->
         end
     end,
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, handler => Handler}),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     spawn(fun() -> catch http_get(Port, <<"/">>) end),
     WPid =
         receive

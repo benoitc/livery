@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-12
+
+### Added
+
+- `https => #{..., alpn => [h2, http1]}` serves HTTP/2 and HTTP/1.1 from
+  one TLS port, chosen per connection. Livery owns the listen socket
+  (`livery_h1h2`), handshakes off the accept path, reads the negotiated
+  protocol, and hands the socket to `h2:serve_socket/2` or
+  `h1:serve_socket/2`; a client that offered no ALPN is served HTTP/1.1
+  rather than dropped. The list is server preference order, so
+  `[h2, http1]` means h2 wins when a client offers both. `alpn` defaults
+  to `[h2]`, which is the previous h2-only behaviour.
+- The H1 listener forwards h1's parser size limits: `max_line_length`,
+  `max_request_line_size`, `max_empty_lines`, `max_header_name_size`,
+  `max_header_value_size`, `max_headers`, `max_header_block_size`, and
+  `pipeline`. They were selectable in h1 but unreachable through livery.
+- `verify => verify_peer` on the H1 and H2 listeners, for mutual TLS.
+  It requires `cacerts` and makes the client certificate mandatory; h1
+  gained the option in 0.9.0, so it no longer silently does nothing on
+  the H1 listener.
+- The service's `host` is now used: with it set, `alt_svc => advertise`
+  emits an authority-qualified `Alt-Svc` (`h3="example.com:443"`)
+  instead of the port-only form. It was documented but read by nothing.
+- `livery_service:listener_opts()` declares the options that already
+  worked but went undeclared (`transport`, `ssl_opts`, the H1 timeouts,
+  `settings`, `enable_connect_protocol`, ...) and says that anything
+  else is forwarded to the adapter's own `listen_opts()`.
+  `livery_h3:listen_opts()` declares `pool_size`.
+
+### Changed
+
+- **Breaking.** `livery:which_listeners/1` maps each protocol to a
+  *list* of ports rather than a single port. One port can serve two
+  protocols (an `alpn` listener) and one protocol can be on two ports (a
+  cleartext `http` listener next to an `alpn` one), neither of which the
+  old shape could express. `maps:get(h1, Listeners)` becomes
+  `hd(maps:get(h1, Listeners))`.
+- **Breaking for adapter callers.** The H1 and H2 `stream()` handle is
+  now `{Connection, StreamId, Alpn}`. `peer_info/1` reports the ALPN the
+  connection actually negotiated instead of a constant: `undefined` on a
+  cleartext listener, and `undefined` for a TLS client that offered no
+  ALPN.
+- H2 requests carry `tls => #{}` on a TLS listener, as H1 requests
+  already did, so `livery_req:tls/1` distinguishes h2 from h2c.
+
+### Dependencies
+
+- `h1` 0.9.0 (`serve_socket/2`, `verify`, `max_request_line_size`) and
+  `h2` 0.12.0 (`serve_socket/2`).
+- `webtransport` 0.4.5, which moves to `h2 ~> 0.12` so the WebTransport
+  path and the listeners agree on one h2.
+- `hackney` 4.7.4, which stops a wedged or timed-out connection from
+  taking down the pool it belongs to, and with it every caller of that
+  pool. `livery_client` runs on that pool.
+
 ## [0.7.0] - 2026-08-08
 
 ### Added

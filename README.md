@@ -93,6 +93,13 @@ livery:start_service(#{
 }).
 ```
 
+Add `alpn => [h2, http1]` to the `https` map and that one TLS port
+serves HTTP/2 and HTTP/1.1, chosen per connection:
+
+```erlang
+https => #{port => 443, cert => Cert, key => Key, alpn => [h2, http1]}
+```
+
 Need just one protocol? `livery:start_listener(livery_h1, #{port => 8080,
 router => Router})`.
 

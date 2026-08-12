@@ -67,6 +67,8 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
     ),
     settings => map(),
     quic_opts => map(),
+    %% Size of the `quic' connection worker pool, forwarded to `quic_h3'.
+    pool_size => pos_integer(),
     max_body => non_neg_integer() | infinity,
     %% Shared service config, readable in handlers via livery_req:config/1.
     config => term(),

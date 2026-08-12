@@ -61,7 +61,7 @@ start_replica(Id) ->
         router => Router
     }),
     true = unlink(Pid),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     Base = iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port)]),
     #{pid => Pid, base => Base, counter => Counter}.
 

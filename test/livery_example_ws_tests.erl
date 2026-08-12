@@ -14,7 +14,7 @@ ws_echo_test_() ->
 setup() ->
     {ok, _} = application:ensure_all_started(livery),
     {ok, Pid} = livery_example_ws:start(0),
-    #{h1 := Port} = livery:which_listeners(Pid),
+    #{h1 := [Port]} = livery:which_listeners(Pid),
     put(service_pid, Pid),
     Port.
 

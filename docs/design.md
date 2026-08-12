@@ -150,9 +150,11 @@ livery:start_service(#{
 }).
 ```
 
-One call brings up H3 on UDP:443, H2 on TLS:443, and H1 on TCP:80.
-Responses on H1 and H2 carry `Alt-Svc: h3=":443"`, so clients race
-and upgrade to H3 on the next request.
+One call brings up H3 on UDP:443, H2 and H1 together on TLS:443
+(ALPN picks per connection), and H1 on TCP:80. Responses on H1 and
+H2 carry `Alt-Svc: h3="example.com:443"`, so clients race and
+upgrade to H3 on the next request; without a `host` the advertised
+authority is port-only, `h3=":443"`.
 
 ### 6.3 Extractors
 

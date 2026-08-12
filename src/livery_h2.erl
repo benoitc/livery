@@ -59,7 +59,7 @@ in `capabilities/1`.
 
 -type listener() :: h2:server_ref().
 %% The third element is the protocol ALPN settled on for this connection
-%% (`undefined` for cleartext h2c). Only the process that handshaked the
+%% (`undefined' for cleartext h2c). Only the process that handshaked the
 %% socket ever knows it, so it rides along rather than being looked up.
 -type stream() :: {h2:connection(), h2:stream_id(), binary() | undefined}.
 

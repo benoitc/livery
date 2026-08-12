@@ -86,7 +86,7 @@ content-length write via `send_full/5` -> `h1:respond/5`.
 
 -type listener() :: h1:server_ref().
 %% The third element is the protocol ALPN settled on for this connection
-%% (`undefined` when the client offered none, or when the listener is
+%% (`undefined' when the client offered none, or when the listener is
 %% cleartext). It is carried here rather than looked up because only the
 %% process that handshaked the socket ever knows it.
 -type stream() :: {h1:connection(), h1:stream_id(), binary() | undefined}.

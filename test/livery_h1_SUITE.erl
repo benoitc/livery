@@ -222,7 +222,7 @@ send_to_gone_client_is_closed(_Config) ->
         {'DOWN', Ref, process, Dead, _} -> ok
     after 5000 -> ct:fail(proc_not_dead)
     end,
-    Stream = {Dead, 1},
+    Stream = {Dead, 1, <<"http/1.1">>},
     ?assertEqual({error, closed}, livery_h1:send_full(Stream, 200, [], <<"body">>, #{})),
     ?assertEqual(
         {error, closed}, livery_h1:send_data(Stream, <<"body">>, #{end_stream => true})

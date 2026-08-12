@@ -55,6 +55,22 @@ The test adapter is the one to read first: it is the smallest complete
 implementation, and the parity SUITE drives one handler set through every
 adapter to prove they behave the same.
 
+## The ALPN listener
+
+`livery_h1h2` is a listener, not an adapter. It owns one TLS port,
+resolves ALPN itself, and hands each connection to `h2:serve_socket/2`
+or `h1:serve_socket/2`; a client that offered no ALPN goes to HTTP/1.1,
+since ALPN is what makes h2 over TLS possible in the first place.
+
+Requests still dispatch through `livery_h1` and `livery_h2`, so from a
+handler's side nothing changes: `livery_req:protocol/1` is the protocol
+that connection negotiated, and `peer_info/1`'s `alpn` is the exact
+value ALPN settled on (`undefined` when the client offered none, or when
+the listener is cleartext).
+
+Reach it with `https => #{..., alpn => [h2, http1]}` on a service, or
+`livery:start_listener(livery_h1h2, Opts)` directly.
+
 ## What an adapter is not
 
 - **Not a state machine.** Framing, header compression, flow control, and

@@ -32,12 +32,14 @@ one wire; for multi-protocol services with Alt-Svc, use
 `start_service/1`.
 
 `Name` selects the adapter (`livery_h1`, `livery_h2`, or
-`livery_h3`). `Opts` is the adapter's `listen_opts()` map.
+`livery_h3`), or `livery_h1h2` for one TLS port serving HTTP/2 and
+HTTP/1.1 by ALPN. `Opts` is that module's `listen_opts()` map.
 """.
 -spec start_listener(atom(), map()) -> {ok, term()} | {error, term()}.
 start_listener(livery_h1, Opts) -> livery_h1:start(Opts);
 start_listener(livery_h2, Opts) -> livery_h2:start(Opts);
 start_listener(livery_h3, Opts) -> livery_h3:start(Opts);
+start_listener(livery_h1h2, Opts) -> livery_h1h2:start(Opts);
 start_listener(_Name, _Opts) -> {error, unknown_adapter}.
 
 -doc "Stop a single-protocol listener by adapter and handle.".
@@ -45,11 +47,13 @@ start_listener(_Name, _Opts) -> {error, unknown_adapter}.
     {livery_h1, livery_h1:listener()}
     | {livery_h2, livery_h2:listener()}
     | {livery_h3, livery_h3:listener()}
+    | {livery_h1h2, livery_h1h2:listener()}
     | term()
 ) -> ok | {error, term()}.
 stop_listener({livery_h1, Ref}) -> livery_h1:stop(Ref);
 stop_listener({livery_h2, Ref}) -> livery_h2:stop(Ref);
 stop_listener({livery_h3, Ref}) -> livery_h3:stop(Ref);
+stop_listener({livery_h1h2, Ref}) -> livery_h1h2:stop(Ref);
 stop_listener(_) -> {error, unknown_listener}.
 
 -doc """
@@ -88,7 +92,7 @@ List the bound ports of a running service, keyed by protocol.
 
 Returns a map containing only the protocols that were configured.
 """.
--spec which_listeners(pid()) -> #{h1 | h2 | h3 => inet:port_number()}.
+-spec which_listeners(pid()) -> #{h1 | h2 | h3 => [inet:port_number()]}.
 which_listeners(Pid) when is_pid(Pid) ->
     livery_service:which_listeners(Pid).
 

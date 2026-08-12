@@ -31,8 +31,42 @@ content-length write via `send_full/5` -> `h1:respond/5`.
 %% with the `max_body' option (`infinity' disables it).
 -define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
+%% Options that configure the listen socket and the acceptor pool. They
+%% only apply when livery owns the listen socket, so `serve_opts/2' drops
+%% them.
+-define(LISTEN_KEYS, [
+    ip,
+    inet6,
+    cert,
+    key,
+    cacerts,
+    verify,
+    ssl_opts,
+    acceptors,
+    handshake_timeout
+]).
+
+%% Per-connection options. h1 selects exactly this set into its connection
+%% opts, so both the listener and the serve-an-accepted-socket path forward
+%% all of them.
+-define(CONN_KEYS, [
+    idle_timeout,
+    request_timeout,
+    early_response_drain,
+    lingering_timeout,
+    max_keepalive_requests,
+    pipeline,
+    max_line_length,
+    max_request_line_size,
+    max_empty_lines,
+    max_header_name_size,
+    max_header_value_size,
+    max_headers,
+    max_header_block_size
+]).
+
 %% Public API
--export([start/1, stop_accepting/1, accept_ws/4]).
+-export([start/1, stop_accepting/1, accept_ws/4, serve_opts/2]).
 
 %% livery_adapter callbacks
 -export([
@@ -51,7 +85,11 @@ content-length write via `send_full/5` -> `h1:respond/5`.
 -export_type([listen_opts/0, listener/0, stream/0]).
 
 -type listener() :: h1:server_ref().
--type stream() :: {h1:connection(), h1:stream_id()}.
+%% The third element is the protocol ALPN settled on for this connection
+%% (`undefined` when the client offered none, or when the listener is
+%% cleartext). It is carried here rather than looked up because only the
+%% process that handshaked the socket ever knows it.
+-type stream() :: {h1:connection(), h1:stream_id(), binary() | undefined}.
 
 -type listen_opts() :: #{
     port => inet:port_number(),
@@ -63,6 +101,10 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     cert => binary() | string(),
     key => binary() | string(),
     cacerts => [binary()],
+    %% Client-certificate policy. `verify_peer' asks for (and requires) a
+    %% client certificate and needs `cacerts'; h1 rejects the pair otherwise
+    %% rather than listening with authentication silently off.
+    verify => verify_none | verify_peer,
     ssl_opts => [ssl:tls_server_option()],
     acceptors => pos_integer(),
     %% Authoritative request-body ceiling: a body past it yields a graceful
@@ -86,6 +128,20 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     early_response_drain => 0 | {non_neg_integer() | infinity, non_neg_integer() | infinity},
     lingering_timeout => timeout(),
     max_keepalive_requests => pos_integer() | infinity,
+    %% Serve pipelined requests concurrently rather than one at a time.
+    pipeline => boolean(),
+    %% Parser size limits, passed through to `h1'. All have finite defaults
+    %% there; tighten them for an edge-facing listener. `max_request_line_size'
+    %% caps the whole request line (method + target + version) and yields 414,
+    %% `max_line_length' only bounds an unterminated line. Header breaches
+    %% yield 431. Requires erlang_h1 >= 0.9.0 for `max_request_line_size'.
+    max_line_length => pos_integer(),
+    max_request_line_size => pos_integer() | infinity,
+    max_empty_lines => non_neg_integer(),
+    max_header_name_size => pos_integer(),
+    max_header_value_size => pos_integer(),
+    max_headers => pos_integer(),
+    max_header_block_size => pos_integer(),
     %% Shared service config, readable in handlers via livery_req:config/1.
     config => term(),
     stack := livery_middleware:stack(),
@@ -145,7 +201,7 @@ stop_accepting(Listener) ->
     livery_adapter:send_opts()
 ) ->
     livery_adapter:send_result().
-send_headers({Conn, StreamId}, Status, Headers, Opts) ->
+send_headers({Conn, StreamId, _Alpn}, Status, Headers, Opts) ->
     closed_guard(fun() ->
         case {maps:get(end_stream, Opts, false), drain_opts(Opts)} of
             {true, {ok, RespOpts}} ->
@@ -174,7 +230,7 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
 %% path which frames the body as chunked. livery:emit/3 picks this up
 %% because the callback is exported. A per-response early-response drain
 %% budget routes through respond/6 so h1 honors it on an early close.
-send_full({Conn, StreamId}, Status, Headers, IoData, Opts) ->
+send_full({Conn, StreamId, _Alpn}, Status, Headers, IoData, Opts) ->
     closed_guard(fun() ->
         case drain_opts(Opts) of
             {ok, RespOpts} -> h1:respond(Conn, StreamId, Status, Headers, IoData, RespOpts);
@@ -184,13 +240,13 @@ send_full({Conn, StreamId}, Status, Headers, IoData, Opts) ->
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
-send_data({Conn, StreamId}, IoData, Opts) ->
+send_data({Conn, StreamId, _Alpn}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
     closed_guard(fun() -> h1:send_data(Conn, StreamId, IoData, EndStream) end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
-send_trailers({Conn, StreamId}, Trailers) ->
+send_trailers({Conn, StreamId, _Alpn}, Trailers) ->
     closed_guard(fun() -> h1:send_trailers(Conn, StreamId, Trailers) end).
 
 %% A send to a connection whose process has gone away (peer closed) exits
@@ -209,17 +265,17 @@ closed_guard(Fun) ->
 
 -spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
     livery_adapter:send_result().
-send_informational({Conn, StreamId}, Status, Headers) ->
+send_informational({Conn, StreamId, _Alpn}, Status, Headers) ->
     closed_guard(fun() -> h1:send_informational(Conn, StreamId, Status, Headers) end).
 
 -spec reset(stream(), term()) -> ok.
-reset({Conn, StreamId}, Reason) ->
+reset({Conn, StreamId, _Alpn}, Reason) ->
     _ = h1:cancel_stream(Conn, StreamId, Reason),
     ok.
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
-peer_info({Conn, _StreamId}) ->
-    #{peer => conn_peer(Conn), tls => undefined, alpn => <<"http/1.1">>}.
+peer_info({Conn, _StreamId, Alpn}) ->
+    #{peer => conn_peer(Conn), tls => undefined, alpn => Alpn}.
 
 %% The h1 connection records the peer at accept time (h1 >= 0.8.0).
 -spec conn_peer(h1:connection()) ->
@@ -283,7 +339,7 @@ handshake or socket transfer failure.
     term()
 ) ->
     {ok, pid()} | {error, term()}.
-accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
+accept_ws({Conn, StreamId, _Alpn}, Req, HandlerMod, Opts) ->
     {ValidateOpts, AcceptOpts0} = livery_ws:handshake_opts(Opts),
     Headers = livery_req:headers(Req),
     case ws_h1_upgrade:validate_request(Headers, ValidateOpts) of
@@ -356,10 +412,45 @@ ws_transport(Req) ->
     livery_middleware:handler()
 ) -> map().
 build_h1_opts(Opts, Stack, Handler) ->
-    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
     Transport = maps:get(transport, Opts, tcp),
-    Base = #{
-        transport => Transport,
+    Base = conn_base(Opts, Stack, Handler, Transport, listener_alpn(Transport)),
+    copy_keys(?LISTEN_KEYS ++ ?CONN_KEYS, Opts, Base#{transport => Transport}).
+
+%% A dedicated TLS listener advertises `http/1.1' and nothing else, so
+%% that is what ALPN settles on; a cleartext listener negotiates nothing.
+%% The multiplexed listener knows the real value and passes it to
+%% `serve_opts/1' instead.
+-spec listener_alpn(tcp | ssl) -> binary() | undefined.
+listener_alpn(ssl) -> <<"http/1.1">>;
+listener_alpn(tcp) -> undefined.
+
+-doc """
+Build the `h1:serve_socket/2` option map for a socket the caller
+already accepted and handshaked.
+
+Used by `livery_h1h2` after ALPN settles on `http/1.1`. `Opts` is
+the listener's `listen_opts()`; `Alpn` is the protocol actually
+negotiated (`undefined` when the client offered none). Listen-time
+keys (`cert`, `acceptors`, ...) are dropped: the socket is already
+up, so only the per-connection options apply.
+""".
+-spec serve_opts(listen_opts(), binary() | undefined) -> map().
+serve_opts(Opts, Alpn) ->
+    Stack = maps:get(stack, Opts),
+    Handler = maps:get(handler, Opts),
+    Base = conn_base(Opts, Stack, Handler, ssl, Alpn),
+    copy_keys(?CONN_KEYS, Opts, Base).
+
+-spec conn_base(
+    listen_opts(),
+    livery_middleware:stack(),
+    livery_middleware:handler(),
+    tcp | ssl,
+    binary() | undefined
+) -> map().
+conn_base(Opts, Stack, Handler, Transport, Alpn) ->
+    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
+    #{
         %% Disable h1's own parser-level body cap and enforce `max_body' in
         %% the translator instead. h1's parser runs upstream of the translate
         %% cap and, on exceed, tears the connection down, which would pre-empt
@@ -369,28 +460,9 @@ build_h1_opts(Opts, Stack, Handler) ->
         %% erlang_h1 >= 0.7.1, which forwards max_body_size from server opts.
         max_body_size => infinity,
         handler => make_handler_fun(
-            Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport
+            Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport, Alpn
         )
-    },
-    copy_keys(
-        [
-            ip,
-            inet6,
-            cert,
-            key,
-            cacerts,
-            ssl_opts,
-            acceptors,
-            handshake_timeout,
-            idle_timeout,
-            request_timeout,
-            early_response_drain,
-            lingering_timeout,
-            max_keepalive_requests
-        ],
-        Opts,
-        Base
-    ).
+    }.
 
 -spec copy_keys([atom()], map(), map()) -> map().
 copy_keys([], _Src, Dst) ->
@@ -406,7 +478,8 @@ copy_keys([K | Rest], Src, Dst) ->
     livery_middleware:handler(),
     non_neg_integer() | infinity,
     term(),
-    tcp | ssl
+    tcp | ssl,
+    binary() | undefined
 ) ->
     fun(
         (
@@ -417,7 +490,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h1:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler, MaxBody, Config, Transport) ->
+make_handler_fun(Stack, Handler, MaxBody, Config, Transport, Alpn) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -429,7 +502,8 @@ make_handler_fun(Stack, Handler, MaxBody, Config, Transport) ->
             Handler,
             MaxBody,
             Config,
-            Transport
+            Transport,
+            Alpn
         )
     end.
 
@@ -443,10 +517,11 @@ make_handler_fun(Stack, Handler, MaxBody, Config, Transport) ->
     livery_middleware:handler(),
     non_neg_integer() | infinity,
     term(),
-    tcp | ssl
+    tcp | ssl,
+    binary() | undefined
 ) -> ok.
 dispatch_request(
-    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport
+    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport, Alpn
 ) ->
     %% This function runs in the per-request worker spawned by
     %% h1_server. Body and trailer events arrive as
@@ -456,7 +531,8 @@ dispatch_request(
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
-    Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader, Transport),
+    Stream = {Conn, StreamId, Alpn},
+    Req = build_req(Stream, Method, RawPath, Headers, Reader, Transport),
     %% The dispatch process (this one) runs the translator loop, so it
     %% is the disconnect notifier the handler registers with.
     Req1 = Req#livery_req{
@@ -468,7 +544,7 @@ dispatch_request(
     case
         livery_req_sup:start_request(#{
             adapter => ?MODULE,
-            stream => {Conn, StreamId},
+            stream => Stream,
             req => Req1,
             stack => Stack,
             handler => Handler
@@ -484,7 +560,7 @@ dispatch_request(
                 StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
             );
         {error, _} ->
-            reject_overload({Conn, StreamId})
+            reject_overload(Stream)
     end.
 
 %% No worker slot available (concurrency cap reached): answer 503 and
@@ -500,15 +576,14 @@ reject_overload(Stream) ->
     ok.
 
 -spec build_req(
-    h1:connection(),
-    h1:stream_id(),
+    stream(),
     binary(),
     binary(),
     h1:headers(),
     livery_body:reader(),
     tcp | ssl
 ) -> livery_req:req().
-build_req(Conn, StreamId, Method, Path, Headers, Reader, Transport) ->
+build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Transport) ->
     livery_req:new(#{
         protocol => h1,
         method => Method,
@@ -516,7 +591,7 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader, Transport) ->
         headers => Headers,
         body => {stream, Reader},
         adapter => ?MODULE,
-        stream => {Conn, StreamId},
+        stream => Stream,
         engine_pid => Conn,
         peer => conn_peer(Conn),
         tls => tls_info(Transport)

@@ -40,7 +40,7 @@ init_per_suite(Config) ->
     ]),
     {ok, Pid} = livery:start_service(#{http => #{port => 0}, router => Router}),
     true = unlink(Pid),
-    Port = maps:get(h1, livery:which_listeners(Pid)),
+    Port = hd(maps:get(h1, livery:which_listeners(Pid))),
     Base = iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port)]),
     [{service, Pid}, {port, Port}, {base, Base} | Config].
 

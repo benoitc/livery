@@ -7,13 +7,18 @@ supervisor, sharing one router/middleware/handler. Optionally
 advertises Alt-Svc on H1 and H2 responses so clients race up to
 H3.
 
+The `https` listener is h2-only by default; `alpn => [h2, http1]`
+makes it serve HTTP/2 and HTTP/1.1 from the same port, chosen per
+connection.
+
 Configuration map:
 
 ```
 livery:start_service(#{
     host       => <<"example.com">>,
     http3      => #{port => 443, cert => Cert, key => Key},
-    https      => #{port => 443, cert => Cert, key => Key},
+    https      => #{port => 443, cert => Cert, key => Key,
+                    alpn => [h2, http1]},
     http       => #{port => 80},
     handler    => fun handler/1,
     middleware => Stack,
@@ -68,6 +73,12 @@ in-flight requests finish, use `livery:drain/1,2`.
     alt_svc => advertise | none
 }.
 
+%% Per-listener options. The keys below are the ones that mean something
+%% on more than one listener; anything else in the map is forwarded
+%% verbatim to the adapter that ends up serving the key, so
+%% `livery_h1:listen_opts()', `livery_h2:listen_opts()',
+%% `livery_h1h2:listen_opts()', and `livery_h3:listen_opts()' are the
+%% full lists (h1's parser size limits, h3's `quic_opts', and so on).
 -type listener_opts() :: #{
     %% HTTP/3 listener name (atom); auto-derived from the port if absent.
     name => atom(),
@@ -76,10 +87,29 @@ in-flight requests finish, use `livery:drain/1,2`.
     ip => inet:ip_address(),
     %% Bind the IPv6 wildcard (`::') when no explicit `ip' is given.
     inet6 => boolean(),
+    %% Override the default transport for the key: `http' defaults to
+    %% `tcp' and `https' to `ssl'. The useful one is h2c, which is
+    %% `https' with `transport => tcp' and no certificates.
+    transport => tcp | ssl,
     cert => binary() | string(),
     key => binary() | string() | term(),
     cacerts => [binary()],
+    %% Client-certificate policy on the H1/H2 listeners. `verify_peer'
+    %% requires `cacerts' and makes the certificate mandatory.
+    verify => verify_none | verify_peer,
+    ssl_opts => [ssl:tls_server_option()],
+    %% `https' only: the protocols to advertise over ALPN, most preferred
+    %% first. Defaults to `[h2]', an h2-only listener. `[h2, http1]' puts
+    %% HTTP/2 and HTTP/1.1 on the same TLS port, chosen per connection.
+    alpn => [livery_h1h2:protocol()],
     acceptors => pos_integer(),
+    handshake_timeout => timeout(),
+    %% Slow-client guards on the H1 listener; see `livery_h1:listen_opts()'.
+    idle_timeout => timeout(),
+    request_timeout => timeout(),
+    max_keepalive_requests => pos_integer() | infinity,
+    %% RFC 8441 extended CONNECT on the H2 listener.
+    enable_connect_protocol => boolean(),
     %% Request-body ceiling. A body past this yields a graceful 413;
     %% `infinity' disables it, default 16 MiB. Honored by all three adapters;
     %% the H1 adapter enforces it in place of h1's own parser cap, so a value
@@ -91,6 +121,7 @@ in-flight requests finish, use `livery:drain/1,2`.
             {ok, #{cert := binary(), key := term(), cert_chain => [binary()]}}
             | {error, term()}
     ),
+    %% H2/H3 SETTINGS overrides.
     settings => map(),
     quic_opts => map(),
     %% HTTP/1.1 early-response inbound-drain budget (lingering close).
@@ -102,10 +133,17 @@ in-flight requests finish, use `livery:drain/1,2`.
     config => term()
 }.
 
+%% One entry per listen socket, not per protocol: an ALPN listener serves
+%% both `h1' and `h2' from a single port, so `protocols' is a list.
+-record(listener, {
+    mod :: livery_h1 | livery_h2 | livery_h3 | livery_h1h2,
+    ref :: term(),
+    port :: inet:port_number(),
+    protocols :: [h1 | h2 | h3]
+}).
+
 -record(state, {
-    h1 :: {livery_h1:listener(), inet:port_number()} | undefined,
-    h2 :: {livery_h2:listener(), inet:port_number()} | undefined,
-    h3 :: {livery_h3:listener(), inet:port_number()} | undefined
+    listeners = [] :: [#listener{}]
 }).
 
 -define(SERVER, ?MODULE).
@@ -135,9 +173,12 @@ stop_accepting(Pid) when is_pid(Pid) ->
 
 -doc """
 Return the ports the service is bound to, by protocol. Keys are
-present only for protocols that were configured.
+present only for protocols that were configured, and each maps to
+every port serving that protocol: an ALPN listener puts one port
+under both `h1` and `h2`, and a cleartext `http` listener alongside
+it gives `h1` two.
 """.
--spec which_listeners(pid()) -> #{h1 | h2 | h3 => inet:port_number()}.
+-spec which_listeners(pid()) -> #{h1 | h2 | h3 => [inet:port_number()]}.
 which_listeners(Pid) ->
     gen_server:call(Pid, which_listeners).
 
@@ -154,9 +195,11 @@ init(Opts) ->
         %% building the Alt-Svc value used by H1 and H2.
         H3 = maybe_start_h3(Opts, base_stack(Opts), Handler),
         Stack = build_stack(Opts, H3),
-        H1 = maybe_start_h1(Opts, Stack, Handler),
-        H2 = maybe_start_h2(Opts, Stack, Handler),
-        {ok, #state{h1 = H1, h2 = H2, h3 = H3}}
+        Listeners =
+            H3 ++
+                maybe_start_http(Opts, Stack, Handler) ++
+                maybe_start_https(Opts, Stack, Handler),
+        {ok, #state{listeners = Listeners}}
     catch
         throw:Reason ->
             {stop, Reason};
@@ -167,14 +210,21 @@ init(Opts) ->
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
     {reply, term(), #state{}}.
 handle_call(stop_accepting, _From, State) ->
-    %% H2/H3 listeners stop entirely; the H1 listener only stops
-    %% accepting, so established (in-flight and kept-alive) connections
-    %% keep being served through the drain window. The kept ref lets
-    %% terminate/2 close them once the drain ends.
-    _ = stop_h3(State#state.h3),
-    _ = stop_h2(State#state.h2),
-    _ = stop_accepting_h1(State#state.h1),
-    {reply, ok, State#state{h2 = undefined, h3 = undefined}};
+    %% Listeners that can keep serving what they already accepted do so,
+    %% and stay in the state so terminate/2 closes them once the drain
+    %% ends. The H2 and H3 libraries have no stop-accepting, so those
+    %% stop outright and drop out.
+    Kept = lists:foldr(
+        fun(L, Acc) ->
+            case drain_listener(L) of
+                keep -> [L | Acc];
+                drop -> Acc
+            end
+        end,
+        [],
+        State#state.listeners
+    ),
+    {reply, ok, State#state{listeners = Kept}};
 handle_call(which_listeners, _From, State) ->
     {reply, listeners_map(State), State};
 handle_call(_, _, State) ->
@@ -188,9 +238,7 @@ handle_info(_, State) -> {noreply, State}.
 
 -spec terminate(term(), #state{}) -> ok.
 terminate(_Reason, State) ->
-    _ = stop_h3(State#state.h3),
-    _ = stop_h2(State#state.h2),
-    _ = stop_h1(State#state.h1),
+    _ = [stop_listener(L) || L <- State#state.listeners],
     ok.
 
 -spec code_change(term(), #state{}, term()) -> {ok, #state{}}.
@@ -216,82 +264,111 @@ resolve_handler(Opts) ->
 base_stack(Opts) ->
     maps:get(middleware, Opts, []).
 
--spec build_stack(
-    service_opts(),
-    {atom(), inet:port_number()} | undefined
-) ->
+-spec build_stack(service_opts(), [#listener{}]) ->
     livery_middleware:stack().
 build_stack(Opts, H3) ->
     User = base_stack(Opts),
     case {maps:get(alt_svc, Opts, none), H3} of
-        {advertise, {_Name, Port}} ->
-            [{livery_alt_svc, #{value => alt_svc_header(Port)}} | User];
+        {advertise, [#listener{port = Port} | _]} ->
+            Value = alt_svc_header(maps:get(host, Opts, undefined), Port),
+            [{livery_alt_svc, #{value => Value}} | User];
         _ ->
             User
     end.
 
--spec alt_svc_header(inet:port_number()) -> binary().
-alt_svc_header(Port) ->
+%% RFC 7838 alt-authority is `[uri-host] ":" port', so the service `host'
+%% (when given) qualifies the advertised authority instead of leaving the
+%% client to reuse the origin's.
+-spec alt_svc_header(binary() | undefined, inet:port_number()) -> binary().
+alt_svc_header(Host, Port) ->
+    Authority =
+        case Host of
+            undefined -> <<>>;
+            _ -> Host
+        end,
     iolist_to_binary([
-        <<"h3=\":">>,
+        <<"h3=\"">>,
+        Authority,
+        <<":">>,
         integer_to_binary(Port),
         <<"\"; ma=86400">>
     ]).
 
-maybe_start_h1(Opts, Stack, Handler) ->
+maybe_start_http(Opts, Stack, Handler) ->
     case maps:find(http, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(
-                ListenOpts,
-                #{stack => Stack, handler => Handler, config => listener_config(Opts, ListenOpts)}
-            ),
-            {ok, Ref} = livery_h1:start(ListenOpts1),
-            {Ref, h1:server_port(Ref)};
+            {ok, Ref} = livery_h1:start(listener_opts(Opts, ListenOpts, Stack, Handler)),
+            [
+                #listener{
+                    mod = livery_h1,
+                    ref = Ref,
+                    port = h1:server_port(Ref),
+                    protocols = [h1]
+                }
+            ];
         error ->
-            undefined
+            []
     end.
 
-maybe_start_h2(Opts, Stack, Handler) ->
+%% `alpn' decides which library owns the TLS port. The default `[h2]' is
+%% the historical behaviour, an h2-only listener; anything naming more
+%% than one protocol goes to the multiplexing listener, which resolves
+%% ALPN itself and hands each connection to h1 or h2.
+maybe_start_https(Opts, Stack, Handler) ->
     case maps:find(https, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = maps:merge(
-                ListenOpts,
-                #{
-                    stack => Stack,
-                    handler => Handler,
-                    config => listener_config(Opts, ListenOpts),
-                    transport => maps:get(
-                        transport,
-                        ListenOpts,
-                        ssl
-                    )
-                }
-            ),
-            {ok, Ref} = livery_h2:start(ListenOpts1),
-            {Ref, h2:server_port(Ref)};
+            Merged = listener_opts(Opts, ListenOpts, Stack, Handler),
+            start_https(maps:get(alpn, ListenOpts, [h2]), Merged);
         error ->
-            undefined
+            []
     end.
+
+start_https([h2], Opts) ->
+    {ok, Ref} = livery_h2:start(with_transport(Opts)),
+    [#listener{mod = livery_h2, ref = Ref, port = h2:server_port(Ref), protocols = [h2]}];
+start_https([http1], Opts) ->
+    {ok, Ref} = livery_h1:start(with_transport(Opts)),
+    [#listener{mod = livery_h1, ref = Ref, port = h1:server_port(Ref), protocols = [h1]}];
+start_https(Alpn, Opts) ->
+    {ok, Ref} = livery_h1h2:start(Opts#{alpn => Alpn}),
+    [
+        #listener{
+            mod = livery_h1h2,
+            ref = Ref,
+            port = livery_h1h2:server_port(Ref),
+            protocols = protocols(Alpn)
+        }
+    ].
+
+protocols(Alpn) ->
+    lists:usort([protocol(P) || P <- Alpn]).
+
+protocol(h2) -> h2;
+protocol(http1) -> h1.
+
+with_transport(Opts) ->
+    Opts#{transport => maps:get(transport, Opts, ssl)}.
 
 maybe_start_h3(Opts, Stack, Handler) ->
     case maps:find(http3, Opts) of
         {ok, ListenOpts} ->
-            ListenOpts1 = ensure_h3_name(
-                maps:merge(
-                    ListenOpts,
-                    #{
-                        stack => Stack,
-                        handler => Handler,
-                        config => listener_config(Opts, ListenOpts)
-                    }
-                )
-            ),
-            {ok, Name} = livery_h3:start(ListenOpts1),
+            Merged = ensure_h3_name(listener_opts(Opts, ListenOpts, Stack, Handler)),
+            {ok, Name} = livery_h3:start(Merged),
             {ok, Port} = quic:get_server_port(Name),
-            {Name, Port};
+            [#listener{mod = livery_h3, ref = Name, port = Port, protocols = [h3]}];
         error ->
-            undefined
+            []
     end.
+
+listener_opts(Opts, ListenOpts, Stack, Handler) ->
+    maps:merge(
+        ListenOpts,
+        #{
+            stack => Stack,
+            handler => Handler,
+            config => listener_config(Opts, ListenOpts)
+        }
+    ).
 
 %% A per-listener `config' overrides the service-wide one.
 -spec listener_config(service_opts(), listener_opts()) -> term().
@@ -310,31 +387,34 @@ ensure_h3_name(#{port := Port} = Opts) when is_integer(Port), Port > 0 ->
 ensure_h3_name(Opts) ->
     Opts.
 
-stop_h1(undefined) -> ok;
-stop_h1({Ref, _Port}) -> livery_h1:stop(Ref).
+stop_listener(#listener{mod = livery_h1, ref = Ref}) -> livery_h1:stop(Ref);
+stop_listener(#listener{mod = livery_h2, ref = Ref}) -> livery_h2:stop(Ref);
+stop_listener(#listener{mod = livery_h3, ref = Ref}) -> livery_h3:stop(Ref);
+stop_listener(#listener{mod = livery_h1h2, ref = Ref}) -> livery_h1h2:stop(Ref).
 
-stop_accepting_h1(undefined) -> ok;
-stop_accepting_h1({Ref, _Port}) -> livery_h1:stop_accepting(Ref).
+%% `keep' means the listener stopped accepting but is still serving what
+%% it accepted, so it stays in the state for terminate/2 to close.
+drain_listener(#listener{mod = livery_h1, ref = Ref}) ->
+    livery_h1:stop_accepting(Ref),
+    keep;
+drain_listener(#listener{mod = livery_h1h2, ref = Ref}) ->
+    livery_h1h2:stop_accepting(Ref),
+    keep;
+drain_listener(#listener{mod = livery_h2, ref = Ref}) ->
+    livery_h2:stop(Ref),
+    drop;
+drain_listener(#listener{mod = livery_h3, ref = Ref}) ->
+    livery_h3:stop(Ref),
+    drop.
 
-stop_h2(undefined) -> ok;
-stop_h2({Ref, _Port}) -> livery_h2:stop(Ref).
+listeners_map(#state{listeners = Listeners}) ->
+    lists:foldl(fun add_ports/2, #{}, Listeners).
 
-stop_h3(undefined) -> ok;
-stop_h3({Name, _Port}) -> livery_h3:stop(Name).
-
-listeners_map(State) ->
-    Acc0 = #{},
-    Acc1 =
-        case State#state.h1 of
-            undefined -> Acc0;
-            {_, P1} -> Acc0#{h1 => P1}
+add_ports(#listener{port = Port, protocols = Protocols}, Acc) ->
+    lists:foldl(
+        fun(Protocol, A) ->
+            A#{Protocol => maps:get(Protocol, A, []) ++ [Port]}
         end,
-    Acc2 =
-        case State#state.h2 of
-            undefined -> Acc1;
-            {_, P2} -> Acc1#{h2 => P2}
-        end,
-    case State#state.h3 of
-        undefined -> Acc2;
-        {_, P3} -> Acc2#{h3 => P3}
-    end.
+        Acc,
+        Protocols
+    ).

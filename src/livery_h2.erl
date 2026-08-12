@@ -29,13 +29,18 @@ in `capabilities/1`.
 %% (`infinity' disables it). See livery_h1 for the rationale.
 -define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
+%% Per-connection options: exactly the set h2 selects into its connection
+%% opts, so the listener and the serve-an-accepted-socket path forward the
+%% same ones.
+-define(CONN_KEYS, [settings, enable_connect_protocol]).
+
 %% h2:server_opts() declares `cert' and `key' as required map keys,
 %% which is wrong for h2c (tcp transport). Suppress the cascading
 %% contract-mismatch warning on our entry points until h2's spec
 %% relaxes those keys to optional.
 -dialyzer({nowarn_function, [start/1, start/3]}).
 
--export([start/1, accept_ws/4, accept_wt/4]).
+-export([start/1, accept_ws/4, accept_wt/4, serve_opts/2]).
 
 -export([
     start/3,
@@ -53,7 +58,10 @@ in `capabilities/1`.
 -export_type([listen_opts/0, listener/0, stream/0]).
 
 -type listener() :: h2:server_ref().
--type stream() :: {h2:connection(), h2:stream_id()}.
+%% The third element is the protocol ALPN settled on for this connection
+%% (`undefined` for cleartext h2c). Only the process that handshaked the
+%% socket ever knows it, so it rides along rather than being looked up.
+-type stream() :: {h2:connection(), h2:stream_id(), binary() | undefined}.
 
 -type listen_opts() :: #{
     port => inet:port_number(),
@@ -65,6 +73,10 @@ in `capabilities/1`.
     cert => binary() | string(),
     key => binary() | string(),
     cacerts => [binary()],
+    %% Client-certificate policy. `verify_peer' asks for (and requires) a
+    %% client certificate and needs `cacerts'; h2 rejects the pair otherwise
+    %% rather than listening with authentication silently off.
+    verify => verify_none | verify_peer,
     ssl_opts => [ssl:tls_server_option()],
     acceptors => pos_integer(),
     enable_connect_protocol => boolean(),
@@ -115,7 +127,7 @@ stop(Listener) ->
     livery_adapter:send_opts()
 ) ->
     livery_adapter:send_result().
-send_headers({Conn, StreamId}, Status, Headers, Opts) ->
+send_headers({Conn, StreamId, _Alpn}, Status, Headers, Opts) ->
     closed_guard(fun() ->
         case h2:send_response(Conn, StreamId, Status, Headers) of
             ok ->
@@ -130,7 +142,7 @@ send_headers({Conn, StreamId}, Status, Headers, Opts) ->
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
-send_data({Conn, StreamId}, IoData, Opts) ->
+send_data({Conn, StreamId, _Alpn}, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
     closed_guard(fun() -> h2:send_data(Conn, StreamId, iolist_to_binary(IoData), EndStream) end).
 
@@ -145,14 +157,14 @@ send_data({Conn, StreamId}, IoData, Opts) ->
     livery_adapter:send_opts()
 ) ->
     livery_adapter:send_result().
-send_full({Conn, StreamId}, Status, Headers, IoData, _Opts) ->
+send_full({Conn, StreamId, _Alpn}, Status, Headers, IoData, _Opts) ->
     closed_guard(fun() ->
         h2:respond(Conn, StreamId, Status, Headers, iolist_to_binary(IoData))
     end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
-send_trailers({Conn, StreamId}, Trailers) ->
+send_trailers({Conn, StreamId, _Alpn}, Trailers) ->
     closed_guard(fun() -> h2:send_trailers(Conn, StreamId, Trailers) end).
 
 %% Interim responses ride the normal HEADERS path: a 1xx block carries
@@ -160,7 +172,7 @@ send_trailers({Conn, StreamId}, Trailers) ->
 %% follows on the same stream. h2 itself rejects 101 (RFC 9113 §8.6).
 -spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
     livery_adapter:send_result().
-send_informational({Conn, StreamId}, Status, Headers) ->
+send_informational({Conn, StreamId, _Alpn}, Status, Headers) ->
     closed_guard(fun() -> h2:send_response(Conn, StreamId, Status, Headers) end).
 
 %% A send to a connection whose client has gone away exits the underlying
@@ -181,14 +193,13 @@ closed_guard(Fun) ->
     end.
 
 -spec reset(stream(), term()) -> ok.
-reset({Conn, StreamId}, _Reason) ->
+reset({Conn, StreamId, _Alpn}, _Reason) ->
     _ = h2:cancel(Conn, StreamId),
     ok.
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
-peer_info({Conn, _StreamId}) ->
-    %% Future: surface ALPN, peer cert, etc. via h2's connection state.
-    #{peer => h2_peer(Conn), tls => undefined, alpn => <<"h2">>}.
+peer_info({Conn, _StreamId, Alpn}) ->
+    #{peer => h2_peer(Conn), tls => undefined, alpn => Alpn}.
 
 -spec capabilities(listener()) -> livery_adapter:capabilities().
 capabilities(_Listener) ->
@@ -213,7 +224,7 @@ driven by the `livery_ws_h2` transport.
 """.
 -spec accept_ws(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
-accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
+accept_ws({Conn, StreamId, _Alpn}, Req, HandlerMod, Opts) ->
     {ValidateOpts, AcceptOpts0} = livery_ws:handshake_opts(Opts),
     Pseudo = connect_pseudo_headers(Req, <<"websocket">>),
     case ws_h2_upgrade:validate_request(Pseudo, ValidateOpts) of
@@ -275,7 +286,7 @@ Reconstructs the CONNECT pseudo-headers from the request value
 -spec accept_wt(h2, livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_wt(h2, Req, HandlerMod, Opts) ->
-    {Conn, StreamId} = livery_req:stream(Req),
+    {Conn, StreamId, _Alpn} = livery_req:stream(Req),
     Headers = connect_pseudo_headers(Req, <<"webtransport">>),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h2,
@@ -294,26 +305,50 @@ accept_wt(h2, Req, HandlerMod, Opts) ->
 ) -> map().
 build_h2_opts(Opts, Stack, Handler) ->
     Transport = maps:get(transport, Opts, tcp),
-    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
-    Base = #{
-        transport => Transport,
-        handler => make_handler_fun(Stack, Handler, MaxBody, maps:get(config, Opts, undefined))
-    },
+    Base = conn_base(Opts, Stack, Handler, Transport, listener_alpn(Transport)),
     copy_keys(
-        [
-            ip,
-            inet6,
-            cert,
-            key,
-            cacerts,
-            ssl_opts,
-            acceptors,
-            settings,
-            enable_connect_protocol
-        ],
+        [ip, inet6, cert, key, cacerts, verify, ssl_opts, acceptors] ++ ?CONN_KEYS,
         Opts,
-        Base
+        Base#{transport => Transport}
     ).
+
+%% A dedicated TLS listener advertises `h2' and nothing else, so that is
+%% what ALPN settles on; cleartext h2c negotiates nothing. The multiplexed
+%% listener knows the real value and passes it to `serve_opts/2' instead.
+-spec listener_alpn(tcp | ssl) -> binary() | undefined.
+listener_alpn(ssl) -> <<"h2">>;
+listener_alpn(tcp) -> undefined.
+
+-doc """
+Build the `h2:serve_socket/2` option map for a socket the caller
+already accepted and handshaked.
+
+Used by `livery_h1h2` after ALPN settles on `h2`. `Opts` is the
+listener's `listen_opts()`; `Alpn` is the protocol actually
+negotiated. Listen-time keys (`cert`, `acceptors`, ...) are
+dropped: the socket is already up, so only the per-connection
+options apply.
+""".
+-spec serve_opts(listen_opts(), binary() | undefined) -> map().
+serve_opts(Opts, Alpn) ->
+    Stack = maps:get(stack, Opts),
+    Handler = maps:get(handler, Opts),
+    copy_keys(?CONN_KEYS, Opts, conn_base(Opts, Stack, Handler, ssl, Alpn)).
+
+-spec conn_base(
+    listen_opts(),
+    livery_middleware:stack(),
+    livery_middleware:handler(),
+    tcp | ssl,
+    binary() | undefined
+) -> map().
+conn_base(Opts, Stack, Handler, Transport, Alpn) ->
+    MaxBody = maps:get(max_body, Opts, ?DEFAULT_MAX_BODY),
+    #{
+        handler => make_handler_fun(
+            Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport, Alpn
+        )
+    }.
 
 -spec copy_keys([atom()], map(), map()) -> map().
 copy_keys([], _Src, Dst) ->
@@ -328,7 +363,9 @@ copy_keys([K | Rest], Src, Dst) ->
     livery_middleware:stack(),
     livery_middleware:handler(),
     non_neg_integer() | infinity,
-    term()
+    term(),
+    tcp | ssl,
+    binary() | undefined
 ) ->
     fun(
         (
@@ -339,7 +376,7 @@ copy_keys([K | Rest], Src, Dst) ->
             h2:headers()
         ) -> ok
     ).
-make_handler_fun(Stack, Handler, MaxBody, Config) ->
+make_handler_fun(Stack, Handler, MaxBody, Config, Transport, Alpn) ->
     fun(Conn, StreamId, Method, Path, Headers) ->
         dispatch_request(
             Conn,
@@ -350,7 +387,9 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
             Stack,
             Handler,
             MaxBody,
-            Config
+            Config,
+            Transport,
+            Alpn
         )
     end.
 
@@ -363,14 +402,19 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
     livery_middleware:stack(),
     livery_middleware:handler(),
     non_neg_integer() | infinity,
-    term()
+    term(),
+    tcp | ssl,
+    binary() | undefined
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config) ->
+dispatch_request(
+    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport, Alpn
+) ->
     BodyRef = make_ref(),
     DiscRef = make_ref(),
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
-    Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
+    Stream = {Conn, StreamId, Alpn},
+    Req = build_req(Stream, Method, RawPath, Headers, Reader, Transport),
     %% The translator is the disconnect notifier. It is spawned before
     %% the worker (so the req can carry its pid) and given the worker
     %% pid afterwards via {worker, _}, breaking the dependency cycle.
@@ -386,7 +430,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
     case
         livery_req_sup:start_request(#{
             adapter => ?MODULE,
-            stream => {Conn, StreamId},
+            stream => Stream,
             req => Req1,
             stack => Stack,
             handler => Handler
@@ -410,7 +454,7 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
             end;
         {error, _} ->
             exit(Translator, kill),
-            reject_overload({Conn, StreamId})
+            reject_overload(Stream)
     end,
     ok.
 
@@ -435,14 +479,14 @@ reject_overload(Stream) ->
     ok.
 
 -spec build_req(
-    h2:connection(),
-    h2:stream_id(),
+    stream(),
     binary(),
     binary(),
     h2:headers(),
-    livery_body:reader()
+    livery_body:reader(),
+    tcp | ssl
 ) -> livery_req:req().
-build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
+build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Transport) ->
     Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
     Scheme = proplists:get_value(<<":scheme">>, Headers, <<"http">>),
     livery_req:new(#{
@@ -454,10 +498,18 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         headers => app_headers(Authority, Headers),
         body => {stream, Reader},
         adapter => ?MODULE,
-        stream => {Conn, StreamId},
+        stream => Stream,
         engine_pid => Conn,
-        peer => h2_peer(Conn)
+        peer => h2_peer(Conn),
+        tls => tls_info(Transport)
     }).
+
+%% Mark TLS connections so handlers can tell a secure listener from an
+%% h2c one, as the H1 adapter already does. h2 does not surface
+%% certificate details, so this is an empty map rather than undefined.
+-spec tls_info(tcp | ssl) -> undefined | map().
+tls_info(ssl) -> #{};
+tls_info(_) -> undefined.
 
 %% h2 (>= 0.10.2) keeps `:authority' and `:scheme' in the handler header
 %% list. Drop them from the application-visible headers (they are exposed
@@ -559,7 +611,7 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                     WorkerPid ! {livery_body, BodyRef, eof},
                     Loop(Cbs, Fired, Bytes1);
                 _ ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    abort_body(Conn, StreamId, WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {h2, Conn, {data, StreamId, Chunk, false}} ->
@@ -570,7 +622,7 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                 aborted ->
                     Loop(Cbs, Fired, aborted);
                 over ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    abort_body(Conn, StreamId, WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {h2, Conn, {trailers, StreamId, Trailers}} ->
@@ -601,8 +653,8 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
 
 %% Signal the worker that the body exceeded `max_body' and reset the
 %% stream so the client stops sending.
--spec abort_body(stream(), pid(), reference()) -> ok.
-abort_body(Stream, WorkerPid, BodyRef) ->
+-spec abort_body(h2:connection(), h2:stream_id(), pid(), reference()) -> ok.
+abort_body(Conn, StreamId, WorkerPid, BodyRef) ->
     WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    _ = reset(Stream, body_too_large),
+    _ = h2:cancel(Conn, StreamId),
     ok.

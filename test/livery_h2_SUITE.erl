@@ -256,7 +256,7 @@ send_to_gone_client_is_closed(_Config) ->
         {'DOWN', Ref, process, Dead, _} -> ok
     after 5000 -> ct:fail(proc_not_dead)
     end,
-    Stream = {Dead, 1},
+    Stream = {Dead, 1, <<"h2">>},
     ?assertEqual({error, closed}, livery_h2:send_full(Stream, 200, [], <<"body">>, #{})),
     ?assertEqual(
         {error, closed}, livery_h2:send_data(Stream, <<"body">>, #{end_stream => true})

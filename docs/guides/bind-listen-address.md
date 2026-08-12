@@ -24,12 +24,11 @@ Each key in `start_service/1` is one adapter serving one protocol:
 | Key | Protocol | Transport |
 |---|---|---|
 | `http` | HTTP/1.1 | cleartext TCP |
-| `https` | HTTP/2 | TLS (needs `cert`/`key`) |
+| `https` | HTTP/2, or HTTP/2 and HTTP/1.1 by ALPN | TLS (needs `cert`/`key`) |
 | `http3` | HTTP/3 | QUIC (needs `cert`/`key`) |
 
-So `http` is HTTP/1.1 only, *not* HTTP/1.1 plus HTTP/2. To serve more
-than one protocol, list more than one key, which is what the examples
-below do.
+`http` is HTTP/1.1 only, *not* HTTP/1.1 plus HTTP/2, so serving both
+cleartext and TLS still means listing both keys.
 
 The transport shown is the default per key, but `http` and `https` take
 a `transport` override. The useful one is **h2c**, HTTP/2 over cleartext
@@ -45,6 +44,34 @@ You can likewise run HTTP/1.1 over TLS by giving the `http` map a
 `transport => ssl` with `cert`/`key`. Add `alt_svc => advertise` to the
 service map to put an `Alt-Svc` header on the H1 and H2 responses so
 capable clients can upgrade to H3.
+
+### Serve HTTP/2 and HTTP/1.1 on one TLS port
+
+Give `https` an `alpn` list and the listener advertises both protocols,
+picking one per connection from what the client offered:
+
+```erlang
+livery:start_service(#{
+    https  => #{port => 443, cert => Cert, key => Key,
+                alpn => [h2, http1]},
+    router => Router
+}).
+```
+
+Order is server preference, so `[h2, http1]` means h2 wins whenever a
+client offers both. A client offering only `http/1.1`, and one that
+sends no ALPN at all, are both served over HTTP/1.1.
+
+The default is `alpn => [h2]`: an `https` key without it stays an
+h2-only listener, and an HTTP/1.1-only client cannot handshake with it.
+
+`which_listeners/1` reports the one port under both protocols, and
+`livery_req:protocol/1` gives each request the protocol its own
+connection negotiated:
+
+```erlang
+#{h1 := [443], h2 := [443]} = livery:which_listeners(Pid).
+```
 
 ### Starting an adapter: on its own, or as a service
 
@@ -255,7 +282,10 @@ listener's bind address and family. Bind the listener to IPv6 and a
 - For HTTP/3 the options fold into the QUIC listener's
   `extra_socket_opts`; any `extra_socket_opts` you set yourself are
   preserved.
-- `livery_service:which_listeners/1` reports the bound ports.
+- `livery_service:which_listeners/1` reports the bound ports, as a list
+  per protocol. One port can appear under two protocols (an `alpn`
+  listener), and one protocol under two ports (a cleartext `http`
+  listener next to an `alpn` one).
 
 ## See also
 

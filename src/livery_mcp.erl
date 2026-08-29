@@ -28,7 +28,9 @@ API (`barrel_mcp:reg_tool/4` and friends); they live in the shared
 
 Options (all optional):
 
-- `auth` — a `barrel_mcp` auth provider config (default: no auth)
+- `auth` — a `barrel_mcp` auth provider config (default: no auth).
+  A provider that refuses its options makes `handler/1` raise
+  `{auth_provider, Module, Reason}` rather than fail per request
 - `session_enabled` — use `Mcp-Session-Id` sessions (default `true`)
 - `allowed_origins` — `any | [binary()]` (default `any`)
 - `allow_missing_origin` — accept requests with no `Origin`
@@ -104,7 +106,11 @@ engine_config(Opts) ->
     ResourceMetadata = barrel_mcp_http_engine:normalize_resource_metadata(
         maps:get(resource_metadata, Opts, undefined)
     ),
-    AuthConfig0 = barrel_mcp_http_engine:init_auth(maps:get(auth, Opts, #{})),
+    AuthConfig0 =
+        case barrel_mcp_http_engine:init_auth(maps:get(auth, Opts, #{})) of
+            {ok, Config} -> Config;
+            {error, Reason} -> error(Reason)
+        end,
     AuthConfig = barrel_mcp_http_engine:inject_resource_metadata_url(
         AuthConfig0, ResourceMetadata
     ),

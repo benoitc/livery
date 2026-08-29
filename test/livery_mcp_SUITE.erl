@@ -137,7 +137,9 @@ tools_call_runs_tool(Config) ->
             <<"arguments">> => #{<<"value">> => <<"hi">>}
         }
     }),
-    Resp = json:decode(Body),
+    %% barrel_mcp 3.0 answers a legacy tools/call as an SSE stream when
+    %% Accept lists text/event-stream; the result is the final event.
+    Resp = last_sse_event(Body),
     ?assertEqual(3, maps:get(<<"id">>, Resp)),
     ?assert(not maps:is_key(<<"error">>, Resp)),
     Content = maps:get(<<"content">>, maps:get(<<"result">>, Resp)),
@@ -257,6 +259,14 @@ json_headers() ->
 
 with_session(Headers, undefined) -> Headers;
 with_session(Headers, Sid) -> [{<<"mcp-session-id">>, Sid} | Headers].
+
+last_sse_event(Body) ->
+    Datas = [
+        Data
+     || Line <- binary:split(Body, <<"\n">>, [global]),
+        <<"data:", Data/binary>> <- [Line]
+    ],
+    json:decode(string:trim(lists:last(Datas))).
 
 session_id(Headers) ->
     Lower = [{string:lowercase(K), V} || {K, V} <- Headers],

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `barrel_mcp` 2.3.0 -> 3.0.0, which serves MCP `2026-07-28`
+  alongside the earlier revisions on the same endpoint. Two changes
+  reach `livery_mcp` users: an `auth` provider that refuses its options
+  now makes `livery_mcp:handler/1` raise `{auth_provider, Module,
+  Reason}` at build time instead of failing per request, and
+  `barrel_mcp_auth_bearer` requires an `audience`. A legacy `tools/call`
+  whose `Accept` lists `text/event-stream` is answered as an SSE stream
+  whose final event is the result.
+
 ## [0.8.0] - 2026-08-12
 
 ### Added

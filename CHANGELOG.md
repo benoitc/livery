@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-30
+
+Patch release: `barrel_mcp` 3.0.1 declares the same `h1`, `h2` and
+`hackney` versions livery already uses, and the Early Hints guide is
+listed in the generated docs.
+
+### Changed
+
+- Bump `barrel_mcp` 3.0.0 -> 3.0.1. Its dependency requirements now
+  match livery's (`h1` 0.9, `h2` 0.12, `hackney` 4.7.4), so resolution
+  no longer relies on livery's top-level pins winning.
+
+### Fixed
+
+- `docs/guides/early-hints.md` is registered with ex_doc, so the README
+  link resolves and `rebar3 ex_doc` builds without warnings.
+
 ## [0.9.0] - 2026-08-30
 
 Dependency release: `barrel_mcp` 3.0.0 brings MCP `2026-07-28` to the

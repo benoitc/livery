@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-30
+
+Dependency release: `barrel_mcp` 3.0.0 brings MCP `2026-07-28` to the
+`livery_mcp` endpoint, with one build-time behaviour change for `auth`.
+
 ### Changed
 
 - Bump `barrel_mcp` 2.3.0 -> 3.0.0, which serves MCP `2026-07-28`

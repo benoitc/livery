@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-30
+
+Patch release: `h1` 0.9.1 fixes chunked request bodies that were rejected
+when a socket segment split a chunk-size line between its CR and LF.
+
+### Changed
+
+- Bump `h1` 0.9.0 -> 0.9.1. A chunked request body was answered
+  `400 Chunk size is not valid hex` whenever a socket read ended between
+  the CR and LF of a chunk-size line; large uploads in many chunks hit it
+  under load. HTTP/1.1 uploads through `livery_h1` no longer fail that way.
+
 ## [0.9.1] - 2026-08-30
 
 Patch release: `barrel_mcp` 3.0.1 declares the same `h1`, `h2` and

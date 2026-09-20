@@ -23,14 +23,17 @@ livery:start_service(#{https => #{...}, router => Router}).
 
 Register tools, resources, and prompts through `barrel_mcp`'s own
 API (`barrel_mcp:reg_tool/4` and friends); they live in the shared
-`barrel_mcp_registry`. The `barrel_mcp` application must be running
-(it is started transitively as a Livery dependency).
+`barrel_mcp_registry`. The `barrel_mcp` application must be running;
+it is an optional application of Livery, so list it in your own
+`applications`.
 
 Options (all optional):
 
 - `auth` — a `barrel_mcp` auth provider config (default: no auth).
   A provider that refuses its options makes `handler/1` raise
-  `{auth_provider, Module, Reason}` rather than fail per request
+  `{auth_provider, Module, Reason}` rather than fail per request.
+  `barrel_mcp_auth_bearer` requires an `audience`, and accepts
+  `audience => any` only with a `verifier` fun
 - `session_enabled` — use `Mcp-Session-Id` sessions (default `true`)
 - `allowed_origins` — `any | [binary()]` (default `any`)
 - `allow_missing_origin` — accept requests with no `Origin`

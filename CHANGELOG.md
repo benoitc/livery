@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bump `barrel_mcp` 3.0.1 -> 4.0.0. One thing to check if you pass
+  `barrel_mcp_auth_bearer` to `livery_mcp` with `audience => any`: without
+  a `verifier` fun the provider now refuses to start, and the handler
+  fails at construction with
+  `{auth_provider, _, audience_any_requires_verifier}`. Name the resource
+  as the audience instead.
 - Bump test and bench dependencies: `cowboy` to 2.19.0, `cowlib` to
   2.20.0, `ranch` to 2.3.0.
 - Bump tooling: `rebar3_lint` to 6.0.0 (elvis_core 6.0.0).

@@ -44,8 +44,12 @@ ok = barrel_mcp:reg_tool(<<"echo">>, my_tools, echo, #{
 echo(#{<<"value">> := V}) -> <<"echo: ", V/binary>>.
 ```
 
-The `barrel_mcp` application starts automatically as a Livery
-dependency, so the registry is ready once your release boots.
+`barrel_mcp` is an optional application of Livery, so list it in your
+own `.app.src` and the registry is ready once your release boots:
+
+```erlang
+{applications, [kernel, stdlib, livery, barrel_mcp]}
+```
 
 ## Options
 
@@ -62,11 +66,45 @@ dependency, so the registry is ready once your release boots.
 For public deployments, set `allowed_origins` to your client
 origins to guard against DNS-rebinding.
 
+## Require a bearer token
+
+Pass a `barrel_mcp` auth provider under `auth`. The bearer provider
+wants an `audience`: the resource your tokens are issued for, which is
+your MCP endpoint.
+
+```erlang
+Mcp = livery_mcp:handler(#{
+    auth => #{
+        provider => barrel_mcp_auth_bearer,
+        provider_opts => #{
+            secret   => Secret,
+            issuer   => <<"https://idp.example.com">>,
+            audience => <<"https://api.example.com/mcp">>
+        }
+    }
+}).
+```
+
+For RS256/ES256 or opaque tokens, give it a `verifier` fun instead of
+a `secret`. `audience => any` skips the `aud` check, so since
+`barrel_mcp` 4.0 it is only accepted together with a `verifier` that
+checks the recipient itself.
+
+The provider is initialised once, when you call `handler/1`. If it
+refuses its options, `handler/1` raises
+`{auth_provider, Module, Reason}` (for example
+`audience_any_requires_verifier` or `{missing_option, audience}`), so
+a bad config stops your service at boot and not on the first request.
+
 ## Notes
 
 - The handler writes the response straight to the wire and returns
   the `taken_over` sentinel, so do not stack response-mutating
   middleware after it.
+- Past one node, or if a restart must not interrupt a multi round-trip
+  call, set `request_state_key` (32+ random bytes) in the `barrel_mcp`
+  application environment. Without it a fresh key is generated at each
+  boot and `barrel_mcp` logs a warning at start.
 - The same handler serves all three protocols; mount it once on a
   multi-protocol service and MCP rides H2/H3 automatically.
 

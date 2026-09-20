@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-21
+
+Dependency release: `barrel_mcp` 4.0.0, whose bearer provider no longer
+accepts `audience => any` without a `verifier`.
+
 ### Changed
 
 - Bump `barrel_mcp` 3.0.1 -> 4.0.0. One thing to check if you pass

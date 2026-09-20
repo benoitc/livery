@@ -5,7 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-20
+
+### Added
+
+- `livery_a2a`: serve an A2A agent (agent card, JSON-RPC and HTTP+JSON
+  bindings, SSE streams) from a Livery service. `livery_a2a:router/1,2`
+  mounts the routes and `handler/1` delegates to
+  `barrel_a2a_http_engine:handle/6`. Livery owns the wire, the engine
+  owns the protocol. See the [A2A guide](docs/guides/serve-a2a-agents.md).
+
+### Changed
+
+- `barrel_mcp` and `barrel_a2a` are declared as optional applications.
+  Nothing in livery's core calls `livery_mcp` or `livery_a2a`, so a
+  release that only serves HTTP is no longer forced to start two
+  protocol stacks it never uses. An application that does use an adapter
+  lists the library itself.
 
 ## [0.9.2] - 2026-08-30
 

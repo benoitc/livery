@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-21
+
+### Changed
+
+- `barrel_mcp` and `barrel_a2a` are no longer top-level dependencies.
+  They were optional at runtime since 0.10.0 but still fetched and
+  locked by every project depending on livery. An application that uses
+  `livery_mcp` or `livery_a2a` adds the library to its own `deps`. The
+  `test` profile pulls them for the suites, and xref and dialyzer run
+  under the new `check` profile (`rebar3 as check xref`).
+
 ## [0.10.1] - 2026-09-21
 
 Dependency release: `barrel_mcp` 4.0.0, whose bearer provider no longer

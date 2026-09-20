@@ -44,8 +44,15 @@ ok = barrel_mcp:reg_tool(<<"echo">>, my_tools, echo, #{
 echo(#{<<"value">> := V}) -> <<"echo: ", V/binary>>.
 ```
 
-`barrel_mcp` is an optional application of Livery, so list it in your
-own `.app.src` and the registry is ready once your release boots:
+`barrel_mcp` is an optional application of Livery: Livery does not
+fetch it for you. Add it to your own `rebar.config`:
+
+```erlang
+{deps, [livery, {barrel_mcp, "~> 4.0.0"}]}.
+```
+
+Then list it in your `.app.src` so the registry is ready once your
+release boots:
 
 ```erlang
 {applications, [kernel, stdlib, livery, barrel_mcp]}

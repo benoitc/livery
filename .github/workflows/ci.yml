@@ -55,7 +55,7 @@ jobs:
             _build
             ~/.cache/rebar3
           key: build-ubuntu-24.04-otp-28-${{ hashFiles('rebar.config') }}
-      - run: rebar3 xref
+      - run: rebar3 as check xref
 
   dialyzer:
     name: Dialyzer
@@ -76,7 +76,7 @@ jobs:
             ~/.cache/rebar3
           key: plt-otp-28-${{ hashFiles('rebar.config') }}
           restore-keys: plt-otp-28-
-      - run: rebar3 dialyzer
+      - run: rebar3 as check dialyzer
 
   # ---- Build + tests: gated on static checks -----------------------------
   build:

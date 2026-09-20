@@ -7,6 +7,20 @@ You need it when other agents should reach yours through the same
 service that serves the rest of your routes, with Livery middleware
 in front.
 
+## Add the dependency
+
+`barrel_a2a` is an optional application of Livery: Livery does not
+fetch it for you. Add it to your own `rebar.config` and list it in your
+`.app.src`:
+
+```erlang
+{deps, [livery, {barrel_a2a, "~> 0.2.0"}]}.
+```
+
+```erlang
+{applications, [kernel, stdlib, livery, barrel_a2a]}
+```
+
 ## Mount an agent
 
 Start the barrel_a2a server without its own listener and hand its

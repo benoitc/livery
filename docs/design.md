@@ -379,7 +379,7 @@ Livery v1.0 ships when:
    set and `traceparent` propagated.
 6. Performance on the reference handler is within 10 percent p99
    of the legacy baseline.
-7. `rebar3 dialyzer` and `rebar3 xref` are clean.
+7. `rebar3 as check dialyzer` and `rebar3 as check xref` are clean.
 8. `erllama_server` runs against `livery:start_service/1` over the
    full H3 -> H2 -> H1 chain: its CT suite passes when driven over
    H1, H2, and H3 with the same handler set, NDJSON streaming on

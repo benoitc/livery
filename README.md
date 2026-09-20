@@ -18,7 +18,7 @@
 
 Livery is a BEAM-native web framework that serves the same router and
 middleware over **HTTP/1.1, HTTP/2, and HTTP/3** from a single
-runtime. WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP,
+runtime. WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP, A2A,
 and OpenTelemetry-style observability are built-in modules. It is
 written in the spirit of Axum + Tower + Hyper, on Erlang/OTP.
 
@@ -180,6 +180,8 @@ The per-response override applies to full responses. Streaming responses
   Swagger UI, and validate request bodies against a JSON-Schema subset.
 - **MCP** — serve the Model Context Protocol Streamable HTTP transport
   on the main listener.
+- **A2A** — mount an Agent-to-Agent agent (card, JSON-RPC and REST
+  bindings, SSE streams) on the main listener.
 - **Observability & auth** — OpenTelemetry-style traces/metrics,
   trace-correlated logs, JWT/JWKS/OIDC, signed sessions, introspection.
 

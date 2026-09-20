@@ -67,6 +67,7 @@ solution.
 - [Cancel work when the client disconnects](guides/cancel-on-disconnect.md)
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
 - [Serve MCP tools](guides/serve-mcp-tools.md)
+- [Serve A2A agents](guides/serve-a2a-agents.md)
 - [Serve WebTransport](guides/serve-webtransport.md)
 
 **Calling out**

@@ -14,7 +14,7 @@ It is written in the spirit of Axum + Tower + Hyper on the BEAM.
 - You need browser-friendly streaming (SSE) or WebSocket on H1, H2,
   and H3 from the same handler.
 - You are building an agent or tool server and want MCP Streamable
-  HTTP on the main listener, not a sidecar.
+  HTTP or an A2A agent on the main listener, not a sidecar.
 - You already run Erlang/OTP and want to stop assembling a stack out
   of Cowboy plus a dozen adjunct libraries.
 - You have used Axum, Fastify, or FastAPI and expect the same
@@ -48,7 +48,7 @@ It is written in the spirit of Axum + Tower + Hyper on the BEAM.
 6. **Backpressure by default.** Streaming bodies read on demand. A
    stalled client applies backpressure to the handler, not the other
    way around.
-7. **Composable integrations.** Auth, MCP, OpenAPI, WebTransport,
+7. **Composable integrations.** Auth, MCP, A2A, OpenAPI, WebTransport,
    instrumentation are modules in the same app, engaged only when
    the user mounts them. They share the adapter stack and middleware
    pipeline.
@@ -72,9 +72,9 @@ It is written in the spirit of Axum + Tower + Hyper on the BEAM.
 
 The wire adapters and service runtime are `livery_h1`, `livery_h2`,
 `livery_h3`, and `livery_service`; streaming, upgrades, shutdown,
-auth, OpenAPI, MCP, and observability are `livery_ws`, `livery_wt`,
-`livery_drain`, `livery_auth*`, `livery_openapi*`, `livery_mcp`,
-and `livery_instrument_*`. SSE and NDJSON are builders on
+auth, OpenAPI, MCP, A2A, and observability are `livery_ws`,
+`livery_wt`, `livery_drain`, `livery_auth*`, `livery_openapi*`,
+`livery_mcp`, `livery_a2a`, and `livery_instrument_*`. SSE and NDJSON are builders on
 `livery_resp`.
 
 ## How Livery differs from Cowboy
@@ -88,6 +88,7 @@ and `livery_instrument_*`. SSE and NDJSON are builders on
 | Streaming | `cowboy_loop` + `info/3` | producer fun with `Emit`, free to `receive` |
 | OpenAPI | external | built-in |
 | MCP | second listener | first-class endpoint type |
+| A2A | second listener | first-class endpoint type |
 | Alt-Svc upgrade | not provided | built into `livery_service` |
 
 See [Migrate from Cowboy](guides/migrate-from-cowboy.md) for the

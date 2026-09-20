@@ -53,8 +53,8 @@ Every change must be formatted and pass all checks before committing:
 rebar3 fmt          # Auto-format (always run first)
 rebar3 compile      # Must compile cleanly (warnings_as_errors)
 rebar3 lint         # Elvis linter
-rebar3 xref         # Cross-reference analysis
-rebar3 dialyzer     # Type checking
+rebar3 as check xref      # Cross-reference analysis
+rebar3 as check dialyzer  # Type checking
 rebar3 eunit        # Unit + property tests
 rebar3 ct           # Common Test (adapters, parity, service, ws, wt, mcp)
 ```

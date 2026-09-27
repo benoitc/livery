@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-09-27
+
+Dependency release: quic 2.0.3 and hackney 4.8.4, with the HTTP/3 fixes
+they call for.
+
 ### Changed
 
 - Bump `quic` 1.8.2 -> 2.0.3, `webtransport` 0.4.5 -> 0.4.7, `h2`

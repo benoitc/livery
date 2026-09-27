@@ -14,7 +14,7 @@ fetch it for you. Add it to your own `rebar.config` and list it in your
 `.app.src`:
 
 ```erlang
-{deps, [livery, {barrel_a2a, "~> 0.2.0"}]}.
+{deps, [livery, {barrel_a2a, "~> 0.2.3"}]}.
 ```
 
 ```erlang

@@ -160,11 +160,13 @@ buffer forever:
 
 - **H1**: the kernel socket buffer fills and the write blocks.
 - **H2**: a full stream window makes `Emit` return `{error, flow}`.
-- **H3**: the same, on QUIC stream credits.
+- **H3**: `Emit` waits while the connection's send queue is full, the
+  way an H1 write blocks. If the queue has not drained after 30 seconds
+  the stream is reset and `Emit` returns `{error, send_timeout}`.
 
 So the rule from the producer's side is simple: drive `Emit` and react to
 its result. `ok` means proceed, `{error, flow}` means wait a moment and
-retry, `{error, closed}` means give up.
+retry, `{error, closed}` or `{error, send_timeout}` means give up.
 
 **Inbound.** To pull more body under flow control, call
 `livery_body:signal_demand/2`. It is a no-op on adapters with no demand

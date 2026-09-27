@@ -20,6 +20,7 @@
 
 -export([
     text_response/1,
+    emit_reset_no_disconnect/1,
     json_response/1,
     empty_response/1,
     streaming_chunked_response/1,
@@ -41,6 +42,7 @@
 all() ->
     [
         text_response,
+        emit_reset_no_disconnect,
         json_response,
         empty_response,
         streaming_chunked_response,
@@ -208,6 +210,15 @@ handler_for(response_with_trailers) ->
         Resp = livery_resp:text(200, <<"hello">>),
         livery_resp:with_trailers([{<<"x-checksum">>, <<"abc">>}], Resp)
     end;
+handler_for(emit_reset_no_disconnect) ->
+    %% A directory is not a regular file, so emit resets the stream.
+    Test = self(),
+    Dir = filename:dirname(code:which(?MODULE)),
+    fun(R) ->
+        ok = livery_req:on_disconnect(R, fun() -> Test ! cancelled end),
+        Test ! handler_ready,
+        livery_resp:file(200, Dir)
+    end;
 handler_for(cancel_on_connection_close) ->
     Test = self(),
     fun(R) ->
@@ -224,6 +235,22 @@ handler_for(cancel_on_connection_close) ->
 %% Cases that exercise the adapter directly (no listener traffic).
 handler_for(_TC) ->
     fun(_R) -> livery_resp:text(200, <<"ok">>) end.
+
+%% A reset livery issues itself (here emit failing on a file response)
+%% is not a client disconnect: on_disconnect callbacks must not run.
+emit_reset_no_disconnect(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, _StreamId} = h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"127.0.0.1">>}]),
+    receive
+        handler_ready -> ok
+    after 5000 -> ct:fail(handler_did_not_start)
+    end,
+    receive
+        cancelled -> ct:fail(on_disconnect_fired_on_local_reset)
+    after 1000 -> ok
+    end,
+    h2:close(Conn).
 
 cancel_on_connection_close(Config) ->
     Port = ?config(port, Config),

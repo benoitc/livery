@@ -292,7 +292,7 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
         {error, range_not_satisfiable} ->
             Adapter:send_headers(Stream, 416, [], #{end_stream => true});
         {error, Reason} ->
-            Adapter:reset(Stream, Reason),
+            reset(Adapter, Stream, Reason),
             {error, Reason};
         {ok, Offset, Length, FileSize} ->
             {Status1, Hs1} = file_headers(
@@ -349,8 +349,14 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
     end;
 emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers, _EndOpts) ->
     %% Upgrades are handled at the adapter level (livery_ws, livery_wt).
-    Adapter:reset(Stream, upgrade_not_handled_at_emit),
+    reset(Adapter, Stream, upgrade_not_handled_at_emit),
     {error, not_implemented}.
+
+-spec reset(module(), livery_adapter:stream(), term()) -> ok.
+reset(Adapter, Stream, Reason) ->
+    ok = livery_disconnect:local_reset(),
+    _ = Adapter:reset(Stream, Reason),
+    ok.
 
 %% Granular full-body emit: separate headers then body, closing the
 %% stream after the body unless trailers follow. Used when the adapter
@@ -495,7 +501,7 @@ stream_file(Adapter, Stream, Path, Offset, Length, Trailers) ->
                 file:close(Fd)
             end;
         {error, Reason} ->
-            Adapter:reset(Stream, Reason),
+            reset(Adapter, Stream, Reason),
             {error, Reason}
     end.
 
@@ -527,7 +533,7 @@ send_file_chunks(Adapter, Stream, Fd, Remaining, Trailers) ->
                     Other
             end;
         {error, Reason} ->
-            Adapter:reset(Stream, Reason),
+            reset(Adapter, Stream, Reason),
             {error, Reason}
     end.
 

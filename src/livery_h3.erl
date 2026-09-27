@@ -29,6 +29,14 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
 %% (`infinity' disables it). See livery_h1 for the rationale.
 -define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
+%% How long a send may stay refused by quic's send queue
+%% (`send_queue_full') before the stream is reset.
+-define(SEND_TIMEOUT, 30000).
+
+%% Response bodies go to quic in pieces of at most this size, so a piece
+%% refused for backpressure is cheap to send again.
+-define(SEND_PIECE, 65536).
+
 -export([start/1, accept_ws/4, accept_wt/4]).
 
 -export([
@@ -130,30 +138,62 @@ stop(Name) when is_atom(Name) ->
     livery_adapter:send_opts()
 ) ->
     livery_adapter:send_result().
-send_headers({Conn, StreamId}, Status, Headers, Opts) ->
-    closed_guard(fun() ->
-        case quic_h3:send_response(Conn, StreamId, Status, Headers) of
-            ok ->
-                case maps:get(end_stream, Opts, false) of
-                    true -> quic_h3:send_data(Conn, StreamId, <<>>, true);
-                    false -> ok
-                end;
-            Other ->
-                Other
+send_headers({Conn, StreamId} = Stream, Status, Headers, Opts) ->
+    EndStream = maps:get(end_stream, Opts, false),
+    with_retry(Stream, fun(Send) ->
+        case Send(fun() -> quic_h3:send_response(Conn, StreamId, Status, Headers) end) of
+            ok when EndStream -> Send(fun() -> quic_h3:send_data(Conn, StreamId, <<>>, true) end);
+            Other -> Other
         end
     end).
 
 -spec send_data(stream(), iodata(), livery_adapter:send_opts()) ->
     livery_adapter:send_result().
-send_data({Conn, StreamId}, IoData, Opts) ->
+send_data({Conn, StreamId} = Stream, IoData, Opts) ->
     EndStream = maps:get(end_stream, Opts, false),
     Bin = iolist_to_binary(IoData),
-    closed_guard(fun() -> quic_h3:send_data(Conn, StreamId, Bin, EndStream) end).
+    with_retry(Stream, fun(Send) -> send_pieces(Conn, StreamId, Bin, EndStream, Send) end).
 
 -spec send_trailers(stream(), [{binary(), binary()}]) ->
     livery_adapter:send_result().
-send_trailers({Conn, StreamId}, Trailers) ->
-    closed_guard(fun() -> quic_h3:send_trailers(Conn, StreamId, Trailers) end).
+send_trailers({Conn, StreamId} = Stream, Trailers) ->
+    with_retry(Stream, fun(Send) ->
+        Send(fun() -> quic_h3:send_trailers(Conn, StreamId, Trailers) end)
+    end).
+
+-spec send_pieces(
+    pid(), non_neg_integer(), binary(), boolean(), fun((fun(() -> R)) -> R)
+) -> R when
+    R :: livery_adapter:send_result().
+send_pieces(Conn, StreamId, Bin, EndStream, Send) when byte_size(Bin) =< ?SEND_PIECE ->
+    Send(fun() -> quic_h3:send_data(Conn, StreamId, Bin, EndStream) end);
+send_pieces(Conn, StreamId, Bin, EndStream, Send) ->
+    <<Piece:?SEND_PIECE/binary, Rest/binary>> = Bin,
+    case Send(fun() -> quic_h3:send_data(Conn, StreamId, Piece, false) end) of
+        ok -> send_pieces(Conn, StreamId, Rest, EndStream, Send);
+        Other -> Other
+    end.
+
+%% Run a sequence of quic sends sharing one deadline. `Body' gets a
+%% `Send' fun that retries a single send while quic refuses it with
+%% `send_queue_full'. A send still refused at the deadline resets the
+%% stream: the peer has stopped reading, and holding the worker longer
+%% only keeps the response queued.
+-spec with_retry(stream(), fun((fun((fun(() -> R)) -> R)) -> R)) ->
+    R | {error, closed | send_timeout}
+when
+    R :: livery_adapter:send_result().
+with_retry(Stream, Body) ->
+    Deadline = erlang:monotonic_time(millisecond) + ?SEND_TIMEOUT,
+    Send = fun(Fun) -> livery_send_retry:run(Fun, Deadline) end,
+    case closed_guard(fun() -> Body(Send) end) of
+        {error, send_timeout} = Error ->
+            ok = livery_disconnect:local_reset(),
+            ok = reset(Stream, send_timeout),
+            Error;
+        Other ->
+            Other
+    end.
 
 %% A send to a connection whose process has gone away (peer closed) exits
 %% the underlying gen_statem:call with noproc/normal/shutdown. Map that to
@@ -551,6 +591,11 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
         {quic_h3, Conn, {trailers, StreamId, Trailers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
             Loop(Cbs, Fired, Bytes);
+        %% quic >= 2.0 echoes our own abort_body/3 reset back here; the
+        %% worker already has {error, body_too_large}, and it is not a
+        %% client disconnect.
+        {quic_h3, Conn, {stream_reset, StreamId, _Reason}} when Bytes =:= aborted ->
+            Loop(Cbs, Fired, Bytes);
         {quic_h3, Conn, {stream_reset, StreamId, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
             Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
@@ -562,6 +607,10 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                 ),
                 Bytes
             );
+        {livery_local_reset, DiscRef} ->
+            %% The worker is resetting the stream itself (see
+            %% livery_disconnect:local_reset/0); its echo is not a disconnect.
+            Loop(Cbs, true, Bytes);
         {livery_on_disconnect, DiscRef, Fun} ->
             Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->

@@ -18,6 +18,7 @@
 
 -export([
     text_response/1,
+    emit_reset_no_disconnect/1,
     json_response/1,
     empty_response/1,
     binding_via_routed_handler/1,
@@ -47,6 +48,7 @@
 all() ->
     [
         text_response,
+        emit_reset_no_disconnect,
         json_response,
         empty_response,
         binding_via_routed_handler,
@@ -189,6 +191,22 @@ error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(500, Status),
     ?assertEqual(<<"internal server error">>, Body).
+
+%% A reset livery issues itself (here emit failing on a file response)
+%% is not a client disconnect: on_disconnect callbacks must not run.
+emit_reset_no_disconnect(Config) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}], 5000),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nHost: x\r\n\r\n">>),
+    receive
+        handler_ready -> ok
+    after 5000 -> ct:fail(handler_did_not_start)
+    end,
+    receive
+        cancelled -> ct:fail(on_disconnect_fired_on_local_reset)
+    after 1000 -> ok
+    end,
+    gen_tcp:close(Sock).
 
 cancel_on_client_disconnect(Config) ->
     %% Raw socket so we control the close. The handler registers an
@@ -413,6 +431,15 @@ handler_for(disconnect_mid_response_is_quiet) ->
         Test ! handler_ready,
         timer:sleep(200),
         livery_resp:text(200, <<"awake">>)
+    end;
+handler_for(emit_reset_no_disconnect) ->
+    %% A directory is not a regular file, so emit resets the stream.
+    Test = self(),
+    Dir = filename:dirname(code:which(?MODULE)),
+    fun(R) ->
+        ok = livery_req:on_disconnect(R, fun() -> Test ! cancelled end),
+        Test ! handler_ready,
+        livery_resp:file(200, Dir)
     end;
 handler_for(cancel_on_client_disconnect) ->
     Test = self(),

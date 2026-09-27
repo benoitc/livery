@@ -63,11 +63,13 @@ dispatch(#{
     handler := Handler
 }) ->
     Req = ensure_started_at(Req0),
+    ok = livery_disconnect:set_notifier(Req#livery_req.notifier_pid, Req#livery_req.disc_ref),
     try
         Resp = livery:dispatch(Stack, Handler, Req),
         case livery:emit(Adapter, Stream, Resp) of
+            ok -> ok;
             {error, closed} -> peer_closed();
-            _ -> ok
+            {error, EmitError} -> abandon(Adapter, Stream, EmitError)
         end
     catch
         Class:Reason:Stack0 ->
@@ -87,6 +89,16 @@ disconnect_reason(exit, {normal, _}) -> true;
 disconnect_reason(exit, {{shutdown, _}, _}) -> true;
 disconnect_reason(_Class, {connection_closed, _}) -> true;
 disconnect_reason(_Class, _Reason) -> false.
+
+%% The response could not be finished (for example an H3 send that stayed
+%% refused past its deadline). Reset the stream rather than leave the peer
+%% waiting on a response that will never end.
+-spec abandon(module(), livery_adapter:stream(), term()) -> ok.
+abandon(Adapter, Stream, Reason) ->
+    logger:debug(#{msg => "livery_response_abandoned", reason => Reason}),
+    ok = livery_disconnect:local_reset(),
+    _ = Adapter:reset(Stream, Reason),
+    ok.
 
 -spec peer_closed() -> ok.
 peer_closed() ->

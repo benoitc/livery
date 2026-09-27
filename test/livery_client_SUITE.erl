@@ -25,7 +25,8 @@
     custom_adapter/1,
     no_content_response/1,
     head_request/1,
-    retry_after_layer/1
+    retry_after_layer/1,
+    truncated_body/1
 ]).
 
 all() ->
@@ -48,7 +49,8 @@ all() ->
         custom_adapter,
         no_content_response,
         head_request,
-        retry_after_layer
+        retry_after_layer,
+        truncated_body
     ].
 
 init_per_suite(Config) ->
@@ -363,9 +365,29 @@ retry_after_layer(Config) ->
     ?assertEqual(200, livery_client:status(Resp)),
     ?assert(Elapsed >= 900).
 
+%% A body cut short by the server closing is an error, not a short
+%% success (hackney >= 4.8.3).
+truncated_body(_Config) ->
+    Base = truncating_server(<<"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n\r\nabc">>),
+    C = livery_client:new(#{base_url => Base}),
+    ?assertEqual({error, {closed, <<"abc">>}}, livery_client:get(C, <<"/">>)).
+
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+%% Answer one request with Reply, then close the socket.
+truncating_server(Reply) ->
+    {ok, LSock} = gen_tcp:listen(0, [binary, {ip, {127, 0, 0, 1}}, {active, false}]),
+    {ok, Port} = inet:port(LSock),
+    _ = spawn(fun() ->
+        {ok, Sock} = gen_tcp:accept(LSock, 5000),
+        {ok, _Req} = gen_tcp:recv(Sock, 0, 5000),
+        ok = gen_tcp:send(Sock, Reply),
+        gen_tcp:close(Sock),
+        gen_tcp:close(LSock)
+    end),
+    iolist_to_binary([<<"http://127.0.0.1:">>, integer_to_binary(Port)]).
 
 recv_status(Ref) ->
     receive

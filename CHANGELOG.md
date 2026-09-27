@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `quic` 1.8.2 -> 2.0.3, `webtransport` 0.4.5 -> 0.4.7, `h2`
+  0.12.0 -> 0.12.3 and `hackney` 4.7.4 -> 4.8.4. hackney 4.8 is what
+  pulls quic 2.0 in. For livery's own code nothing changes; if your
+  handlers talk to `quic_h3` directly, a connection close now always
+  arrives as `{quic_h3, Conn, {closed, Reason}}`.
+- The outbound client reports a response body cut short by the server
+  closing as `{error, {closed, Partial}}` (buffered) or `{error, closed}`
+  (streamed), where it used to return the short body as a success.
+- Test and check profiles: `barrel_mcp` 4.1.1, `barrel_a2a` 0.2.3.
+
+### Fixed
+
+- On HTTP/3, a request body over `max_body` no longer fires the
+  handler's `on_disconnect` callbacks. quic 2.0 reports the reset livery
+  sends back to the stream, and the translator took it for a client
+  disconnect.
+- On HTTP/3, a response sent faster than the connection drains is no
+  longer cut. quic refuses a send while its connection send queue is
+  full (`{error, send_queue_full}`, nothing written); livery passed that
+  up, so a streamed body silently lost the refused chunk and a full body
+  left the stream open. The adapter now waits for the queue to drain,
+  sending bodies in 64 KiB pieces, and resets the stream if it is still
+  full after 30 seconds (`{error, send_timeout}`). WebSocket sends over
+  HTTP/3 wait the same way.
+- A response that fails part way (any emit error other than a closed
+  peer) now resets the stream instead of leaving it open.
+- `on_disconnect` callbacks no longer run when livery resets the stream
+  itself, for example when a file response cannot be read. HTTP/1.1
+  always ran them and HTTP/3 sometimes did; HTTP/2 never did.
+
 ## [0.10.2] - 2026-09-21
 
 ### Changed

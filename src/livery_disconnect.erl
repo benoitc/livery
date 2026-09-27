@@ -12,9 +12,16 @@ not see a mailbox message until it returns).
 Callbacks are always run in a fresh process via `spawn/1`, so a slow
 or crashing callback cannot block the translator or delay the worker's
 `'DOWN'` cleanup.
+
+A reset livery issues itself is not a disconnect, but some transports
+echo it back to the translator as a stream reset. Before resetting, the
+worker calls `local_reset/0`, which tells the translator to treat the
+disconnect as already handled.
 """.
 
--export([fire/4, fire_once/5, register/3]).
+-export([fire/4, fire_once/5, register/3, set_notifier/2, local_reset/0]).
+
+-define(NOTIFIER_KEY, livery_notifier).
 
 -doc """
 Signal `WorkerPid` that the client for `Ref` disconnected with
@@ -55,3 +62,30 @@ register(false, Fun, Callbacks) ->
 run(Fun) ->
     _ = spawn(Fun),
     ok.
+
+-doc """
+Remember, in the calling request worker, which translator to tell
+about a local reset. Without a notifier there is nothing to tell.
+""".
+-spec set_notifier(pid() | undefined, reference() | undefined) -> ok.
+set_notifier(Pid, Ref) when is_pid(Pid), is_reference(Ref) ->
+    _ = put(?NOTIFIER_KEY, {Pid, Ref}),
+    ok;
+set_notifier(_Pid, _Ref) ->
+    ok.
+
+-doc """
+Tell the translator that livery is about to reset the stream, so the
+reset it may see next does not fire the cancel callbacks. A no-op
+outside a request worker. Call it before the reset: the marker then
+reaches the translator ahead of the echo.
+""".
+-spec local_reset() -> ok.
+local_reset() ->
+    case get(?NOTIFIER_KEY) of
+        {Pid, Ref} ->
+            Pid ! {livery_local_reset, Ref},
+            ok;
+        undefined ->
+            ok
+    end.

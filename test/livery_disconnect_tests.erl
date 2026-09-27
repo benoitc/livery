@@ -137,3 +137,26 @@ got(Msg) ->
         Msg -> true
     after 200 -> false
     end.
+
+local_reset_without_notifier_test() ->
+    Self = self(),
+    ?assertEqual(ok, spawn_and_wait(fun() -> Self ! {done, livery_disconnect:local_reset()} end)).
+
+local_reset_tells_notifier_test() ->
+    Self = self(),
+    Ref = make_ref(),
+    _ = spawn(fun() ->
+        ok = livery_disconnect:set_notifier(Self, Ref),
+        ok = livery_disconnect:local_reset()
+    end),
+    receive
+        {livery_local_reset, R} -> ?assertEqual(Ref, R)
+    after 1000 -> ?assert(false)
+    end.
+
+spawn_and_wait(Fun) ->
+    _ = spawn(Fun),
+    receive
+        {done, Result} -> Result
+    after 1000 -> timeout
+    end.

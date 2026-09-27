@@ -641,6 +641,10 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                 ),
                 Bytes
             );
+        {livery_local_reset, DiscRef} ->
+            %% The worker is resetting the stream itself (see
+            %% livery_disconnect:local_reset/0); its echo is not a disconnect.
+            Loop(Cbs, true, Bytes);
         {livery_on_disconnect, DiscRef, Fun} ->
             Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->

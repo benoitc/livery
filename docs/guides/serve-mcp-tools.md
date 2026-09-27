@@ -48,7 +48,7 @@ echo(#{<<"value">> := V}) -> <<"echo: ", V/binary>>.
 fetch it for you. Add it to your own `rebar.config`:
 
 ```erlang
-{deps, [livery, {barrel_mcp, "~> 4.0.0"}]}.
+{deps, [livery, {barrel_mcp, "~> 4.1.1"}]}.
 ```
 
 Then list it in your `.app.src` so the registry is ready once your

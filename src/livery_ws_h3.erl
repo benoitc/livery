@@ -16,6 +16,8 @@ The handle is `{Conn, StreamId}`.
 """.
 -behaviour(ws_transport).
 
+-define(SEND_TIMEOUT, 30000).
+
 -export([
     send/2,
     activate/1,
@@ -29,7 +31,11 @@ The handle is `{Conn, StreamId}`.
 
 -spec send(handle(), iodata()) -> ok | {error, term()}.
 send({Conn, StreamId}, IoData) ->
-    quic_h3:send_data(Conn, StreamId, iolist_to_binary(IoData), false).
+    Bin = iolist_to_binary(IoData),
+    %% quic refuses a send while the connection's send queue is full;
+    %% wait for it to drain rather than failing the session.
+    Deadline = erlang:monotonic_time(millisecond) + ?SEND_TIMEOUT,
+    livery_send_retry:run(fun() -> quic_h3:send_data(Conn, StreamId, Bin, false) end, Deadline).
 
 -spec activate(handle()) -> ok.
 activate(_Handle) ->

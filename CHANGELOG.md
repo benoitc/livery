@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-02
+
+MCP release: barrel_mcp 4.3.0, and the body and keepalive options of
+its own listener on `livery_mcp`.
+
+### Added
+
+- `livery_mcp` options `max_body_bytes` (default 16 MiB, answered
+  `413`), `body_timeout_ms` (default 60000, answered `408`) and
+  `sse_keepalive_ms` (falls back to the `barrel_mcp` app env). A body
+  that failed to read used to reach the engine as an empty body.
+
+### Changed
+
+- `barrel_mcp` `~> 4.3.0` in the `test` and `check` profiles. The MCP
+  guide covers `instructions`, `visible/4`, `authorize_subscribe/3`
+  and durable or application-hosted tasks, which work through livery
+  unchanged.
+- The per-chunk MCP body wait moves from 30s to 60s, as in barrel_mcp.
+
 ## [0.10.3] - 2026-09-27
 
 Dependency release: quic 2.0.3 and hackney 4.8.4, with the HTTP/3 fixes

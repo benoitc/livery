@@ -6,7 +6,7 @@ Bridges Livery to the `barrel_mcp` protocol core. `handler/1`
 returns a Livery handler that serves the MCP Streamable HTTP
 transport (POST requests, GET SSE streams, DELETE session
 termination, OPTIONS preflight) by delegating to
-`barrel_mcp_http_engine:handle/6` — the transport-neutral MCP
+`barrel_mcp_http_engine:handle/6`, the transport-neutral MCP
 engine. Livery owns the wire (H1/H2/H3, router, middleware); the
 engine owns the protocol.
 
@@ -29,17 +29,24 @@ it is an optional application of Livery, so list it in your own
 
 Options (all optional):
 
-- `auth` — a `barrel_mcp` auth provider config (default: no auth).
+- `auth`: a `barrel_mcp` auth provider config (default: no auth).
   A provider that refuses its options makes `handler/1` raise
   `{auth_provider, Module, Reason}` rather than fail per request.
   `barrel_mcp_auth_bearer` requires an `audience`, and accepts
   `audience => any` only with a `verifier` fun
-- `session_enabled` — use `Mcp-Session-Id` sessions (default `true`)
-- `allowed_origins` — `any | [binary()]` (default `any`)
-- `allow_missing_origin` — accept requests with no `Origin`
+- `session_enabled`: use `Mcp-Session-Id` sessions (default `true`)
+- `allowed_origins`: `any | [binary()]` (default `any`)
+- `allow_missing_origin`: accept requests with no `Origin`
   (default `true`)
-- `sse_buffer_size` — server-stream buffer (default `256`)
-- `resource_metadata` — OAuth protected-resource-metadata map
+- `sse_buffer_size`: server-stream buffer (default `256`)
+- `sse_keepalive_ms`: how often a quiet SSE stream emits a comment,
+  which is also what notices a peer that left without closing
+  (default: the `barrel_mcp` `sse_keepalive_ms` app env, else `15000`)
+- `max_body_bytes`: request body cap, answered `413` past it
+  (default 16 MiB)
+- `body_timeout_ms`: how long to wait for each body chunk, answered
+  `408` past it (default `60000`)
+- `resource_metadata`: OAuth protected-resource-metadata map
 
 The handler delivers the response directly through the adapter and
 returns the `taken_over` sentinel, so do not stack response-mutating
@@ -59,10 +66,16 @@ middleware after it.
     allowed_origins => any | [binary()],
     allow_missing_origin => boolean(),
     sse_buffer_size => pos_integer(),
+    sse_keepalive_ms => pos_integer(),
+    max_body_bytes => pos_integer(),
+    body_timeout_ms => pos_integer(),
     resource_metadata => undefined | map()
 }.
 
--define(BODY_TIMEOUT, 30000).
+-type body_limits() :: {Max :: pos_integer(), Timeout :: pos_integer()}.
+
+-define(DEFAULT_MAX_BODY_BYTES, 16 * 1024 * 1024).
+-define(DEFAULT_BODY_TIMEOUT, 60000).
 
 -doc "MCP handler with default options.".
 -spec handler() -> fun((livery_req:req()) -> livery_resp:resp()).
@@ -92,7 +105,11 @@ router(Opts) ->
 -spec handler(opts()) -> fun((livery_req:req()) -> livery_resp:resp()).
 handler(Opts) ->
     EngineConfig = engine_config(Opts),
-    fun(Req) -> serve(Req, EngineConfig) end.
+    Limits = {
+        maps:get(max_body_bytes, Opts, ?DEFAULT_MAX_BODY_BYTES),
+        maps:get(body_timeout_ms, Opts, ?DEFAULT_BODY_TIMEOUT)
+    },
+    fun(Req) -> serve(Req, EngineConfig, Limits) end.
 
 %%====================================================================
 %% Internals
@@ -111,13 +128,13 @@ engine_config(Opts) ->
     ),
     AuthConfig0 =
         case barrel_mcp_http_engine:init_auth(maps:get(auth, Opts, #{})) of
-            {ok, Config} -> Config;
+            {ok, AuthOk} -> AuthOk;
             {error, Reason} -> error(Reason)
         end,
     AuthConfig = barrel_mcp_http_engine:inject_resource_metadata_url(
         AuthConfig0, ResourceMetadata
     ),
-    #{
+    Config = #{
         mode => stream,
         auth_config => AuthConfig,
         session_enabled => SessionEnabled,
@@ -125,35 +142,58 @@ engine_config(Opts) ->
         allow_missing_origin => maps:get(allow_missing_origin, Opts, true),
         sse_buffer_size => maps:get(sse_buffer_size, Opts, 256),
         resource_metadata => ResourceMetadata
-    }.
-
--spec serve(livery_req:req(), barrel_mcp_http_engine:config()) ->
-    livery_resp:resp().
-serve(Req, EngineConfig) ->
-    Adapter = livery_req:adapter(Req),
-    Stream = livery_req:stream(Req),
-    Responder = responder(Adapter, Stream),
-    ok = barrel_mcp_http_engine:handle(
-        livery_req:method(Req),
-        livery_req:path(Req),
-        livery_req:headers(Req),
-        read_body(Req),
-        Responder,
-        EngineConfig
+    },
+    Keepalive = maps:get(
+        sse_keepalive_ms,
+        Opts,
+        application:get_env(barrel_mcp, sse_keepalive_ms, undefined)
     ),
-    #livery_resp{status = 200, body = taken_over}.
+    case Keepalive of
+        undefined -> Config;
+        Ms -> Config#{sse_keepalive_ms => Ms}
+    end.
 
--spec read_body(livery_req:req()) -> binary().
-read_body(Req) ->
+-spec serve(livery_req:req(), barrel_mcp_http_engine:config(), body_limits()) ->
+    livery_resp:resp().
+serve(Req, EngineConfig, Limits) ->
+    case read_body(Req, Limits) of
+        {ok, Body} ->
+            Adapter = livery_req:adapter(Req),
+            Stream = livery_req:stream(Req),
+            ok = barrel_mcp_http_engine:handle(
+                livery_req:method(Req),
+                livery_req:path(Req),
+                livery_req:headers(Req),
+                Body,
+                responder(Adapter, Stream),
+                EngineConfig
+            ),
+            #livery_resp{status = 200, body = taken_over};
+        {error, too_large} ->
+            livery_resp:text(413, <<"Request body too large">>);
+        {error, timeout} ->
+            livery_resp:text(408, <<"Request body timeout">>);
+        {error, _} ->
+            livery_resp:text(400, <<"Request body incomplete">>)
+    end.
+
+-spec read_body(livery_req:req(), body_limits()) ->
+    {ok, binary()} | {error, too_large | timeout | term()}.
+read_body(Req, {Max, Timeout}) ->
     case livery_req:body(Req) of
         empty ->
-            <<>>;
+            {ok, <<>>};
         {buffered, IoData} ->
-            iolist_to_binary(IoData);
+            case iolist_size(IoData) > Max of
+                true -> {error, too_large};
+                false -> {ok, iolist_to_binary(IoData)}
+            end;
         {stream, Reader} ->
-            case livery_body:read_all(Reader, ?BODY_TIMEOUT) of
-                {ok, Bytes, _} -> Bytes;
-                _ -> <<>>
+            case livery_body:read_all(Reader, Timeout, Max) of
+                {ok, Bytes, _} -> {ok, Bytes};
+                {error, {limit, max_size}, _} -> {error, too_large};
+                {error, body_too_large, _} -> {error, too_large};
+                {error, Reason, _} -> {error, Reason}
             end
     end.
 

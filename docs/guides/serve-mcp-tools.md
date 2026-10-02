@@ -48,7 +48,7 @@ echo(#{<<"value">> := V}) -> <<"echo: ", V/binary>>.
 fetch it for you. Add it to your own `rebar.config`:
 
 ```erlang
-{deps, [livery, {barrel_mcp, "~> 4.1.1"}]}.
+{deps, [livery, {barrel_mcp, "~> 4.3.0"}]}.
 ```
 
 Then list it in your `.app.src` so the registry is ready once your
@@ -69,6 +69,13 @@ release boots:
 | `allowed_origins` | `any` | `any` or a list of allowed `Origin`s |
 | `allow_missing_origin` | `true` | Accept requests with no `Origin` |
 | `resource_metadata` | none | OAuth protected-resource-metadata |
+| `sse_keepalive_ms` | `15000` | How often a quiet SSE stream emits a comment |
+| `max_body_bytes` | 16 MiB | Request body cap, answered `413` past it |
+| `body_timeout_ms` | `60000` | Wait for each body chunk, answered `408` past it |
+
+The keepalive also falls back to the `barrel_mcp` `sse_keepalive_ms`
+application env. Besides keeping proxies from dropping a stream, it is
+what notices a client that went away without closing.
 
 For public deployments, set `allowed_origins` to your client
 origins to guard against DNS-rebinding.
@@ -102,6 +109,70 @@ refuses its options, `handler/1` raises
 `{auth_provider, Module, Reason}` (for example
 `audience_any_requires_verifier` or `{missing_option, audience}`), so
 a bad config stops your service at boot and not on the first request.
+
+## Tell clients how to use your server
+
+Set `instructions` in the `barrel_mcp` application environment. It is
+sent in the `initialize` result, and clients usually hand it to the
+model:
+
+```erlang
+{barrel_mcp, [{instructions, <<"Search first, then fetch by id.">>}]}
+```
+
+## Decide what each caller sees
+
+Your auth provider can filter list responses and subscriptions per
+caller. Export these optional `barrel_mcp_auth` callbacks from your
+provider module (or the module behind `barrel_mcp_auth_custom`):
+
+```erlang
+%% tools/list, resources/list, resources/templates/list, prompts/list
+visible(tool, {<<"admin_", _/binary>>, _Handler}, AuthInfo, _State) ->
+    lists:member(<<"admin">>, maps:get(scopes, AuthInfo, []));
+visible(_Kind, _Entry, _AuthInfo, _State) ->
+    true.
+
+%% resources/subscribe and each URI of a subscriptions/listen filter
+authorize_subscribe(AuthInfo, Uri, _State) ->
+    is_owner(AuthInfo, Uri).
+```
+
+A hidden entry is left out of the list only: calls and reads are still
+checked by your handlers. A refused subscription gets the same error
+as a missing resource.
+
+## Keep long tasks across restarts
+
+Tasks live in ETS by default and a restart marks running ones failed.
+To keep them, point `barrel_mcp` at a durable store, or let your
+application own the task and register it as a provider:
+
+```erlang
+{barrel_mcp, [{task_store, my_task_store}, {task_store_opts, #{}}]}
+```
+
+```erlang
+ok = barrel_mcp:reg_tool(<<"export">>, my_tools, export, #{
+    task_support => optional,
+    task_provider => my_export_tasks
+}).
+
+%% my_tools:export/2 starts the job and hands back its id.
+export(Args, Ctx) ->
+    case barrel_mcp:task_allowed(Ctx) of
+        true ->
+            Owner = barrel_mcp:task_owner(Ctx),
+            {ok, Id} = my_exports:start(Args, Owner),
+            {task, Id};
+        false ->
+            {ok, Id} = my_exports:start(Args, undefined),
+            {structured, #{<<"export_id">> => Id}}
+    end.
+```
+
+See the `barrel_mcp` durable tasks guide for the
+`barrel_mcp_task_store` and `barrel_mcp_task_provider` behaviours.
 
 ## Notes
 

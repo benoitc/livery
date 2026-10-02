@@ -21,7 +21,9 @@
     initialize_returns_session/1,
     tools_list_returns_registered_tool/1,
     tools_call_runs_tool/1,
-    disconnect_mid_reply_is_quiet/1
+    disconnect_mid_reply_is_quiet/1,
+    initialize_carries_instructions/1,
+    oversized_body_is_413/1
 ]).
 
 %% Tool callbacks (registered in init_per_suite).
@@ -35,7 +37,9 @@ all() ->
         initialize_returns_session,
         tools_list_returns_registered_tool,
         tools_call_runs_tool,
-        disconnect_mid_reply_is_quiet
+        disconnect_mid_reply_is_quiet,
+        initialize_carries_instructions,
+        oversized_body_is_413
     ].
 
 init_per_suite(Config) ->
@@ -197,6 +201,35 @@ disconnect_mid_reply_is_quiet(Config) ->
         ?assertMatch({200, _, _}, initialize(Url))
     after
         logger:remove_handler(HandlerId)
+    end.
+
+initialize_carries_instructions(Config) ->
+    ok = application:set_env(barrel_mcp, instructions, <<"Call echo to test.">>),
+    try
+        {200, _, Body} = initialize(?config(url, Config)),
+        Result = maps:get(<<"result">>, json:decode(Body)),
+        ?assertEqual(<<"Call echo to test.">>, maps:get(<<"instructions">>, Result))
+    after
+        application:unset_env(barrel_mcp, instructions)
+    end.
+
+%% A body past `max_body_bytes' is refused before the engine sees it.
+oversized_body_is_413(_Config) ->
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        stack => [],
+        handler => livery_mcp:handler(#{max_body_bytes => 64})
+    }),
+    try
+        Url = iolist_to_binary([
+            <<"http://127.0.0.1:">>,
+            integer_to_binary(h1:server_port(Listener)),
+            <<"/mcp">>
+        ]),
+        {Status, _, _} = initialize(Url),
+        ?assertEqual(413, Status)
+    after
+        livery_h1:stop(Listener)
     end.
 
 %%====================================================================

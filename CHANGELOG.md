@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-04
+
+WebTransport release: the client protocol passed through on HTTP/3,
+with webtransport 0.4.8, hackney 4.8.5, h2 0.12.4 and quic 2.1.1.
+
 ### Fixed
 
 - `livery_wt:upgrade/3` over HTTP/3 now hands the `webtransport` library
@@ -32,7 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer truncates payloads larger than one HTTP/2 DATA frame or loses
   bytes past the per-stream window. Nothing changes in livery's own
   code.
-
 
 ## [0.10.4] - 2026-10-02
 

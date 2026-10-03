@@ -108,10 +108,18 @@ draft15_protocol_passthrough(_Config) ->
             ct:fail(no_wt_request)
         end,
     Headers = maps:get(headers, Request),
-    ?assertEqual([<<"webtransport-h3">>],
-                 [V || {<<":protocol">>, V} <- Headers]),
-    ?assertEqual(1, length([N || {<<":", _/binary>> = N, _} <- Headers,
-                                 N =:= <<":method">>])).
+    ?assertEqual(
+        [<<"webtransport-h3">>],
+        [V || {<<":protocol">>, V} <- Headers]
+    ),
+    ?assertEqual(
+        1,
+        length([
+            N
+         || {<<":", _/binary>> = N, _} <- Headers,
+            N =:= <<":method">>
+        ])
+    ).
 
 %% One `livery:start_service/1' with the WebTransport settings merged into
 %% both the `http3' and the `https' listener serves sessions on each, and a
@@ -141,7 +149,9 @@ service_serves_h3_and_h2(Config) ->
         lists:foreach(
             fun({Transport, Port}) ->
                 {ok, Session} = webtransport:connect(
-                    "localhost", Port, <<"/wt">>,
+                    "localhost",
+                    Port,
+                    <<"/wt">>,
                     #{transport => Transport, verify => verify_none}
                 ),
                 {ok, StreamId} = webtransport:open_stream(Session, bidi),

@@ -304,12 +304,21 @@ with `transport => h3`.
     {ok, pid()} | {error, term()}.
 accept_wt(h3, Req, HandlerMod, Opts) ->
     {Conn, StreamId} = livery_req:stream(Req),
-    Headers = connect_pseudo_headers(Req, <<"webtransport">>),
+    Headers = connect_pseudo_headers(Req, wt_protocol(Req)),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h3,
         handler => HandlerMod,
         handler_opts => maps:get(handler_opts, Opts, #{})
     }).
+
+%% The `:protocol' value the client sent. WebTransport drafts differ here:
+%% draft-02 says `webtransport', draft-15 says `webtransport-h3', and the
+%% `webtransport' library picks its compatibility mode from it. The H3
+%% adapter keeps pseudo-headers in the request's header list, so the real
+%% value is available; fall back to the draft-02 spelling only if it is not.
+-spec wt_protocol(livery_req:req()) -> binary().
+wt_protocol(Req) ->
+    livery_req:header(<<":protocol">>, Req, <<"webtransport">>).
 
 -spec connect_pseudo_headers(livery_req:req(), binary()) ->
     [{binary(), binary()}].
@@ -319,14 +328,21 @@ connect_pseudo_headers(Req, Protocol) ->
             <<>> -> livery_req:path(Req);
             Query -> <<(livery_req:path(Req))/binary, "?", Query/binary>>
         end,
+    %% Pseudo-headers are rebuilt below from the request fields; drop any
+    %% copies the adapter kept so none appears twice.
+    Regular = [H || {Name, _} = H <- livery_req:headers(Req), not is_pseudo(Name)],
     [
         {<<":method">>, livery_req:method(Req)},
         {<<":protocol">>, Protocol},
         {<<":scheme">>, livery_req:scheme(Req)},
         {<<":authority">>, livery_req:authority(Req)},
         {<<":path">>, Path}
-        | livery_req:headers(Req)
+        | Regular
     ].
+
+-spec is_pseudo(binary()) -> boolean().
+is_pseudo(<<$:, _/binary>>) -> true;
+is_pseudo(_) -> false.
 
 %%====================================================================
 %% Internals: per-request dispatch

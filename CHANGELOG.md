@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `livery_wt:upgrade/3` over HTTP/3 now hands the `webtransport` library
+  the `:protocol` value the client sent. The adapter rebuilt the pseudo
+  headers with the draft-02 spelling `webtransport`, so every session was
+  negotiated in legacy mode even for draft-15 clients that said
+  `webtransport-h3`. Pseudo headers the adapter kept in the request's
+  header list are dropped before the rebuilt ones are added, so none
+  appears twice.
+
+### Added
+
+- `livery_wt_SUITE` checks the protocol passthrough and starts one
+  service with the WebTransport settings merged into both the `http3`
+  and the `https` listener, echoing 1 MiB over each transport.
+
+
 ## [0.10.4] - 2026-10-02
 
 MCP release: barrel_mcp 4.3.0, and the body and keepalive options of

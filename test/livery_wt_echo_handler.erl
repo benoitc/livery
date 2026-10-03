@@ -16,7 +16,13 @@
 
 -record(state, {session, streams = #{}}).
 
-init(Session, _Request, _Opts) ->
+%% When started with `#{owner => Pid}' the handler reports the request
+%% it was accepted with, so a test can check what the adapter passed on.
+init(Session, Request, Opts) ->
+    case maps:get(owner, Opts, undefined) of
+        undefined -> ok;
+        Owner -> Owner ! {wt_request, self(), Request}
+    end,
     {ok, #state{session = Session}}.
 
 handle_stream(StreamId, Type, Data, #state{streams = Streams} = State) ->

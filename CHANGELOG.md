@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service with the WebTransport settings merged into both the `http3`
   and the `https` listener, echoing 1 MiB over each transport.
 
+### Changed
+
+- Bump `webtransport` 0.4.7 -> 0.4.8, `hackney` 4.8.4 -> 4.8.5, `h2`
+  0.12.3 -> 0.12.4 and `quic` 2.0.3 -> 2.1.1. h2 and quic keep the
+  streams already open working after a GOAWAY, sent or received, and
+  hackney fails only the requests the server refused. webtransport no
+  longer truncates payloads larger than one HTTP/2 DATA frame or loses
+  bytes past the per-stream window. Nothing changes in livery's own
+  code.
+
 
 ## [0.10.4] - 2026-10-02
 

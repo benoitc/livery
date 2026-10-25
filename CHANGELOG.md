@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-25
+
+Request body fixes for HTTP/2 and HTTP/3, with quic 2.1.2.
+
 ### Fixed
 
 - Uploads over HTTP/2 and HTTP/3 that exceed the size limit now get a

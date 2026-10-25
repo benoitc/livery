@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Uploads over HTTP/2 and HTTP/3 that exceed the size limit now get a
+  413 response instead of a stream error. Once the response is sent,
+  the client is told to stop sending the rest of the body.
+- Requests without a body no longer hang over HTTP/3 when the handler
+  reads the body. This comes with quic 2.1.2, which also stops an early
+  413 from being lost on a lossy link.
+
 ## [0.10.5] - 2026-10-04
 
 WebTransport release: the client protocol passed through on HTTP/3,

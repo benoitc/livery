@@ -592,7 +592,7 @@ translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody) ->
     [fun(() -> term())],
     boolean(),
     non_neg_integer() | infinity,
-    non_neg_integer() | aborted
+    non_neg_integer() | aborted | discarded
 ) -> ok.
 translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes) ->
     Loop = fun(Cbs1, Fired1, Bytes1) ->
@@ -601,6 +601,9 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
         )
     end,
     receive
+        %% Over `max_body': drop the rest, noting when the client is done.
+        {h2, Conn, {data, StreamId, _, Fin}} when Bytes =:= aborted; Bytes =:= discarded ->
+            Loop(Cbs, Fired, dropped_after(Fin));
         {h2, Conn, {data, StreamId, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
             Loop(Cbs, Fired, Bytes);
@@ -610,19 +613,17 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                     WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
                     WorkerPid ! {livery_body, BodyRef, eof},
                     Loop(Cbs, Fired, Bytes1);
-                _ ->
-                    abort_body(Conn, StreamId, WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
+                over ->
+                    abort_body(WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, discarded)
             end;
         {h2, Conn, {data, StreamId, Chunk, false}} ->
             case livery_body:account(Bytes, Chunk, Max) of
                 {ok, Bytes1} ->
                     WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
                     Loop(Cbs, Fired, Bytes1);
-                aborted ->
-                    Loop(Cbs, Fired, aborted);
                 over ->
-                    abort_body(Conn, StreamId, WorkerPid, BodyRef),
+                    abort_body(WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {h2, Conn, {trailers, StreamId, Trailers}} ->
@@ -647,6 +648,11 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
             Loop(Cbs, true, Bytes);
         {livery_on_disconnect, DiscRef, Fun} ->
             Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
+        {'DOWN', WMRef, process, WorkerPid, _Reason} when Bytes =:= aborted ->
+            %% The response is out; RST_STREAM(NO_ERROR) tells the client
+            %% to stop sending the rest (RFC 9113 Section 8.1).
+            _ = h2:cancel(Conn, StreamId, no_error),
+            ok;
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             %% Worker finished (normal request done, or it handed the
             %% stream off to a ws/wt session). Stop translating.
@@ -655,10 +661,16 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
             Loop(Cbs, Fired, Bytes)
     end.
 
-%% Signal the worker that the body exceeded `max_body' and reset the
-%% stream so the client stops sending.
--spec abort_body(h2:connection(), h2:stream_id(), pid(), reference()) -> ok.
-abort_body(Conn, StreamId, WorkerPid, BodyRef) ->
+%% Signal the worker that the body exceeded `max_body'. The stream is
+%% not reset here, so the handler's 413 reaches the client; the
+%% translator discards the rest and resets once the worker is done.
+%% That reset drops response bytes still waiting on the peer's window,
+%% which a short error response does not hit.
+-spec abort_body(pid(), reference()) -> ok.
+abort_body(WorkerPid, BodyRef) ->
     WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    _ = h2:cancel(Conn, StreamId),
     ok.
+
+-spec dropped_after(boolean()) -> aborted | discarded.
+dropped_after(true) -> discarded;
+dropped_after(false) -> aborted.

@@ -32,7 +32,9 @@
     cancel_on_connection_close/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
-    early_hints_interim/1
+    early_hints_interim/1,
+    oversize_upload_delivers_413/1,
+    oversize_open_upload_delivers_413/1
 ]).
 
 %%====================================================================
@@ -54,7 +56,9 @@ all() ->
         cancel_on_connection_close,
         send_to_gone_client_is_closed,
         peer_on_request,
-        early_hints_interim
+        early_hints_interim,
+        oversize_upload_delivers_413,
+        oversize_open_upload_delivers_413
     ].
 
 init_per_suite(Config) ->
@@ -68,12 +72,14 @@ end_per_suite(_Config) ->
     ok.
 
 init_per_testcase(TC, Config) ->
-    {ok, Listener} = livery_h2:start(#{
-        port => 0,
-        transport => tcp,
-        stack => stack_for(TC),
-        handler => handler_for(TC)
-    }),
+    {ok, Listener} = livery_h2:start(
+        maps:merge(opts_for(TC), #{
+            port => 0,
+            transport => tcp,
+            stack => stack_for(TC),
+            handler => handler_for(TC)
+        })
+    ),
     Port = h2:server_port(Listener),
     [{listener, Listener}, {port, Port} | Config].
 
@@ -143,12 +149,57 @@ response_with_trailers(Config) ->
     ?assertEqual(<<"hello">>, Body),
     ?assertEqual([{<<"x-checksum">>, <<"abc">>}], Trailers).
 
+%% A body over `max_body' gets the handler's 413, not a stream reset.
+oversize_upload_delivers_413(Config) ->
+    {Status, _, Body, _} = post(Config, <<"/">>, binary:copy(<<"x">>, 64)),
+    ?assertEqual(413, Status),
+    ?assertEqual(<<"{\"error\":\"too_big\"}">>, Body).
+
+%% The client is still sending when the 413 goes out: it reads the
+%% response, then RST_STREAM(NO_ERROR) tells it to stop.
+oversize_open_upload_delivers_413(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, StreamId} = h2:request(
+        Conn,
+        [
+            {<<":method">>, <<"POST">>},
+            {<<":path">>, <<"/">>},
+            {<<":scheme">>, <<"http">>},
+            {<<":authority">>, <<"127.0.0.1">>}
+        ],
+        #{end_stream => false}
+    ),
+    ok = h2:send_data(Conn, StreamId, binary:copy(<<"x">>, 64), false),
+    {Status, _, Body, _} = collect_response(Conn, StreamId, undefined, [], [], undefined),
+    ?assertEqual(413, Status),
+    ?assertEqual(<<"{\"error\":\"too_big\"}">>, Body),
+    receive
+        {h2, Conn, {stream_reset, StreamId, Reason}} -> ?assertEqual(no_error, Reason)
+    after 5000 -> ct:fail(no_stream_reset)
+    end,
+    h2:close(Conn).
+
 %%====================================================================
 %% Handlers
 %%====================================================================
 
+opts_for(oversize_upload_delivers_413) -> #{max_body => 8};
+opts_for(oversize_open_upload_delivers_413) -> #{max_body => 8};
+opts_for(_TC) -> #{}.
+
 stack_for(_TC) -> [].
 
+handler_for(TC) when
+    TC =:= oversize_upload_delivers_413; TC =:= oversize_open_upload_delivers_413
+->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 5000) of
+            {ok, Bytes, _} -> livery_resp:text(200, Bytes);
+            {error, body_too_large, _} -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>)
+        end
+    end;
 handler_for(peer_on_request) ->
     fun(R) ->
         Body =

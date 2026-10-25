@@ -33,7 +33,10 @@
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     inform_unsupported/1,
-    body_too_large_no_disconnect/1
+    body_too_large_no_disconnect/1,
+    oversize_upload_delivers_413/1,
+    oversize_open_upload_delivers_413/1,
+    bodyless_get_reads_eof/1
 ]).
 
 %%====================================================================
@@ -56,7 +59,10 @@ all() ->
         send_to_gone_client_is_closed,
         peer_on_request,
         inform_unsupported,
-        body_too_large_no_disconnect
+        body_too_large_no_disconnect,
+        oversize_upload_delivers_413,
+        oversize_open_upload_delivers_413,
+        bodyless_get_reads_eof
     ].
 
 init_per_suite(Config) ->
@@ -157,9 +163,8 @@ response_with_trailers(Config) ->
     ?assertEqual(<<"hello">>, Body),
     ?assertEqual([{<<"x-checksum">>, <<"abc">>}], Trailers).
 
-%% quic 2.0 reports the streams it resets locally to their handler as
-%% `stream_reset'. The reset for a body over `max_body' is ours, not a
-%% client disconnect, so it must not fire `on_disconnect' (same as H2).
+%% A body over `max_body' is not a client disconnect, so it must not
+%% fire `on_disconnect' (same as H2).
 body_too_large_no_disconnect(Config) ->
     {ok, Conn, StreamId} = open_request(Config, <<"POST">>),
     ok = quic_h3:send_data(Conn, StreamId, binary:copy(<<"x">>, 64), true),
@@ -169,6 +174,36 @@ body_too_large_no_disconnect(Config) ->
     end,
     assert_no_cancel(),
     catch quic_h3:close(Conn).
+
+%% A body over `max_body' gets the handler's 413, not a stream reset.
+oversize_upload_delivers_413(Config) ->
+    {Status, _, Body, _} = post(Config, <<"/">>, binary:copy(<<"x">>, 64)),
+    ?assertEqual(413, Status),
+    ?assertEqual(<<"{\"error\":\"too_big\"}">>, Body).
+
+%% The client is still sending when the 413 goes out: it reads the
+%% response, then STOP_SENDING(H3_NO_ERROR) tells it to stop.
+oversize_open_upload_delivers_413(Config) ->
+    {ok, Conn, StreamId} = open_request(Config, <<"POST">>),
+    try
+        ok = quic_h3:send_data(Conn, StreamId, binary:copy(<<"x">>, 64), false),
+        {Status, _, Body, _} = collect_response(Conn, StreamId, undefined, [], [], undefined),
+        ?assertEqual(413, Status),
+        ?assertEqual(<<"{\"error\":\"too_big\"}">>, Body),
+        receive
+            {quic_h3, Conn, {stop_sending, StreamId, Code}} -> ?assertEqual(16#100, Code)
+        after 5000 -> ct:fail(no_stop_sending)
+        end
+    after
+        catch quic_h3:close(Conn)
+    end.
+
+%% A request that ends with its headers reaches end of body, so a
+%% handler reading it does not wait forever.
+bodyless_get_reads_eof(Config) ->
+    {Status, _, Body, _} = get(Config, <<"/">>),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"eof">>, Body).
 
 assert_no_cancel() ->
     receive
@@ -181,10 +216,30 @@ assert_no_cancel() ->
 %%====================================================================
 
 opts_for(body_too_large_no_disconnect) -> #{max_body => 8};
+opts_for(oversize_upload_delivers_413) -> #{max_body => 8};
+opts_for(oversize_open_upload_delivers_413) -> #{max_body => 8};
 opts_for(_TC) -> #{}.
 
 stack_for(_TC) -> [].
 
+handler_for(TC) when
+    TC =:= oversize_upload_delivers_413; TC =:= oversize_open_upload_delivers_413
+->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 5000) of
+            {ok, Bytes, _} -> livery_resp:text(200, Bytes);
+            {error, body_too_large, _} -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>)
+        end
+    end;
+handler_for(bodyless_get_reads_eof) ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 3000) of
+            {ok, Bytes, _} when Bytes =:= <<>>; Bytes =:= [] -> livery_resp:text(200, <<"eof">>);
+            Other -> livery_resp:text(500, iolist_to_binary(io_lib:format("~p", [Other])))
+        end
+    end;
 handler_for(peer_on_request) ->
     fun(R) ->
         Body =

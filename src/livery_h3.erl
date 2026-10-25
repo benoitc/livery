@@ -37,6 +37,10 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
 %% refused for backpressure is cheap to send again.
 -define(SEND_PIECE, 65536).
 
+%% RFC 9114 Section 8.1: STOP_SENDING code for "the response is
+%% complete, the rest of the request is not needed".
+-define(H3_NO_ERROR, 16#100).
+
 -export([start/1, accept_ws/4, accept_wt/4]).
 
 -export([
@@ -571,7 +575,7 @@ translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody) ->
     [fun(() -> term())],
     boolean(),
     non_neg_integer() | infinity,
-    non_neg_integer() | aborted
+    non_neg_integer() | aborted | discarded
 ) -> ok.
 translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes) ->
     Loop = fun(Cbs1, Fired1, Bytes1) ->
@@ -580,6 +584,9 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
         )
     end,
     receive
+        %% Over `max_body': drop the rest, noting when the client is done.
+        {quic_h3, Conn, {data, StreamId, _, Fin}} when Bytes =:= aborted; Bytes =:= discarded ->
+            Loop(Cbs, Fired, dropped_after(Fin));
         {quic_h3, Conn, {data, StreamId, <<>>, true}} ->
             WorkerPid ! {livery_body, BodyRef, eof},
             Loop(Cbs, Fired, Bytes);
@@ -589,28 +596,21 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
                     WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
                     WorkerPid ! {livery_body, BodyRef, eof},
                     Loop(Cbs, Fired, Bytes1);
-                _ ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
+                over ->
+                    abort_body(WorkerPid, BodyRef),
+                    Loop(Cbs, Fired, discarded)
             end;
         {quic_h3, Conn, {data, StreamId, Chunk, false}} ->
             case livery_body:account(Bytes, Chunk, Max) of
                 {ok, Bytes1} ->
                     WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
                     Loop(Cbs, Fired, Bytes1);
-                aborted ->
-                    Loop(Cbs, Fired, aborted);
                 over ->
-                    abort_body({Conn, StreamId}, WorkerPid, BodyRef),
+                    abort_body(WorkerPid, BodyRef),
                     Loop(Cbs, Fired, aborted)
             end;
         {quic_h3, Conn, {trailers, StreamId, Trailers}} ->
             WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            Loop(Cbs, Fired, Bytes);
-        %% quic >= 2.0 echoes our own abort_body/3 reset back here; the
-        %% worker already has {error, body_too_large}, and it is not a
-        %% client disconnect.
-        {quic_h3, Conn, {stream_reset, StreamId, _Reason}} when Bytes =:= aborted ->
             Loop(Cbs, Fired, Bytes);
         {quic_h3, Conn, {stream_reset, StreamId, Reason}} ->
             WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
@@ -629,16 +629,27 @@ translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, F
             Loop(Cbs, true, Bytes);
         {livery_on_disconnect, DiscRef, Fun} ->
             Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
+        {'DOWN', WMRef, process, WorkerPid, _Reason} when Bytes =:= aborted ->
+            %% The response is out; tell the client to stop sending
+            %% (RFC 9114 Section 4.1.1).
+            _ = quic:stop_sending(quic_h3:get_quic_conn(Conn), StreamId, ?H3_NO_ERROR),
+            ok;
         {'DOWN', WMRef, process, WorkerPid, _Reason} ->
             ok;
         {quic_h3, Conn, _Other} ->
             Loop(Cbs, Fired, Bytes)
     end.
 
-%% Signal the worker that the body exceeded `max_body' and reset the
-%% stream so the client stops sending.
--spec abort_body(stream(), pid(), reference()) -> ok.
-abort_body(Stream, WorkerPid, BodyRef) ->
+%% Signal the worker that the body exceeded `max_body'. The stream is
+%% not reset here, so the handler's 413 reaches the client. The
+%% translator discards the rest and sends STOP_SENDING only once the
+%% worker is done: the client answers it with RESET_STREAM, which makes
+%% quic_h3 drop the stream.
+-spec abort_body(pid(), reference()) -> ok.
+abort_body(WorkerPid, BodyRef) ->
     WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    _ = reset(Stream, body_too_large),
     ok.
+
+-spec dropped_after(boolean()) -> aborted | discarded.
+dropped_after(true) -> discarded;
+dropped_after(false) -> aborted.

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-10-26
+
+Dependency release: hackney 4.9.0 and h2 0.12.5.
+
+### Changed
+
+- The hackney client now uses hackney 4.9.0, which closes several
+  security holes: private addresses hidden in some URL spellings were
+  still reachable, a pinned CA did not limit which servers were trusted,
+  credentials were resent on some cross-origin redirects, and a server
+  could exhaust memory with an endless or highly compressed body.
+- h2 is now 0.12.5, which adds the `connection_window_size` option for
+  faster large transfers over slow links. Nothing changes unless you set
+  it.
+
 ## [0.10.6] - 2026-10-25
 
 Request body fixes for HTTP/2 and HTTP/3, with quic 2.1.2.

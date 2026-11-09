@@ -238,3 +238,40 @@ has_vary(Token, Cap) ->
 
 normalize_token(Token) ->
     iolist_to_binary(string:trim(string:lowercase(Token))).
+
+%%====================================================================
+%% RFC 9110 12.5.3: the client's q-values decide
+%%====================================================================
+
+encoding(AcceptEncoding) ->
+    Cap = run_full(#{min_size => 0}, ?JSON, [{<<"accept-encoding">>, AcceptEncoding}]),
+    {livery_test_adapter:status(Cap), h(<<"content-encoding">>, Cap)}.
+
+client_q_values_test_() ->
+    [
+        {"higher q wins over server order",
+            ?_assertEqual({200, <<"deflate">>}, encoding(<<"gzip;q=0.5, deflate;q=1">>))},
+        {"equal q, server order",
+            ?_assertEqual({200, <<"gzip">>}, encoding(<<"deflate;q=0.8, gzip;q=0.8">>))},
+        {"wildcard, own entry refuses",
+            ?_assertEqual({200, <<"deflate">>}, encoding(<<"*;q=0.5, gzip;q=0">>))},
+        {"identity preferred",
+            ?_assertEqual({200, undefined}, encoding(<<"identity;q=1, gzip;q=0.1">>))},
+        {"identity refused, nothing known",
+            ?_assertEqual({406, undefined}, encoding(<<"br, identity;q=0">>))},
+        {"star refuses identity", ?_assertEqual({406, undefined}, encoding(<<"br, *;q=0">>))},
+        {"star refuses, identity allowed",
+            ?_assertEqual({200, undefined}, encoding(<<"*;q=0, identity">>))},
+        {"q above 1 ignored",
+            ?_assertEqual({200, <<"deflate">>}, encoding(<<"gzip;q=2, deflate;q=0.5">>))},
+        {"four decimals ignored",
+            ?_assertEqual({200, <<"deflate">>}, encoding(<<"gzip;q=0.1234, deflate;q=0.1">>))},
+        {"non-numeric q ignored", ?_assertEqual({200, undefined}, encoding(<<"gzip;q=abc">>))},
+        {"1.000 is valid", ?_assertEqual({200, <<"gzip">>}, encoding(<<"gzip;q=1.000">>))},
+        {"empty header", ?_assertEqual({200, undefined}, encoding(<<>>))}
+    ].
+
+not_acceptable_carries_vary_test() ->
+    Cap = run_full(#{min_size => 0}, ?JSON, [{<<"accept-encoding">>, <<"identity;q=0">>}]),
+    ?assertEqual(406, livery_test_adapter:status(Cap)),
+    ?assert(has_vary(<<"accept-encoding">>, Cap)).

@@ -20,7 +20,9 @@ accepts, compresses the response body, and sets `Content-Encoding` plus
 `Vary: Accept-Encoding`. A client that sends no `Accept-Encoding` (or
 none the server has) gets the response uncompressed, so any HTTP client
 works: those that advertise gzip decode it transparently, the rest get
-identity.
+identity. A client that refuses unencoded content (`identity;q=0`, or
+`*;q=0` without `identity`) and accepts none of the codecs you have gets
+`406 Not Acceptable`.
 
 ## Control what gets compressed
 
@@ -41,10 +43,10 @@ pass through untouched.
 
 ## Set server preference
 
-A coding is acceptable when its `Accept-Encoding` q-value is greater
-than zero (`q=0` rejects). Among acceptable codings the SERVER decides
-which to use, in the order of the codec list; client q-weights are only
-an accept/reject filter. Control the order with `codecs`:
+The client's q-values decide (RFC 9110 section 12.5.3): the codec with
+the highest q above zero wins, and `q=0` refuses one. When the client
+gives several the same q, the order of the codec list breaks the tie.
+Control that order, or limit the codecs, with `codecs`:
 
 ```erlang
 {livery_compress, #{codecs => [livery_codec_gzip]}}   %% gzip only

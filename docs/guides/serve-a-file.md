@@ -68,7 +68,7 @@ Prefer an allowlist of known filenames where you can.
 | Situation | Response |
 |---|---|
 | File does not exist | `404` |
-| Range starts past the end of the file | `416` |
+| Range starts at or past the end of the file, or the file is empty | `416` with `Content-Range: bytes */<size>` |
 | Path is a directory or unreadable | stream reset |
 
 ## See also

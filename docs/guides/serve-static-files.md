@@ -56,7 +56,11 @@ livery_static:handler("priv/assets", #{
 - A weak `ETag` (`W/"size-mtime"`) is emitted; a matching
   `If-None-Match` returns `304 Not Modified`.
 - `Range: bytes=...` returns `206 Partial Content`; an unsatisfiable
-  range returns `416`.
+  range returns `416` with `Content-Range: bytes */<size>`.
+- Responses carry `Last-Modified`. A `Range` with `If-Range` is served
+  only when its date matches `Last-Modified` exactly; an `If-Range`
+  with an ETag gets the whole file, since these ETags are weak and the
+  check needs a strong one (RFC 9110 section 13.1.5).
 - `HEAD` returns headers (including `Content-Length`) with no body.
 - Only `GET`/`HEAD` are served; other methods get `405` with `Allow`.
 - A directory request serves `index` if present, else `404` (no

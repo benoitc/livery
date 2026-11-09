@@ -48,13 +48,20 @@ Emit(<<"plain">>).
 %%
 ```
 
-Multi-line data is fine: pass an iolist whose bytes contain `\n`
-and Livery emits each line with its own `data:` prefix when you use
-the helper. For multi-line, use an `iolist` of lines:
+Multi-line data is fine: Livery gives each line its own `data:`
+prefix, whether the lines end in `\n`, `\r\n` or `\r`, and the
+browser joins them back:
 
 ```erlang
-Emit(#{data => [<<"line 1">>, <<"\nline 2">>]}).
+Emit(#{data => <<"line 1\nline 2">>}).
+%% data: line 1
+%% data: line 2
 ```
+
+Line breaks are removed from `event` and `id` (and NUL from `id`), so a
+value can never start another field. `retry` is sent only as a number
+of milliseconds, an integer or a string of digits; anything else is
+left out.
 
 ## Keep idle connections alive
 

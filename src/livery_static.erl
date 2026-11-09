@@ -81,17 +81,20 @@ locate(Root, Cfg, Req, Method) ->
 ) -> livery_resp:resp().
 serve_file(Req, Method, Path, Size, Mtime, Cfg) ->
     ETag = etag(Size, Mtime),
+    Validators = {ETag, http_date(Mtime), Mtime},
     case maps:get(etag, Cfg) andalso livery_etag:if_none_match(Req, ETag) of
         true ->
-            decorate(livery_resp:new(304, [], empty), ETag, Cfg);
+            decorate(livery_resp:new(304, [], empty), Validators, Cfg);
         false ->
-            body_response(Req, Method, Path, Size, ETag, Cfg)
+            body_response(Req, Method, Path, Size, Validators, Cfg)
     end.
 
+-type validators() :: {binary(), binary(), integer()}.
+
 -spec body_response(
-    livery_req:req(), binary(), string(), non_neg_integer(), binary(), map()
+    livery_req:req(), binary(), string(), non_neg_integer(), validators(), map()
 ) -> livery_resp:resp().
-body_response(_Req, <<"HEAD">>, Path, Size, ETag, Cfg) ->
+body_response(_Req, <<"HEAD">>, Path, Size, Validators, Cfg) ->
     Resp = livery_resp:new(
         200,
         [
@@ -100,22 +103,38 @@ body_response(_Req, <<"HEAD">>, Path, Size, ETag, Cfg) ->
         ],
         empty
     ),
-    decorate(Resp, ETag, Cfg);
-body_response(Req, <<"GET">>, Path, Size, ETag, Cfg) ->
+    decorate(Resp, Validators, Cfg);
+body_response(Req, <<"GET">>, Path, Size, Validators, Cfg) ->
     Base =
-        case maps:get(range, Cfg) andalso parse_range(Req, Size) of
+        case
+            maps:get(range, Cfg) andalso if_range(Req, Validators) andalso parse_range(Req, Size)
+        of
             {Offset, Length} -> livery_resp:file(206, Path, {Offset, Length});
             _NoRange -> livery_resp:file(200, Path)
         end,
     Resp = livery_resp:with_header(<<"content-type">>, mime_type(Path), Base),
-    decorate(Resp, ETag, Cfg).
+    decorate(Resp, Validators, Cfg).
 
--spec decorate(livery_resp:resp(), binary(), map()) -> livery_resp:resp().
-decorate(Resp, ETag, #{etag := EtagOn, cache_control := CacheControl}) ->
+%% RFC 9110 13.1.5: serve the range only if the representation is the one
+%% the client already has part of; otherwise send all of it. The ETags
+%% here are weak and never pass the strong comparison If-Range needs, so
+%% only an exact `Last-Modified' date can, and only once the file has
+%% been unchanged for a second (a date is not a strong validator before).
+-spec if_range(livery_req:req(), validators()) -> boolean().
+if_range(Req, {_ETag, LastModified, Mtime}) ->
+    case livery_req:header(<<"if-range">>, Req) of
+        undefined -> true;
+        LastModified -> os:system_time(second) - Mtime >= 1;
+        _Other -> false
+    end.
+
+-spec decorate(livery_resp:resp(), validators(), map()) -> livery_resp:resp().
+decorate(Resp, {ETag, LastModified, _Mtime}, #{etag := EtagOn, cache_control := CacheControl}) ->
+    R0 = livery_resp:with_header(<<"last-modified">>, LastModified, Resp),
     R1 =
         case EtagOn of
-            true -> livery_resp:with_header(<<"etag">>, ETag, Resp);
-            false -> Resp
+            true -> livery_resp:with_header(<<"etag">>, ETag, R0);
+            false -> R0
         end,
     case CacheControl of
         undefined -> R1;
@@ -258,6 +277,20 @@ hex(_C) -> error.
 %%====================================================================
 %% ETag, MIME, Range
 %%====================================================================
+
+%% IMF-fixdate (RFC 9110 5.6.7), e.g. `Sun, 06 Nov 1994 08:49:37 GMT'.
+-spec http_date(integer()) -> binary().
+http_date(Posix) ->
+    {{Y, Mo, D} = Date, {H, Mi, S}} = calendar:system_time_to_universal_time(Posix, second),
+    Day = element(
+        calendar:day_of_the_week(Date), {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+    ),
+    Month = element(
+        Mo, {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+    ),
+    iolist_to_binary(
+        io_lib:format("~s, ~2..0B ~s ~4..0B ~2..0B:~2..0B:~2..0B GMT", [Day, D, Month, Y, H, Mi, S])
+    ).
 
 -spec etag(non_neg_integer(), integer()) -> binary().
 etag(Size, Mtime) ->

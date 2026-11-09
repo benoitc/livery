@@ -289,8 +289,8 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
     case file_segment(Path, Range) of
         {error, enoent} ->
             Adapter:send_headers(Stream, 404, [], #{end_stream => true});
-        {error, range_not_satisfiable} ->
-            Adapter:send_headers(Stream, 416, [], #{end_stream => true});
+        {error, {range_not_satisfiable, Size}} ->
+            range_not_satisfiable(Adapter, Stream, Size);
         {error, Reason} ->
             reset(Adapter, Stream, Reason),
             {error, Reason};
@@ -404,12 +404,20 @@ close_stream(Adapter, Stream, Trailers) ->
     | [{binary(), binary()}]
     | fun(() -> [{binary(), binary()}]).
 
+%% RFC 9110 14.4: a 416 tells the client how long the file is.
+range_not_satisfiable(Adapter, Stream, Size) ->
+    Hs = [
+        {<<"content-range">>, [<<"bytes */">>, integer_to_binary(Size)]},
+        {<<"content-length">>, <<"0">>}
+    ],
+    Adapter:send_headers(Stream, 416, Hs, #{end_stream => true}).
+
 -spec file_segment(
     file:name_all(),
     undefined | {non_neg_integer(), non_neg_integer() | eof}
 ) ->
     {ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
-    | {error, enoent | not_a_regular_file | range_not_satisfiable}.
+    | {error, enoent | not_a_regular_file | {range_not_satisfiable, non_neg_integer()}}.
 file_segment(Path, Range) ->
     case filelib:is_regular(Path) of
         true ->
@@ -426,23 +434,25 @@ file_segment(Path, Range) ->
     non_neg_integer()
 ) ->
     {ok, non_neg_integer(), non_neg_integer(), non_neg_integer()}
-    | {error, range_not_satisfiable}.
+    | {error, {range_not_satisfiable, non_neg_integer()}}.
 resolve_range(undefined, Size) ->
     {ok, 0, Size, Size};
+%% RFC 9110 14.1.2: a range is satisfiable only if it starts inside the
+%% file, so never on an empty one.
 resolve_range({Offset, eof}, Size) when
-    is_integer(Offset), Offset >= 0, Offset =< Size
+    is_integer(Offset), Offset >= 0, Offset < Size
 ->
     {ok, Offset, Size - Offset, Size};
 resolve_range({Offset, Length}, Size) when
     is_integer(Offset),
     is_integer(Length),
     Offset >= 0,
-    Length >= 0,
-    Offset =< Size
+    Length > 0,
+    Offset < Size
 ->
     {ok, Offset, min(Length, Size - Offset), Size};
-resolve_range(_Range, _Size) ->
-    {error, range_not_satisfiable}.
+resolve_range(_Range, Size) ->
+    {error, {range_not_satisfiable, Size}}.
 
 -spec file_headers(
     100..599,
@@ -543,26 +553,47 @@ send_file_chunks(Adapter, Stream, Fd, Remaining, Trailers) ->
 
 -spec sse_frame(map() | iodata()) -> iodata().
 sse_frame(#{data := Data} = E) ->
-    Event = maps:get(event, E, undefined),
-    Id = maps:get(id, E, undefined),
-    Retry = maps:get(retry, E, undefined),
     [
-        maybe_field(<<"event">>, Event),
-        maybe_field(<<"id">>, Id),
-        maybe_field(<<"retry">>, Retry),
+        field(<<"event">>, single_line(maps:get(event, E, undefined))),
+        field(<<"id">>, id(maps:get(id, E, undefined))),
+        field(<<"retry">>, retry(maps:get(retry, E, undefined))),
         data_lines(Data),
         <<"\n">>
     ];
 sse_frame(IoData) ->
-    [<<"data: ">>, IoData, <<"\n\n">>].
+    [data_lines(IoData), <<"\n">>].
 
-maybe_field(_, undefined) -> [];
-maybe_field(Name, Value) -> [Name, <<": ">>, to_iodata(Value), <<"\n">>].
+field(_, undefined) -> [];
+field(Name, Value) -> [Name, <<": ">>, Value, <<"\n">>].
 
-data_lines(B) when is_binary(B) ->
-    [<<"data: ">>, B, <<"\n">>];
-data_lines(L) when is_list(L) ->
-    [<<"data: ">>, L, <<"\n">>].
+%% Every line of `data' gets its own `data:' field: the client joins them
+%% back with line feeds. CR LF, CR and LF all end a line in the format.
+data_lines(Data) ->
+    Lines = binary:split(iolist_to_binary(to_iodata(Data)), [<<"\r\n">>, <<"\r">>, <<"\n">>], [
+        global
+    ]),
+    [[<<"data: ">>, L, <<"\n">>] || L <- Lines].
+
+%% A line break in `event' or `id' would start another field; drop them.
+single_line(undefined) ->
+    undefined;
+single_line(V) ->
+    binary:replace(iolist_to_binary(to_iodata(V)), [<<"\r">>, <<"\n">>], <<>>, [global]).
+
+%% Clients ignore an `id' containing NUL; drop it with the line breaks.
+id(undefined) -> undefined;
+id(V) -> binary:replace(single_line(V), <<0>>, <<>>, [global]).
+
+%% `retry' is a number of milliseconds; anything else is left out.
+retry(N) when is_integer(N), N >= 0 ->
+    integer_to_binary(N);
+retry(B) when is_binary(B), B =/= <<>> ->
+    case [C || <<C>> <= B, C < $0 orelse C > $9] of
+        [] -> B;
+        _ -> undefined
+    end;
+retry(_) ->
+    undefined.
 
 to_iodata(B) when is_binary(B) -> B;
 to_iodata(L) when is_list(L) -> L;

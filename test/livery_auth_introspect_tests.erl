@@ -232,3 +232,21 @@ insufficient_scope_is_403_test() ->
         <<"Bearer error=\"insufficient_scope\", scope=\"write\"">>,
         livery_test_adapter:header(<<"www-authenticate">>, Cap)
     ).
+
+%% RFC 9470 with introspection: `acr' and `auth_time' come from the
+%% introspection response.
+introspection_step_up_test() ->
+    Claims = #{<<"active">> => true, <<"sub">> => <<"u1">>, <<"acr">> => <<"silver">>},
+    Stack = [
+        {livery_auth_introspect, #{
+            endpoint => ?ENDPOINT, fetch => fetch_json(200, Claims), acr_values => [<<"gold">>]
+        }}
+    ],
+    Cap = livery_test_adapter:run(
+        Stack, handler(), #{headers => [{<<"authorization">>, <<"Bearer abc">>}]}
+    ),
+    ?assertEqual(401, livery_test_adapter:status(Cap)),
+    ?assertMatch(
+        <<"Bearer error=\"insufficient_user_authentication\"", _/binary>>,
+        livery_test_adapter:header(<<"www-authenticate">>, Cap)
+    ).

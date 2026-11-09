@@ -15,7 +15,10 @@ section 5.1).
 - a DPoP proof without a valid server nonce, when `dpop_nonce` is set:
   `401` with `error="use_dpop_nonce"` (RFC 9449 section 9);
 - a valid token without the scopes the route needs: `403` with
-  `error="insufficient_scope"` and the `scope` it needs.
+  `error="insufficient_scope"` and the `scope` it needs;
+- a token from a sign-in too weak or too old for the route: `401` with
+  `error="insufficient_user_authentication"` and the `acr_values` and
+  `max_age` to sign in again with (RFC 9470 section 3).
 
 Options read from the middleware state: `realm`, `resource_metadata`
 (the URL of the RFC 9728 document, sent as a parameter), and, when the
@@ -34,6 +37,7 @@ so a client can retry at once.
     | {invalid_token, binary()}
     | {invalid_dpop_proof, binary()}
     | {use_dpop_nonce, binary()}
+    | {insufficient_user_authentication, binary()}
     | {insufficient_scope, [binary()]}.
 
 -type opts() :: #{realm => binary(), resource_metadata => binary(), _ => _}.
@@ -74,7 +78,7 @@ header(Outcome, Scheme, Opts) ->
             false -> hd(Schemes)
         end,
     Challenges = [
-        challenge(S, error_params(Outcome, S, Used) ++ scheme_params(S, Opts), Opts)
+        challenge(S, error_params(Outcome, S, Used, Opts) ++ scheme_params(S, Opts), Opts)
      || S <- Schemes
     ],
     iolist_to_binary(lists:join(<<", ">>, Challenges)).
@@ -97,13 +101,22 @@ scheme_name(dpop) -> <<"DPoP">>.
 
 %% The error belongs to the scheme the client used; a DPoP proof error is
 %% only meaningful on the DPoP challenge.
-error_params(missing_token, _S, _Used) -> [];
-error_params({invalid_dpop_proof, _} = O, dpop, _Used) -> params(O);
-error_params({invalid_dpop_proof, _}, bearer, _Used) -> [];
-error_params({use_dpop_nonce, _} = O, dpop, _Used) -> params(O);
-error_params({use_dpop_nonce, _}, bearer, _Used) -> [];
-error_params(Outcome, S, S) -> params(Outcome);
-error_params(_Outcome, _S, _Used) -> [].
+error_params(missing_token, _S, _Used, _Opts) ->
+    [];
+error_params({invalid_dpop_proof, _} = O, dpop, _Used, _Opts) ->
+    params(O);
+error_params({invalid_dpop_proof, _}, bearer, _Used, _Opts) ->
+    [];
+error_params({use_dpop_nonce, _} = O, dpop, _Used, _Opts) ->
+    params(O);
+error_params({use_dpop_nonce, _}, bearer, _Used, _Opts) ->
+    [];
+error_params({insufficient_user_authentication, _} = O, S, S, Opts) ->
+    params(O) ++ livery_auth_stepup:required(Opts);
+error_params(Outcome, S, S, _Opts) ->
+    params(Outcome);
+error_params(_Outcome, _S, _Used, _Opts) ->
+    [].
 
 scheme_params(dpop, Opts) ->
     Algs = maps:get(algorithms, Opts, livery_auth_jose:algorithms()),
@@ -115,6 +128,7 @@ status_body(missing_token) -> {401, <<"missing token">>};
 status_body({invalid_token, Detail}) -> {401, Detail};
 status_body({invalid_dpop_proof, Detail}) -> {401, Detail};
 status_body({use_dpop_nonce, Detail}) -> {401, Detail};
+status_body({insufficient_user_authentication, Detail}) -> {401, Detail};
 status_body({insufficient_scope, _}) -> {403, <<"insufficient scope">>}.
 
 realm(#{realm := Realm}) when is_binary(Realm) -> [{<<"realm">>, Realm}];
@@ -127,6 +141,8 @@ params({invalid_token, Detail}) ->
     [{<<"error">>, <<"invalid_token">>}, {<<"error_description">>, Detail}];
 params({invalid_dpop_proof, Detail}) ->
     [{<<"error">>, <<"invalid_dpop_proof">>}, {<<"error_description">>, Detail}];
+params({insufficient_user_authentication, Detail}) ->
+    [{<<"error">>, <<"insufficient_user_authentication">>}, {<<"error_description">>, Detail}];
 params({use_dpop_nonce, Detail}) ->
     [{<<"error">>, <<"use_dpop_nonce">>}, {<<"error_description">>, Detail}];
 params({insufficient_scope, Scopes}) ->

@@ -384,3 +384,207 @@ id_token_not_kept_by_default_test() ->
     [Value | _] = binary:split(Session, <<";">>),
     {ok, Data} = livery_auth_session:verify(Value, #{secret => ?SECRET}),
     ?assertNot(maps:is_key(<<"id_token">>, Data)).
+
+%%====================================================================
+%% Step-up (RFC 9470, OIDC Core 3.1.3.7 step 11)
+%%====================================================================
+
+stepup_login(Query, Opts) ->
+    Cap = livery_test_adapter:run([], livery_auth_login:login(Opts), #{raw_query => Query}),
+    302 = livery_test_adapter:status(Cap),
+    #{query := Q} = uri_string:parse(livery_test_adapter:header(<<"location">>, Cap)),
+    [Cookie | _] = binary:split(livery_test_adapter:header(<<"set-cookie">>, Cap), <<";">>),
+    #{params => maps:from_list(uri_string:dissect_query(Q)), cookie => Cookie}.
+
+stepup_request_test_() ->
+    Base = (opts(token_reply(<<>>)))#{step_up_acr_values => [<<"gold">>]},
+    [
+        {"defaults from the options",
+            ?_assertMatch(
+                #{<<"acr_values">> := <<"silver">>, <<"max_age">> := <<"600">>},
+                maps:get(
+                    params, stepup_login(<<>>, Base#{acr_values => [<<"silver">>], max_age => 600})
+                )
+            )},
+        {"allowed query values",
+            ?_assertMatch(
+                #{<<"acr_values">> := <<"gold">>, <<"max_age">> := <<"0">>},
+                maps:get(params, stepup_login(<<"acr_values=gold&max_age=0">>, Base))
+            )},
+        {"a level not allowed is ignored",
+            ?_assertNot(
+                maps:is_key(
+                    <<"acr_values">>, maps:get(params, stepup_login(<<"acr_values=bronze">>, Base))
+                )
+            )},
+        {"a bad max_age is ignored",
+            ?_assertNot(
+                maps:is_key(<<"max_age">>, maps:get(params, stepup_login(<<"max_age=soon">>, Base)))
+            )}
+    ].
+
+stepup_callback_test_() ->
+    Now = os:system_time(second),
+    Cases = [
+        {"level met", <<"acr_values=gold">>, #{<<"acr">> => <<"gold">>}, 302},
+        {"other level", <<"acr_values=gold">>, #{<<"acr">> => <<"silver">>}, 401},
+        {"no level", <<"acr_values=gold">>, #{}, 401},
+        {"recent", <<"max_age=60">>, #{<<"auth_time">> => Now - 5}, 302},
+        {"too old", <<"max_age=60">>, #{<<"auth_time">> => Now - 600}, 401},
+        {"no auth_time", <<"max_age=60">>, #{}, 401}
+    ],
+    [
+        {Name, fun() ->
+            Opts0 = (opts(token_reply(<<>>)))#{step_up_acr_values => [<<"gold">>]},
+            Login = stepup_login(Query, Opts0),
+            #{params := #{<<"state">> := State, <<"nonce">> := Nonce}, cookie := Cookie} = Login,
+            Opts = Opts0#{
+                adapter_opts => maps:get(adapter_opts, opts(token_reply(id_token(Nonce, Claims))))
+            },
+            {Got, _} = callback(
+                Login,
+                [{<<"state">>, State}, {<<"code">>, <<"c">>}, {<<"iss">>, ?ISS}],
+                Opts,
+                [{<<"cookie">>, Cookie}]
+            ),
+            ?assertEqual(Expected, Got)
+        end}
+     || {Name, Query, Claims, Expected} <- Cases
+    ].
+
+session_keeps_acr_and_auth_time_test() ->
+    Now = os:system_time(second),
+    Login = start(<<>>),
+    IdToken = id_token(nonce(Login), #{<<"acr">> => <<"gold">>, <<"auth_time">> => Now}),
+    {302, Cap} = callback(Login, ok_query(Login), opts(token_reply(IdToken))),
+    [Session] = [
+        C
+     || {<<"set-cookie">>, <<"session=", C/binary>>} <- livery_test_adapter:headers(Cap)
+    ],
+    [Value | _] = binary:split(Session, <<";">>),
+    ?assertMatch(
+        {ok, #{<<"acr">> := <<"gold">>, <<"auth_time">> := Now}},
+        livery_auth_session:verify(Value, #{secret => ?SECRET})
+    ).
+
+%%====================================================================
+%% Pushed authorization requests (RFC 9126)
+%%====================================================================
+
+par_endpoint() -> <<?ISS/binary, "/par">>.
+
+par_opts(ProviderExtra, Extra, Reply) ->
+    Self = self(),
+    Handler = fun(#{url := Url, headers := H} = Req) ->
+        {full, Body} = maps:get(body, Req),
+        Form = uri_string:dissect_query(iolist_to_binary(Body)),
+        Self ! {pushed, Url, H, Form},
+        {Status, Json} = Reply,
+        {Status, [], iolist_to_binary(json:encode(Json))}
+    end,
+    maps:merge(
+        (opts(token_reply(<<>>)))#{
+            provider => maps:merge(
+                (provider())#{<<"pushed_authorization_request_endpoint">> => par_endpoint()},
+                ProviderExtra
+            ),
+            adapter_opts => #{handler => Handler}
+        },
+        Extra
+    ).
+
+pushed_ok() ->
+    {201, #{
+        <<"request_uri">> => <<"urn:ietf:params:oauth:request_uri:abc">>, <<"expires_in">> => 60
+    }}.
+
+par_login(Opts) ->
+    flush_pushed(),
+    livery_test_adapter:run([], livery_auth_login:login(Opts), #{}).
+
+flush_pushed() ->
+    receive
+        {pushed, _, _, _} -> flush_pushed()
+    after 0 -> ok
+    end.
+
+par_pushes_the_request_test() ->
+    Cap = par_login(par_opts(#{}, #{}, pushed_ok())),
+    ?assertEqual(302, livery_test_adapter:status(Cap)),
+    #{query := Q} = uri_string:parse(livery_test_adapter:header(<<"location">>, Cap)),
+    ?assertEqual(
+        [
+            {<<"client_id">>, ?CLIENT},
+            {<<"request_uri">>, <<"urn:ietf:params:oauth:request_uri:abc">>}
+        ],
+        uri_string:dissect_query(Q)
+    ),
+    receive
+        {pushed, Url, Headers, Form} ->
+            ?assertEqual(par_endpoint(), Url),
+            ?assertMatch(<<"Basic ", _/binary>>, proplists:get_value(<<"authorization">>, Headers)),
+            [
+                ?assert(lists:keymember(K, 1, Form))
+             || K <- [
+                    <<"client_id">>,
+                    <<"response_type">>,
+                    <<"redirect_uri">>,
+                    <<"state">>,
+                    <<"nonce">>,
+                    <<"code_challenge">>
+                ]
+            ],
+            ?assertNot(lists:keymember(<<"request_uri">>, 1, Form))
+    after 1000 -> error(not_pushed)
+    end.
+
+par_not_used_when_disabled_test() ->
+    Cap = par_login(par_opts(#{}, #{par => false}, pushed_ok())),
+    ?assertMatch(
+        <<"https://id.example/authorize?response_type=code", _/binary>>,
+        livery_test_adapter:header(<<"location">>, Cap)
+    ).
+
+par_used_when_required_even_if_disabled_test() ->
+    Cap = par_login(
+        par_opts(
+            #{<<"require_pushed_authorization_requests">> => true}, #{par => false}, pushed_ok()
+        )
+    ),
+    ?assertMatch(
+        <<"https://id.example/authorize?client_id=", _/binary>>,
+        livery_test_adapter:header(<<"location">>, Cap)
+    ).
+
+par_not_used_without_endpoint_test() ->
+    Opts = maps:remove(par, par_opts(#{}, #{}, pushed_ok())),
+    NoPar = Opts#{provider => provider()},
+    Cap = par_login(NoPar),
+    ?assertMatch(
+        <<"https://id.example/authorize?response_type=code", _/binary>>,
+        livery_test_adapter:header(<<"location">>, Cap)
+    ).
+
+par_failure_is_502_test() ->
+    Cap = par_login(par_opts(#{}, #{}, {400, #{<<"error">> => <<"invalid_request">>}})),
+    ?assertEqual(502, livery_test_adapter:status(Cap)),
+    ?assertEqual(undefined, livery_test_adapter:header(<<"set-cookie">>, Cap)).
+
+%% RFC 9126 2 with RFC 10070: an assertion sent to the PAR endpoint names
+%% the issuer as its audience.
+par_with_private_key_jwt_test() ->
+    {Key, Jwk} = livery_auth_jwt:keypair(<<"ES256">>, <<"k">>),
+    Opts = maps:remove(
+        client_secret,
+        par_opts(#{}, #{client_auth => private_key_jwt, private_key => Key}, pushed_ok())
+    ),
+    302 = livery_test_adapter:status(par_login(Opts)),
+    receive
+        {pushed, _, Headers, Form} ->
+            ?assertEqual(undefined, proplists:get_value(<<"authorization">>, Headers)),
+            {ok, Claims} = livery_auth:verify(proplists:get_value(<<"client_assertion">>, Form), #{
+                keys => [Jwk]
+            }),
+            ?assertEqual(?ISS, maps:get(<<"aud">>, Claims))
+    after 1000 -> error(not_pushed)
+    end.

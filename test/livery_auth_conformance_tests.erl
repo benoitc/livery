@@ -242,3 +242,53 @@ unsigned(Alg) ->
     H = B64(iolist_to_binary(json:encode(#{<<"alg">> => Alg}))),
     P = B64(iolist_to_binary(json:encode(claims()))),
     <<H/binary, ".", P/binary, ".", (B64(<<"sig">>))/binary>>.
+
+%%====================================================================
+%% Step-up authentication (RFC 9470)
+%%====================================================================
+
+stepup_token(Claims) ->
+    {Key, Jwk} = livery_auth_jwt:rsa_keypair(),
+    Base = #{<<"sub">> => <<"a">>, <<"exp">> => os:system_time(second) + 60},
+    {livery_auth_jwt:mint(Key, #{}, maps:merge(Base, Claims)), Jwk}.
+
+stepup_cases_test_() ->
+    Now = os:system_time(second),
+    Gold = #{acr_values => [<<"gold">>, <<"platinum">>]},
+    Recent = #{max_age => 300},
+    Cases = [
+        {"acr listed", Gold, #{<<"acr">> => <<"gold">>}, 200},
+        {"acr not listed", Gold, #{<<"acr">> => <<"silver">>}, 401},
+        {"acr missing", Gold, #{}, 401},
+        {"auth_time recent", Recent, #{<<"auth_time">> => Now - 10}, 200},
+        {"auth_time too old", Recent, #{<<"auth_time">> => Now - 600}, 401},
+        {"auth_time missing", Recent, #{}, 401}
+    ],
+    [
+        {Name, fun() ->
+            {Token, Jwk} = stepup_token(Claims),
+            {Status, _} = run(maps:merge(#{keys => [Jwk]}, Req), bearer(Token)),
+            ?assertEqual(Expected, Status)
+        end}
+     || {Name, Req, Claims, Expected} <- Cases
+    ].
+
+stepup_challenge_test() ->
+    {Token, Jwk} = stepup_token(#{<<"acr">> => <<"silver">>}),
+    ?assertEqual(
+        {401,
+            <<"Bearer error=\"insufficient_user_authentication\", ",
+                "error_description=\"a stronger sign-in is required\", ",
+                "acr_values=\"gold\", max_age=\"300\"">>},
+        run(#{keys => [Jwk], acr_values => [<<"gold">>], max_age => 300}, bearer(Token))
+    ).
+
+%% Who signed in comes before what the token may do: a weak sign-in is
+%% reported as such even when a scope is also missing.
+stepup_before_scope_test() ->
+    {Token, Jwk} = stepup_token(#{<<"acr">> => <<"silver">>}),
+    {Status, Challenge} = run(
+        #{keys => [Jwk], acr_values => [<<"gold">>], scope => [<<"orders:write">>]}, bearer(Token)
+    ),
+    ?assertEqual(401, Status),
+    ?assertMatch({_, _}, binary:match(Challenge, <<"insufficient_user_authentication">>)).

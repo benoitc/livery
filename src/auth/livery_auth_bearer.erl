@@ -5,19 +5,33 @@ Bearer-token authentication middleware.
 Extracts the bearer token from the `Authorization` header,
 verifies it with `livery_auth:verify/2`, and stores the validated
 claims on the request as `meta(user, Claims)` (read it back with
-`livery_ext:user/1`). On any failure it short-circuits with
-`401 Unauthorized` and a `WWW-Authenticate: Bearer` header.
+`livery_ext:user/1`). A request without a token, or with an invalid
+one, gets `401`; a valid token missing a required `scope` gets `403`.
+Both carry the RFC 6750 `WWW-Authenticate` challenge built by
+`livery_auth_challenge`.
 
-State is the `livery_auth:verify_opts()` map plus an optional
-`required => boolean()` (default `true`):
+State is the `livery_auth:verify_opts()` map (including `scope`,
+`typ`, `profile` and `algorithms`) plus:
+
+- `required => boolean()` (default `true`);
+- `realm => binary()`, sent in the challenge;
+- `jwks_uri => binary()`, to fetch and cache the keys instead of passing
+  `keys`, with `fetch`, `ttl` and `min_refresh_interval` (milliseconds,
+  default 30000) passed to `livery_auth_jwks`.
 
 ```erlang
 {livery_auth_bearer, #{
-    keys     => Jwks,
+    jwks_uri => <<"https://issuer.example/jwks">>,
     issuer   => <<"https://issuer.example">>,
-    audience => <<"my-api">>
+    audience => <<"my-api">>,
+    scope    => [<<"orders:read">>],
+    realm    => <<"orders">>
 }}
 ```
+
+An unknown `kid` makes the middleware fetch the key set again, at most
+once per `min_refresh_interval`, so a stream of tokens with made-up key
+ids cannot turn into a stream of requests to the issuer.
 
 When `required => false`, a missing token is allowed through (the
 handler sees no `user` meta), but a present-but-invalid token is
@@ -36,7 +50,7 @@ call(Req, Next, State) ->
     case livery_ext:bearer_token(Req) of
         undefined ->
             case maps:get(required, State, true) of
-                true -> unauthorized(<<"missing token">>);
+                true -> livery_auth_challenge:respond(missing_token, State);
                 false -> Next(Req)
             end;
         Token ->
@@ -44,31 +58,34 @@ call(Req, Next, State) ->
                 {ok, VerifyOpts} ->
                     verify_with_rotation(Token, VerifyOpts, State, Req, Next);
                 {error, _} ->
-                    unauthorized(<<"key resolution failed">>)
+                    invalid(<<"key resolution failed">>, State)
             end
     end.
 
 %% Verify; on a no_matching_key failure with a jwks_uri, refresh the
-%% JWKS once (rotation) and retry before giving up.
+%% JWKS (rotation, throttled) and retry once before giving up.
 verify_with_rotation(Token, VerifyOpts, State, Req, Next) ->
     case livery_auth:verify(Token, VerifyOpts) of
-        {ok, Claims} ->
-            Next(livery_req:set_meta(user, Claims, Req));
         {error, no_matching_key} when is_map_key(jwks_uri, State) ->
             case refresh_keys(State) of
                 {ok, VerifyOpts1} ->
-                    case livery_auth:verify(Token, VerifyOpts1) of
-                        {ok, Claims} ->
-                            Next(livery_req:set_meta(user, Claims, Req));
-                        {error, Reason} ->
-                            unauthorized(reason_text(Reason))
-                    end;
+                    outcome(livery_auth:verify(Token, VerifyOpts1), State, Req, Next);
                 {error, _} ->
-                    unauthorized(<<"no matching key">>)
+                    invalid(<<"no matching key">>, State)
             end;
-        {error, Reason} ->
-            unauthorized(reason_text(Reason))
+        Result ->
+            outcome(Result, State, Req, Next)
     end.
+
+outcome({ok, Claims}, _State, Req, Next) ->
+    Next(livery_req:set_meta(user, Claims, Req));
+outcome({error, {insufficient_scope, Missing}}, State, _Req, _Next) ->
+    livery_auth_challenge:respond({insufficient_scope, Missing}, State);
+outcome({error, Reason}, State, _Req, _Next) ->
+    invalid(reason_text(Reason), State).
+
+invalid(Detail, State) ->
+    livery_auth_challenge:respond({invalid_token, Detail}, State).
 
 -spec resolve_keys(map()) -> {ok, livery_auth:verify_opts()} | {error, term()}.
 resolve_keys(#{jwks_uri := Uri} = State) ->
@@ -80,22 +97,17 @@ resolve_keys(State) ->
     {ok, verify_opts(State)}.
 
 refresh_keys(#{jwks_uri := Uri} = State) ->
-    case livery_auth_jwks:refresh(Uri, jwks_opts(State)) of
+    case livery_auth_jwks:maybe_refresh(Uri, jwks_opts(State)) of
         {ok, Keys} -> {ok, verify_opts(State#{keys => Keys})};
         {error, _} = E -> E
     end.
 
 jwks_opts(State) ->
-    maps:with([fetch, ttl], State).
+    maps:with([fetch, ttl, min_refresh_interval], State).
 
 -spec verify_opts(map()) -> livery_auth:verify_opts().
 verify_opts(State) ->
-    maps:without([required, jwks_uri, fetch, ttl], State).
-
--spec unauthorized(binary()) -> livery_resp:resp().
-unauthorized(Detail) ->
-    Resp = livery_resp:text(401, Detail),
-    livery_resp:with_header(<<"www-authenticate">>, <<"Bearer">>, Resp).
+    maps:without([required, realm, jwks_uri, fetch, ttl, min_refresh_interval], State).
 
 -spec reason_text(livery_auth:error_reason()) -> binary().
 reason_text(expired) -> <<"token expired">>;
@@ -106,4 +118,9 @@ reason_text(malformed) -> <<"malformed token">>;
 reason_text(invalid_json) -> <<"malformed token">>;
 reason_text(audience_mismatch) -> <<"audience mismatch">>;
 reason_text({issuer_mismatch, _}) -> <<"issuer mismatch">>;
-reason_text({unsupported_alg, _}) -> <<"unsupported algorithm">>.
+reason_text({unsupported_alg, _}) -> <<"unsupported algorithm">>;
+reason_text({unsupported_crit, _}) -> <<"unsupported critical header">>;
+reason_text({invalid_typ, _}) -> <<"wrong token type">>;
+reason_text({invalid_claim, _}) -> <<"malformed claim">>;
+reason_text({missing_claim, _}) -> <<"missing claim">>;
+reason_text({missing_option, _}) -> <<"verifier misconfigured">>.

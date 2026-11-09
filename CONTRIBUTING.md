@@ -58,6 +58,11 @@ resource exhaustion or a remote crash, when they come from:
 - behaviour that differs between HTTP/1.1, HTTP/2 and HTTP/3 where the
   parity suite says it should not.
 
+Some differences from a specification are deliberate. They are listed,
+with the reason, under
+[Known deviations](AGENTS.md#known-deviations); a report about one of
+them is answered with that reason.
+
 Report these as a normal bug, in public. Cite the specification section or
 the option. The fix goes in a public pull request and in the CHANGELOG under
 Fixed. We don't publish advisories or request CVEs for them, and advisories

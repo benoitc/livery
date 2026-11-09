@@ -25,7 +25,7 @@ Security: the sub-path is percent-decoded and then confined - any `..`
 segment, control byte, or escape is rejected - and only regular files
 are served. A symlink anywhere below the root, and a directory without
 an index, yield `404`. The checks run before the file is opened, so the
-root must not be writable by anyone you do not trust.
+root must not be writable by anyone you do not trust. See AGENTS.md, Known deviations.
 """.
 
 -include_lib("kernel/include/file.hrl").

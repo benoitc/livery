@@ -33,8 +33,29 @@ end.
 ```
 
 A missing token is rejected with `401` unless `required => false`.
-An inactive token (or any transport/decoding failure) is always
-rejected with `401` and a `WWW-Authenticate: Bearer` header.
+An inactive token, or any transport or decoding failure, is always
+rejected with `401` and `WWW-Authenticate: Bearer error="invalid_token"`.
+
+## Check who the token is for and what it grants
+
+The authorization server only says whether a token is active. Whether
+it is meant for your API, and whether it allows this request, is your
+call (RFC 7662 section 4). Set `audience` and `scope`:
+
+```erlang
+{livery_auth_introspect, #{
+    endpoint      => <<"https://issuer.example/oauth/introspect">>,
+    client_id     => <<"my-api">>,
+    client_secret => <<"s3cret">>,
+    audience      => <<"https://api.example">>,
+    scope         => [<<"orders:read">>],
+    realm         => <<"orders">>
+}}
+```
+
+A token for another audience gets `401`. A token without one of the
+scopes gets `403` with `error="insufficient_scope"` and the scopes it
+needs, so a client knows to ask for more.
 
 ## Choose JWT or introspection
 
@@ -43,8 +64,9 @@ rejected with `401` and a `WWW-Authenticate: Bearer` header.
 | Self-contained JWT | `livery_auth_bearer` (local verify, no round trip) |
 | Opaque / reference | `livery_auth_introspect` (round trip per request) |
 
-Introspection adds a network call per request. Cache results in
-your own layer if the round trip is too costly.
+Introspection adds a network call per request and Livery does not
+cache the answers. Cache them in your own layer if the round trip is
+too costly, and keep the cache shorter than the token's `exp`.
 
 ## Plug in a custom HTTP client
 
@@ -57,7 +79,14 @@ test without a network:
   fetch => fun(_U, _H, _B) -> {ok, 200, <<"{\"active\":true}">>} end}
 ```
 
+## Notes
+
+- `client_id` and `client_secret` are form-encoded before they go into
+  the Basic header, as RFC 6749 section 2.3.1 asks, so secrets with
+  `:` or `+` work.
+
 ## See also
 
 - Reference: `livery_auth_introspect`, `livery_ext`
+- Guide: [Verify JWT access tokens](verify-access-tokens.md)
 - Guide: [Extract a bearer token](bearer-tokens.md)

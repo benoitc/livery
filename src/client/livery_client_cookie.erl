@@ -21,7 +21,7 @@ suffix list: a single-label `Domain` such as `com` is refused, but a
 multi-label suffix such as `co.uk` is accepted from a host under it.
 
 This is a subset: no third-party-cookie policy, no persistence.
-`SameSite` is parsed but not enforced.
+`SameSite` is parsed but not enforced. See AGENTS.md, Known deviations.
 """.
 
 -export([jar/0, jar/1, call/3]).

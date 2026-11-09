@@ -150,11 +150,36 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 6797 HSTS | `Strict-Transport-Security` and the other security headers | `livery_security_headers` |
 | RFC 7838 Alt-Svc | advertising HTTP/3 | `livery_alt_svc`, `livery_service` |
 | RFC 8441, RFC 9220 extended CONNECT | WebSocket and WebTransport handoff | `livery_ws`, `livery_wt`, `livery_h2`, `livery_h3` |
-| RFC 6750 bearer tokens | `Authorization: Bearer`, `WWW-Authenticate` | `livery_auth_bearer` |
-| RFC 7515, 7517, 7518, 7519 JWS, JWK, JWA, JWT | token verification, key sets | `livery_auth`, `livery_auth_jwks` |
-| RFC 7662 token introspection | introspection client | `livery_auth_introspect` |
+| RFC 6750 bearer tokens (updated by RFC 9700) | `Authorization: Bearer`, `WWW-Authenticate` challenges, 401/403 | `livery_auth_bearer`, `livery_auth_challenge` |
+| RFC 7515, 7517, 7518, 7519 JWS, JWK, JWA, JWT | token verification, key selection, key sets | `livery_auth`, `livery_auth_jose`, `livery_auth_jwks` |
+| RFC 9864 fully-specified JOSE algorithms | Ed25519, Ed448 | `livery_auth_jose` |
+| RFC 8725 JWT best current practices | algorithm allow list, explicit typing on request | `livery_auth`, `livery_auth_jose` |
+| RFC 9068 JWT access token profile | `profile => access_token` | `livery_auth` |
+| RFC 7662 token introspection | introspection client, audience and scope checks | `livery_auth_introspect` |
+| RFC 8414 authorization server metadata | `discover_oauth/1,2` | `livery_auth_oidc` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
 | OpenAPI 3.2, JSON Schema (subset) | document generation, request validation | `livery_openapi`, `livery_openapi_validate` |
+
+### Known deviations
+
+Where Livery knowingly does something other than what a spec says, it is
+listed here with the reason, and the module doc of the code that does it
+says so too. Add the entry in the same pull request as the code. A
+deviation that is not listed is a bug: fix the code or add it here. A
+report about a listed deviation is answered with its reason, not
+treated as a new bug.
+
+| Spec | What Livery does instead | Why | Code |
+|---|---|---|---|
+| RFC 9864 section 2 | still accepts the deprecated `EdDSA` name, with the curve from the key | most issuers still send it | `livery_auth_jose` |
+| RFC 8725 section 3.11 | does not require `typ` unless asked (`typ` option or `profile => access_token`) | most issuers send `JWT` or nothing, so requiring it would refuse their tokens | `livery_auth` |
+| RFC 9068 section 2.2.3 | reads the `scp` list as well as `scope` | Azure AD and Okta issue `scp` | `livery_auth` |
+| RFC 7662 section 4 | does not cache introspection answers | a cache has to stay shorter than each token's life, which only the application can judge | `livery_auth_introspect` |
+| OpenID Connect Discovery 1.0 section 3, RFC 8414 section 2 | checks only `issuer`, not the other REQUIRED metadata | the document is handed back as is; `issuer` is the field discovery has to trust | `livery_auth_oidc` |
+| RFC 6265 section 5.3 step 5 | no public suffix list; refuses single-label domains instead | no dependency ships the list | `livery_client_cookie` |
+| RFC 6265bis `SameSite` | parsed but not enforced by the client jar | the jar has no notion of the site a request comes from | `livery_client_cookie` |
+| JSON Schema 2020-12 | OpenAPI request validation covers a subset of keywords | a full validator is out of scope | `livery_openapi_validate` |
+| (file serving) | symlinks below the static root are checked before the file is opened, not at open | OTP cannot open a path without following links | `livery_static` |
 
 ## Build & Development Commands
 

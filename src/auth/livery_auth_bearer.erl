@@ -81,7 +81,7 @@ outcome({ok, Claims}, {Scheme, Token, State, Req, Next}) ->
         ok ->
             case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
                 [] ->
-                    Next(livery_req:set_meta(user, Claims, Req));
+                    granted(Scheme, Next(livery_req:set_meta(user, Claims, Req)), State);
                 Missing ->
                     livery_auth_challenge:respond({insufficient_scope, Missing}, Scheme, State)
             end;
@@ -133,3 +133,7 @@ reason_text({invalid_typ, _}) -> <<"wrong token type">>;
 reason_text({invalid_claim, _}) -> <<"malformed claim">>;
 reason_text({missing_claim, _}) -> <<"missing claim">>;
 reason_text({missing_option, _}) -> <<"verifier misconfigured">>.
+
+%% A DPoP client gets the nonce for its next proof with every answer.
+granted(dpop, Resp, State) -> livery_auth_challenge:with_nonce(Resp, State);
+granted(bearer, Resp, _State) -> Resp.

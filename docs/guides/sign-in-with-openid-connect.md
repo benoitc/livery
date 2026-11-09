@@ -77,8 +77,16 @@ end}
 ## Notes
 
 - Keep the session `secret` long and random, and the same on every node.
-- `/logout` ends the session in your app only; the user stays signed in
-  at the provider.
+- `/logout` clears the session and, when the provider has an
+  `end_session_endpoint`, sends the browser there to sign out of the
+  provider too. Register `post_logout_redirect_uri` with the provider to
+  come back to your app afterwards. Without the ID token as a hint the
+  provider asks the user to confirm; `keep_id_token => true` keeps it in
+  the session for that, at the cost of a larger cookie.
+  `provider_logout => false` signs out of your app only.
+- Being told about a sign-out that happened at the provider (back-channel
+  or front-channel logout) is not supported: sessions live in cookies,
+  so there is nothing on the server to end.
 - Pass `client_auth => private_key_jwt` and `private_key` instead of
   `client_secret` to authenticate with a key, as in
   [Call an API with OAuth](call-apis-with-oauth.md).

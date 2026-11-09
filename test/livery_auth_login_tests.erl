@@ -314,3 +314,73 @@ routes_test() ->
         ],
         [{M, P} || {M, P, _} <- Routes]
     ).
+
+%%====================================================================
+%% Logout at the provider (OpenID Connect RP-Initiated Logout 1.0)
+%%====================================================================
+
+logout_opts(Extra) ->
+    Opts = opts(token_reply(<<>>)),
+    maps:merge(
+        Opts#{provider => (provider())#{<<"end_session_endpoint">> => <<?ISS/binary, "/logout">>}},
+        Extra
+    ).
+
+%% Sign in with `keep_id_token' and return the session cookie and the ID
+%% token it holds.
+signed_in_session() ->
+    Login = start(<<>>),
+    IdToken = id_token(nonce(Login), #{}),
+    {302, Cap} = callback(Login, ok_query(Login), (opts(token_reply(IdToken)))#{
+        keep_id_token => true
+    }),
+    [Session] = [
+        C
+     || {<<"set-cookie">>, <<"session=", C/binary>>} <- livery_test_adapter:headers(Cap)
+    ],
+    [Value | _] = binary:split(Session, <<";">>),
+    {Value, IdToken}.
+
+logout_location(Opts, Headers) ->
+    Cap = livery_test_adapter:run([], livery_auth_login:logout(Opts), #{headers => Headers}),
+    ?assertMatch(<<"session=; ", _/binary>>, livery_test_adapter:header(<<"set-cookie">>, Cap)),
+    livery_test_adapter:header(<<"location">>, Cap).
+
+provider_logout_with_hint_test() ->
+    {Value, IdToken} = signed_in_session(),
+    ?assertMatch(
+        {ok, #{<<"id_token">> := IdToken}}, livery_auth_session:verify(Value, #{secret => ?SECRET})
+    ),
+    Location = logout_location(
+        logout_opts(#{post_logout_redirect_uri => <<"https://app.example/bye">>}),
+        [{<<"cookie">>, <<"session=", Value/binary>>}]
+    ),
+    #{query := Q} = uri_string:parse(Location),
+    ?assertMatch(<<"https://id.example/logout?", _/binary>>, Location),
+    ?assertEqual(
+        [
+            {<<"client_id">>, ?CLIENT},
+            {<<"post_logout_redirect_uri">>, <<"https://app.example/bye">>},
+            {<<"id_token_hint">>, IdToken}
+        ],
+        uri_string:dissect_query(Q)
+    ).
+
+provider_logout_without_session_test() ->
+    Location = logout_location(logout_opts(#{}), []),
+    #{query := Q} = uri_string:parse(Location),
+    ?assertEqual([{<<"client_id">>, ?CLIENT}], uri_string:dissect_query(Q)).
+
+local_logout_when_asked_test() ->
+    ?assertEqual(<<"/">>, logout_location(logout_opts(#{provider_logout => false}), [])).
+
+id_token_not_kept_by_default_test() ->
+    Login = start(<<>>),
+    {302, Cap} = callback(Login, ok_query(Login), opts(token_reply(id_token(nonce(Login), #{})))),
+    [Session] = [
+        C
+     || {<<"set-cookie">>, <<"session=", C/binary>>} <- livery_test_adapter:headers(Cap)
+    ],
+    [Value | _] = binary:split(Session, <<";">>),
+    {ok, Data} = livery_auth_session:verify(Value, #{secret => ?SECRET}),
+    ?assertNot(maps:is_key(<<"id_token">>, Data)).

@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code with PKCE, `state` and `nonce`, the RFC 9207 issuer check and full
   ID token validation, ending in a signed session cookie.
 - `livery_auth_token:request/3` makes token requests directly.
+- DPoP resource servers can require a server nonce in every proof
+  (`dpop_nonce`), so proofs cannot be made in advance. Nonces are
+  stateless and shared by every node with the same secret.
+- Logging out with `livery_auth_login` also signs the user out of the
+  provider when it supports OpenID Connect RP-Initiated Logout.
 - Sender-constrained access tokens. A token bound to a client
   certificate (RFC 8705) or to a DPoP key (RFC 9449) is now accepted
   only from that client, and `dpop => true` lets clients send DPoP

@@ -37,7 +37,8 @@ Options: `provider` (discovery metadata, required), `client_id`,
 `secret`) required; `scope` (`openid` is always added), the token
 client options (`client_auth`, `client_secret`, `private_key`, ...),
 `login_path` (default `/login`), `logout_path` (default `/logout`),
-`after_logout` (default `/`), `params` (extra authorization request
+`after_logout` (default `/`), `provider_logout` (default `true`),
+`post_logout_redirect_uri`, `keep_id_token` (default `false`), `params` (extra authorization request
 parameters, such as `prompt`), `on_login => fun((Claims, Token) -> map())`
 to choose what goes in the session (default `sub`, `iss`, `name`,
 `email`), `keys` or `fetch` to supply the provider's keys, `leeway`.
@@ -46,8 +47,17 @@ A `return_to` query parameter on the login route says where to go
 after signing in; only a local path is followed, anything else goes to
 `/`, so the login route cannot be used as an open redirect.
 
-Logging out ends the session in this application only, not at the
-provider.
+Logging out clears the session cookie. When the provider publishes an
+`end_session_endpoint`, the browser is then sent there to end the
+session at the provider too (OpenID Connect RP-Initiated Logout 1.0),
+with `client_id`, `post_logout_redirect_uri` when you set it, and the
+ID token as `id_token_hint` when the session holds one. Without the
+hint the provider asks the user to confirm; set `keep_id_token => true`
+to keep the ID token in the session (it makes the cookie larger), or
+`provider_logout => false` to end the session in this application
+only. Being told about a logout that happened at the provider
+(back-channel or front-channel logout) is not supported: sessions are
+cookies, with nothing on the server to end.
 
 Deviations: `at_hash` is not checked for Ed448 ID tokens, since OpenID
 Connect does not say which hash goes with that curve. See AGENTS.md,
@@ -105,12 +115,15 @@ authorization_url(State, Nonce, Verifier, Opts) ->
             {<<"code_challenge">>, b64(crypto:hash(sha256, Verifier))},
             {<<"code_challenge_method">>, <<"S256">>}
         ] ++ maps:get(params, Opts, []),
+    with_query(Endpoint, Params).
+
+with_query(Url, Params) ->
     Sep =
-        case binary:match(Endpoint, <<"?">>) of
+        case binary:match(Url, <<"?">>) of
             nomatch -> <<"?">>;
             _ -> <<"&">>
         end,
-    iolist_to_binary([Endpoint, Sep, uri_string:compose_query(Params)]).
+    iolist_to_binary([Url, Sep, uri_string:compose_query(Params)]).
 
 scopes(Opts) ->
     Scopes = maps:get(scope, Opts, [<<"openid">>]),
@@ -308,7 +321,12 @@ algorithms(_Provider) ->
 signed_in(Claims, Token, Saved, Opts) ->
     OnLogin = maps:get(on_login, Opts, fun default_session/2),
     Session = maps:get(session, Opts),
-    Value = livery_auth_session:sign(OnLogin(Claims, Token), Session),
+    Data =
+        case maps:get(keep_id_token, Opts, false) of
+            true -> (OnLogin(Claims, Token))#{<<"id_token">> => maps:get(id_token, Token)};
+            false -> OnLogin(Claims, Token)
+        end,
+    Value = livery_auth_session:sign(Data, Session),
     livery_resp:redirect(302, maps:get(<<"return_to">>, Saved), [
         livery_auth_session:set_cookie_header(Value, Session),
         clear_state_cookie(Opts)
@@ -317,13 +335,52 @@ signed_in(Claims, Token, Saved, Opts) ->
 default_session(Claims, _Token) ->
     maps:with([<<"sub">>, <<"iss">>, <<"name">>, <<"email">>], Claims).
 
--doc "The handler that ends the session in this application.".
+-doc """
+The handler that ends the session: here, and at the provider when it
+publishes an `end_session_endpoint`.
+""".
 -spec logout(map()) -> livery_middleware:handler().
 logout(Opts) ->
-    fun(_Req) ->
-        livery_resp:redirect(302, maps:get(after_logout, Opts, <<"/">>), [
-            livery_auth_session:clear_cookie_header(maps:get(session, Opts))
-        ])
+    fun(Req) ->
+        Session = maps:get(session, Opts),
+        Clear = livery_auth_session:clear_cookie_header(Session),
+        livery_resp:redirect(302, logout_target(Req, Opts), [Clear])
+    end.
+
+logout_target(Req, Opts) ->
+    Provider = maps:get(provider, Opts),
+    case
+        {
+            maps:get(provider_logout, Opts, true),
+            maps:get(<<"end_session_endpoint">>, Provider, undefined)
+        }
+    of
+        {true, Endpoint} when is_binary(Endpoint) ->
+            Params =
+                [{<<"client_id">>, maps:get(client_id, Opts)}] ++
+                    [
+                        {<<"post_logout_redirect_uri">>, U}
+                     || U <- [maps:get(post_logout_redirect_uri, Opts, undefined)], U =/= undefined
+                    ] ++
+                    [
+                        {<<"id_token_hint">>, T}
+                     || T <- [session_id_token(Req, Opts)], T =/= undefined
+                    ],
+            with_query(Endpoint, Params);
+        _ ->
+            maps:get(after_logout, Opts, <<"/">>)
+    end.
+
+session_id_token(Req, Opts) ->
+    Session = maps:get(session, Opts),
+    case livery_ext:cookie(maps:get(name, Session, <<"session">>), Req) of
+        undefined ->
+            undefined;
+        Value ->
+            case livery_auth_session:verify(Value, Session) of
+                {ok, #{<<"id_token">> := IdToken}} when is_binary(IdToken) -> IdToken;
+                _ -> undefined
+            end
     end.
 
 refuse(Status, Detail, Opts) ->

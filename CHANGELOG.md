@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `livery_auth_totp` checks the one-time codes of authenticator apps
+  (RFC 6238), for a second sign-in factor. It builds the QR code URI,
+  allows for clock drift and accepts each code only once; the guide
+  shows how to enrol users and rate limit attempts.
 - Routes can require a stronger or more recent sign-in with
   `acr_values` and `max_age` (RFC 9470). A token that falls short gets
   `401` with `error="insufficient_user_authentication"`, and

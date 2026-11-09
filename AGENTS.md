@@ -168,6 +168,8 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | OpenID Connect Core 1.0 | authorization code flow, ID token validation | `livery_auth_login` |
 | RFC 9470 step-up authentication | `acr_values` and `max_age` on the API and the login flow | `livery_auth_stepup`, `livery_auth_bearer`, `livery_auth_introspect`, `livery_auth_login` |
 | RFC 9126 pushed authorization requests (updated by RFC 10070) | `push_request/3`, `par` option on login | `livery_auth_token`, `livery_auth_login` |
+| RFC 6238 TOTP, RFC 4226 HOTP | one-time codes, window, replay refusal | `livery_auth_totp` |
+| RFC 4648 base32 | TOTP secrets as authenticator apps take them | `livery_auth_totp` |
 | OpenID Connect RP-Initiated Logout 1.0 | logout redirect to `end_session_endpoint` | `livery_auth_login` |
 | RFC 9728 protected resource metadata | metadata document, `resource_metadata` challenge parameter | `livery_auth_resource`, `livery_auth_challenge` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |

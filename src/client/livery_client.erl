@@ -36,7 +36,7 @@ The transport is a `livery_client_adapter`; the default,
 -export([oauth/1]).
 -export([add_endpoint/2, remove_endpoint/2]).
 -export([before/1, after_response/1, wrap/1]).
--export([rebase/2]).
+-export([rebase/2, origin/1]).
 
 -export_type([
     client/0, request/0, response/0, result/0, next/0, entry/0, stack/0, endpoint/0, stream_ref/0
@@ -145,9 +145,51 @@ run(Client, Req) ->
         Pid when is_pid(Pid) ->
             start_push(Adapter, AdapterOpts, Req, Pid);
         _ ->
-            Handler = fun(R) -> Adapter:request(R, AdapterOpts) end,
+            Handler = fun(R) ->
+                case credentials_allowed(R) of
+                    ok -> Adapter:request(R, AdapterOpts);
+                    {error, _} = E -> E
+                end
+            end,
             run_stack(Stack, Handler, Req)
     end.
+
+%% A layer that adds credentials (`livery_client_oauth') lists the origins
+%% they are for in `meta'. Checked here, after every layer has had its say
+%% on the URL, so a later rewrite cannot send them elsewhere.
+credentials_allowed(#{meta := #{credential_origins := Allowed}, url := Url}) ->
+    case origin(Url) of
+        {ok, Origin} ->
+            case lists:member(Origin, Allowed) of
+                true -> ok;
+                false -> {error, {credential_not_allowed, Url}}
+            end;
+        error ->
+            {error, {credential_not_allowed, Url}}
+    end;
+credentials_allowed(_Req) ->
+    ok.
+
+-doc """
+The origin of `Url` as `{Scheme, Host, Port}`, lowercased and with the
+default port filled in, for comparing where a request goes.
+""".
+-spec origin(binary()) -> {ok, {binary(), binary(), inet:port_number()}} | error.
+origin(Url) ->
+    case uri_string:parse(Url) of
+        #{scheme := Scheme0, host := Host} = Parts when Host =/= <<>> ->
+            Scheme = string:lowercase(Scheme0),
+            case maps:get(port, Parts, default_port(Scheme)) of
+                Port when is_integer(Port) -> {ok, {Scheme, string:lowercase(Host), Port}};
+                _ -> error
+            end;
+        _ ->
+            error
+    end.
+
+default_port(<<"https">>) -> 443;
+default_port(<<"http">>) -> 80;
+default_port(_) -> undefined.
 
 start_push(Adapter, AdapterOpts, Req, Pid) ->
     StreamOpts = #{stream_to => Pid, flow => maps:get(flow, Req, auto)},

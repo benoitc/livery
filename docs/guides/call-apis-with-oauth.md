@@ -17,12 +17,19 @@ Client = livery_client:new(#{
             token_endpoint => <<"https://issuer.example/oauth/token">>,
             client_id      => <<"billing">>,
             client_secret  => <<"s3cret">>,
-            scope          => [<<"orders:read">>]
+            scope          => [<<"orders:read">>],
+            allowed_origins => [<<"https://orders.example">>]
         })
     ]
 }),
 {ok, Resp} = livery_client:get(Client, <<"/orders/42">>).
 ```
+
+`allowed_origins` says where the token may go. A request to any other
+scheme, host or port, through an absolute URL or a layer that rewrites
+it, fails with `{error, {credential_not_allowed, Url}}` before anything
+is sent. With `resource` set (below), its origin is used and
+`allowed_origins` can be left out.
 
 The first request fetches a token; the next ones reuse it until 30
 seconds before it expires (`refresh_skew`). When it runs out under load,
@@ -46,7 +53,8 @@ livery_client:oauth(#{
     client_id      => <<"billing">>,
     client_auth    => private_key_jwt,
     private_key    => {<<"ES256">>, public_key:pem_entry_decode(Entry)},
-    key_id         => <<"billing-2026">>
+    key_id         => <<"billing-2026">>,
+    allowed_origins => [<<"https://orders.example">>]
 }).
 ```
 

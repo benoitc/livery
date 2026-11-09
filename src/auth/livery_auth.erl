@@ -281,7 +281,8 @@ check_numeric(Claims, [Name | Rest]) ->
 check_exp(Claims, Now, Leeway) ->
     case maps:get(<<"exp">>, Claims, undefined) of
         undefined -> ok;
-        Exp when Now =< Exp + Leeway -> ok;
+        %% RFC 7519 4.1.4: valid only before `exp'.
+        Exp when Now < Exp + Leeway -> ok;
         _ -> {error, expired}
     end.
 

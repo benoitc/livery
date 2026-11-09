@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outbound requests. Tokens are cached until shortly before they expire,
   a burst of requests shares one new token, and a revoked token is
   replaced once. Clients can authenticate with a secret, a signed
-  assertion (RFC 7523 as updated by RFC 10070) or mutual TLS.
+  assertion (RFC 7523 as updated by RFC 10070) or mutual TLS. The token
+  is sent only to the origins it is meant for (`allowed_origins`, or
+  the `resource`), checked just before the request leaves.
 - `livery_auth_login` signs users in with OpenID Connect: authorization
   code with PKCE, `state` and `nonce`, the RFC 9207 issuer check and full
   ID token validation, ending in a signed session cookie.
@@ -75,6 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A listener with `verify => verify_peer` could have client
+  certificates turned off, or its trusted CAs replaced, by a matching
+  key in `ssl_opts` or `quic_opts`, without any warning. It now refuses
+  to start and names the conflicting keys. HTTP/2 listeners also
+  require the client certificate explicitly.
+- A JWT or session cookie was still accepted at the exact second it
+  expired. It now expires at `exp`, as RFC 7519 section 4.1.4 says.
 - HTTP/1.1 requests reported their scheme as `http` and an empty
   authority, even over TLS. They now carry `https` on a TLS listener and
   the authority from `Host`, as HTTP/2 and HTTP/3 already did.

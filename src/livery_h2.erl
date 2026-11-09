@@ -109,11 +109,21 @@ start(Opts) when is_map(Opts) ->
 -spec start(atom() | undefined, listen_opts(), map()) ->
     {ok, listener()} | {error, term()}.
 start(_Name, Opts, _StartOpts) ->
-    Stack = maps:get(stack, Opts),
-    Handler = maps:get(handler, Opts),
-    Port = maps:get(port, Opts, 0),
-    H2Opts = build_h2_opts(Opts, Stack, Handler),
-    h2:start_server(Port, H2Opts).
+    case livery_tls:check_listen_opts(Opts) of
+        ok ->
+            H2Opts = build_h2_opts(Opts, maps:get(stack, Opts), maps:get(handler, Opts)),
+            h2:start_server(maps:get(port, Opts, 0), require_peer_cert(H2Opts));
+        {error, _} = E ->
+            E
+    end.
+
+%% h2 asks for a client certificate with `verify_peer' but does not
+%% require one; make a missing certificate fail the handshake, as the
+%% HTTP/1.1 and ALPN listeners do.
+require_peer_cert(#{verify := verify_peer} = H2Opts) ->
+    H2Opts#{ssl_opts => [{fail_if_no_peer_cert, true} | maps:get(ssl_opts, H2Opts, [])]};
+require_peer_cert(H2Opts) ->
+    H2Opts.
 
 -spec stop(listener()) -> ok.
 stop(Listener) ->

@@ -292,3 +292,22 @@ stepup_before_scope_test() ->
     ),
     ?assertEqual(401, Status),
     ?assertMatch({_, _}, binary:match(Challenge, <<"insufficient_user_authentication">>)).
+
+%%====================================================================
+%% exp and nbf boundaries (RFC 7519 4.1.4, 4.1.5)
+%%====================================================================
+
+exp_boundary_test_() ->
+    {Key, Jwk} = livery_auth_jwt:rsa_keypair(),
+    Token = livery_auth_jwt:mint(Key, #{}, #{<<"exp">> => ?NOW, <<"nbf">> => ?NOW - 10}),
+    At = fun(Now, Leeway) ->
+        livery_auth:verify(Token, #{keys => [Jwk], now => Now, leeway => Leeway})
+    end,
+    [
+        {"one second before exp", ?_assertMatch({ok, _}, At(?NOW - 1, 0))},
+        {"at exp", ?_assertEqual({error, expired}, At(?NOW, 0))},
+        {"leeway moves the boundary", ?_assertMatch({ok, _}, At(?NOW + 4, 5))},
+        {"at exp plus leeway", ?_assertEqual({error, expired}, At(?NOW + 5, 5))},
+        {"at nbf", ?_assertMatch({ok, _}, At(?NOW - 10, 0))},
+        {"before nbf", ?_assertEqual({error, not_yet_valid}, At(?NOW - 11, 0))}
+    ].

@@ -171,11 +171,13 @@ start(Opts) when is_map(Opts) ->
 -spec start(atom() | undefined, listen_opts(), map()) ->
     {ok, listener()} | {error, term()}.
 start(_Name, Opts, _StartOpts) ->
-    Stack = maps:get(stack, Opts),
-    Handler = maps:get(handler, Opts),
-    Port = maps:get(port, Opts, 0),
-    H1Opts = build_h1_opts(Opts, Stack, Handler),
-    h1:start_server(Port, H1Opts).
+    case livery_tls:check_listen_opts(Opts) of
+        ok ->
+            H1Opts = build_h1_opts(Opts, maps:get(stack, Opts), maps:get(handler, Opts)),
+            h1:start_server(maps:get(port, Opts, 0), H1Opts);
+        {error, _} = E ->
+            E
+    end.
 
 -spec stop(listener()) -> ok.
 %% Synchronous (h1 >= 0.8.0): closes the listen socket, the acceptor

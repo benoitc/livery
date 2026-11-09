@@ -111,9 +111,14 @@ start(Opts) when is_map(Opts) ->
 -spec start(atom() | undefined, listen_opts(), map()) ->
     {ok, listener()} | {error, term()}.
 start(_Name, Opts, _StartOpts) ->
-    case gen_server:start(?MODULE, Opts, []) of
-        {ok, Pid} -> {ok, {Pid, gen_server:call(Pid, port)}};
-        {error, _} = Error -> Error
+    case livery_tls:check_listen_opts(Opts) of
+        ok ->
+            case gen_server:start(?MODULE, Opts, []) of
+                {ok, Pid} -> {ok, {Pid, gen_server:call(Pid, port)}};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = E ->
+            E
     end.
 
 -doc """

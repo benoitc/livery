@@ -85,7 +85,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:  [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15]
+        os:  [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
         otp: ['28']
     runs-on: ${{ matrix.os }}
     steps:
@@ -94,7 +94,7 @@ jobs:
         env:
           # setup-beam cannot map the arm runner's ImageOS
           # (ubuntu24-arm64); set it explicitly per matrix OS.
-          ImageOS: ${{ fromJSON('{"ubuntu-24.04":"ubuntu24","ubuntu-24.04-arm":"ubuntu24","macos-14":"macos14","macos-15":"macos15"}')[matrix.os] }}
+          ImageOS: ${{ fromJSON('{"ubuntu-24.04":"ubuntu24","ubuntu-24.04-arm":"ubuntu24","macos-15":"macos15"}')[matrix.os] }}
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: '3.25.0'
@@ -115,7 +115,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -140,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5

@@ -60,7 +60,8 @@ end.
 
 ## Notes
 
-- OIDC, JWKS rotation, and JWT verification ship as `livery_auth`.
+- To verify JWT access tokens, use `livery_auth_bearer` instead of
+  writing your own; see [Verify JWT access tokens](verify-access-tokens.md).
 
 ## See also
 

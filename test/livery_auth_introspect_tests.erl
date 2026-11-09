@@ -158,7 +158,7 @@ inactive_token_returns_401_test() ->
     ),
     ?assertEqual(401, livery_test_adapter:status(Cap)),
     ?assertEqual(
-        <<"Bearer">>,
+        <<"Bearer error=\"invalid_token\", error_description=\"invalid token\"">>,
         livery_test_adapter:header(<<"www-authenticate">>, Cap)
     ).
 
@@ -186,3 +186,49 @@ missing_token_optional_passes_through_test() ->
 fetch_json(Status, Map) ->
     Body = iolist_to_binary(json:encode(Map)),
     fun(_Url, _Headers, _ReqBody) -> {ok, Status, Body} end.
+
+%%====================================================================
+%% RFC 6749 2.3.1 credentials, RFC 7662 4 audience and scope
+%%====================================================================
+
+%% Each part of the Basic credentials is form-encoded first, so a `:'
+%% in the client id cannot be read as the separator.
+basic_credentials_form_encoded_test() ->
+    Self = self(),
+    Fetch = fun(_Url, Headers, _Body) ->
+        Self ! {auth, proplists:get_value(<<"authorization">>, Headers)},
+        {ok, 200, iolist_to_binary(json:encode(#{<<"active">> => true}))}
+    end,
+    Opts = #{
+        endpoint => ?ENDPOINT, client_id => <<"app:1">>, client_secret => <<"p w+">>, fetch => Fetch
+    },
+    {ok, _} = livery_auth_introspect:introspect(<<"tok">>, Opts),
+    receive
+        {auth, <<"Basic ", B64/binary>>} -> ?assertEqual(<<"app%3A1:p+w%2B">>, base64:decode(B64))
+    after 1000 -> error(no_request)
+    end.
+
+audience_checked_when_set_test() ->
+    Claims = #{<<"active">> => true, <<"aud">> => <<"https://other.example">>},
+    Opts = #{endpoint => ?ENDPOINT, fetch => fetch_json(200, Claims)},
+    ?assertMatch({ok, _}, livery_auth_introspect:introspect(<<"tok">>, Opts)),
+    ?assertEqual(
+        {error, audience_mismatch},
+        livery_auth_introspect:introspect(<<"tok">>, Opts#{audience => <<"https://api.example">>})
+    ).
+
+insufficient_scope_is_403_test() ->
+    Claims = #{<<"active">> => true, <<"sub">> => <<"u1">>, <<"scope">> => <<"read">>},
+    Stack = [
+        {livery_auth_introspect, #{
+            endpoint => ?ENDPOINT, fetch => fetch_json(200, Claims), scope => [<<"write">>]
+        }}
+    ],
+    Cap = livery_test_adapter:run(
+        Stack, handler(), #{headers => [{<<"authorization">>, <<"Bearer abc">>}]}
+    ),
+    ?assertEqual(403, livery_test_adapter:status(Cap)),
+    ?assertEqual(
+        <<"Bearer error=\"insufficient_scope\", scope=\"write\"">>,
+        livery_test_adapter:header(<<"www-authenticate">>, Cap)
+    ).

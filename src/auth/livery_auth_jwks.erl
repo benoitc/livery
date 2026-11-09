@@ -23,6 +23,7 @@ server's TLS certificate.
     keys/2,
     refresh/1,
     refresh/2,
+    maybe_refresh/2,
     from_json/1,
     default_fetch/1
 ]).
@@ -31,11 +32,13 @@ server's TLS certificate.
 
 -type opts() :: #{
     fetch => fun((binary()) -> {ok, binary()} | {error, term()}),
-    ttl => non_neg_integer()
+    ttl => non_neg_integer(),
+    min_refresh_interval => non_neg_integer()
 }.
 
 %% 5 minutes
 -define(DEFAULT_TTL_MS, 300000).
+-define(DEFAULT_MIN_REFRESH_MS, 30000).
 
 %%====================================================================
 %% Cache API
@@ -50,7 +53,7 @@ keys(JwksUri) -> keys(JwksUri, #{}).
 keys(JwksUri, Opts) ->
     Now = erlang:monotonic_time(millisecond),
     case persistent_term:get(cache_key(JwksUri), undefined) of
-        {Keys, Expiry} when Expiry > Now ->
+        {Keys, Expiry, _FetchedAt} when Expiry > Now ->
             {ok, Keys};
         _ ->
             refresh(JwksUri, Opts)
@@ -60,6 +63,22 @@ keys(JwksUri, Opts) ->
 -spec refresh(binary()) -> {ok, [livery_auth:jwk()]} | {error, term()}.
 refresh(JwksUri) -> refresh(JwksUri, #{}).
 
+-doc """
+Re-fetch `JwksUri` unless the cached set was fetched less than
+`min_refresh_interval` milliseconds ago (default 30000), in which case
+the cached keys are returned. Use it when a token names a key the set
+does not have: a rotated key is picked up, but tokens with made-up key
+ids cannot make every request fetch the set again.
+""".
+-spec maybe_refresh(binary(), opts()) -> {ok, [livery_auth:jwk()]} | {error, term()}.
+maybe_refresh(JwksUri, Opts) ->
+    Now = erlang:monotonic_time(millisecond),
+    Min = maps:get(min_refresh_interval, Opts, ?DEFAULT_MIN_REFRESH_MS),
+    case persistent_term:get(cache_key(JwksUri), undefined) of
+        {Keys, _Expiry, FetchedAt} when Now - FetchedAt < Min -> {ok, Keys};
+        _ -> refresh(JwksUri, Opts)
+    end.
+
 -spec refresh(binary(), opts()) -> {ok, [livery_auth:jwk()]} | {error, term()}.
 refresh(JwksUri, Opts) ->
     Fetch = maps:get(fetch, Opts, fun default_fetch/1),
@@ -68,8 +87,8 @@ refresh(JwksUri, Opts) ->
             case decode_jwks(Body) of
                 {ok, Keys} ->
                     Ttl = maps:get(ttl, Opts, ?DEFAULT_TTL_MS),
-                    Expiry = erlang:monotonic_time(millisecond) + Ttl,
-                    persistent_term:put(cache_key(JwksUri), {Keys, Expiry}),
+                    Now = erlang:monotonic_time(millisecond),
+                    persistent_term:put(cache_key(JwksUri), {Keys, Now + Ttl, Now}),
                     {ok, Keys};
                 {error, _} = E ->
                     E

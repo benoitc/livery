@@ -21,7 +21,7 @@ Schema keys may be atoms or binaries; property names inside
 `properties` must be binaries (they are matched against decoded
 JSON keys). It is a pragmatic subset, not a complete JSON Schema
 implementation (`$ref`, `if`/`then`/`else`, `patternProperties`,
-and `dependentSchemas` are not supported).
+and `dependentSchemas` are not supported). See AGENTS.md, Known deviations.
 
 The `call/3` middleware reads `#{body_schema => Schema}` from its
 state, decodes the request's JSON body, validates it, and on

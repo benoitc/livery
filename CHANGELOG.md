@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- JWT access tokens signed with RS384, RS512, PS256, PS384, PS512,
+  ES384, ES512, Ed25519 or Ed448 are now accepted, along with RS256 and
+  ES256. You can narrow the list with `algorithms`.
+- `livery_auth_bearer` and `livery_auth:verify/2` can require scopes
+  (`scope`), a token type (`typ`), given claims (`required_claims`) or
+  the whole RFC 9068 access token profile (`profile => access_token`).
+- `livery_auth_introspect` can check the token's audience and scopes.
+- `livery_auth_oidc:discover_oauth/1,2` reads an OAuth authorization
+  server's metadata (RFC 8414), for issuers without OpenID Connect.
+- A guide on verifying JWT access tokens, and a list in AGENTS.md of
+  the places where Livery knowingly differs from a specification, with
+  the reason for each.
+
+### Changed
+
+- Refused requests now tell the client why, as RFC 6750 asks: a bad
+  token gets `error="invalid_token"` in `WWW-Authenticate`, and a token
+  without a required scope gets `403` with `error="insufficient_scope"`
+  instead of `401`. A `realm` option names your API in the challenge.
+- A token naming a key the cached set does not have now fetches the set
+  again at most once every 30 seconds (`min_refresh_interval`). Before,
+  every such request fetched it, so made-up key ids could flood the
+  issuer.
+- A key is used only when its type, curve, `alg`, `use` and `key_ops`
+  agree with the token, and RSA keys under 2048 bits are refused. A key
+  set that mislabels its keys may need fixing.
+
+### Fixed
+
+- A token with a `crit` header was accepted although Livery understands
+  none of the extensions it may name. It is now refused (RFC 7515
+  section 4.1.11).
+- An `exp` or `nbf` with a fractional part was read as expired. Any
+  number is now accepted, and a value that is not a number is reported
+  as an invalid claim instead of as expired.
+- Introspection sent `client_id` and `client_secret` to the Basic header
+  without form-encoding them, so a secret with `:` or `+` could fail
+  (RFC 6749 section 2.3.1).
+
 ## [0.10.8] - 2026-11-09
 
 Security release (GHSA-q86r-w492-w8c2), with mutual TLS on every listener

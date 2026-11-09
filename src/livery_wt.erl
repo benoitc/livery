@@ -34,9 +34,10 @@ Opts = maps:merge(webtransport:h3_settings(), #{
 livery_h3:start(Opts).
 ```
 
+Over H2 a session needs TLS 1.3 (`webtransport` >= 0.5).
+
 End-to-end bidi-stream and datagram echo over a real session is
-covered by `livery_wt_SUITE` (needs `webtransport` >= 0.2.3, where
-`accept/4` works from Livery's per-request worker process).
+covered by `livery_wt_SUITE`.
 """.
 
 -include("livery.hrl").

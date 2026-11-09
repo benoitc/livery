@@ -51,8 +51,14 @@ handle_datagram(Data, State) ->
 - On success `upgrade/3` returns the `taken_over` sentinel; the
   session belongs to the `webtransport` process after that, so do
   not stack response-mutating middleware after it.
-- Requires `webtransport` >= 0.2.3 (so `accept/4` works from
-  Livery's per-request worker process).
+- Livery uses `webtransport` 0.5, which speaks draft-17 over H3
+  and draft-16 over H2. Chrome and Firefox (draft-02) and Safari 26
+  (draft-07) still connect over H3.
+- Over H2, a session needs TLS 1.3. A client that negotiated TLS 1.2
+  has its request reset, so keep TLS 1.3 enabled on the `https`
+  listener (it is, unless you narrow `versions` in `ssl_opts`).
+- If opening a stream fails because the peer allows no more, your
+  handler's `handle_stream_credit/2` is called once it can try again.
 - See `livery_wt_SUITE` for an end-to-end bidi-stream and datagram
   echo over H3.
 

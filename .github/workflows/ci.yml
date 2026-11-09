@@ -3,8 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever its base, so stacked PRs are checked too.
   pull_request:
-    branches: [main]
 
 jobs:
   # ---- Static checks: fail fast ------------------------------------------

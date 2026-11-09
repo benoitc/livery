@@ -21,7 +21,8 @@ bound that way; the default `none` accepts unbound bearer tokens.
 -export([token/2, check/5, dpop_enabled/1, stripped/1]).
 
 -type scheme() :: bearer | dpop.
--type failure() :: {invalid_token, binary()} | {invalid_dpop_proof, binary()}.
+-type failure() ::
+    {invalid_token, binary()} | {invalid_dpop_proof, binary()} | {use_dpop_nonce, binary()}.
 
 -export_type([scheme/0, failure/0]).
 
@@ -46,7 +47,17 @@ token(Req, Opts) ->
 -spec stripped(map()) -> map().
 stripped(Opts) ->
     maps:without(
-        [binding, dpop, dpop_url, dpop_replay, dpop_iat_window, realm, resource_metadata, required],
+        [
+            binding,
+            dpop,
+            dpop_url,
+            dpop_replay,
+            dpop_iat_window,
+            dpop_nonce,
+            realm,
+            resource_metadata,
+            required
+        ],
         Opts
     ).
 
@@ -94,9 +105,14 @@ dpop(dpop, undefined, _Token, _Req, _Opts) ->
     {error, {invalid_token, <<"token is not DPoP-bound">>}};
 dpop(dpop, Jkt, Token, Req, Opts) ->
     case livery_auth_dpop:verify_proof(Req, Token, Opts) of
-        {ok, Jkt} -> ok;
-        {ok, _Other} -> {error, {invalid_dpop_proof, <<"proof key does not match the token">>}};
-        {error, Reason} -> {error, {invalid_dpop_proof, proof_text(Reason)}}
+        {ok, Jkt} ->
+            ok;
+        {ok, _Other} ->
+            {error, {invalid_dpop_proof, <<"proof key does not match the token">>}};
+        {error, use_dpop_nonce} ->
+            {error, {use_dpop_nonce, <<"Resource server requires nonce in DPoP proof">>}};
+        {error, Reason} ->
+            {error, {invalid_dpop_proof, proof_text(Reason)}}
     end.
 
 certificate(undefined, _Req) ->

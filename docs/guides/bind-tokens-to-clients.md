@@ -51,6 +51,25 @@ challenge no longer offers `Bearer`, so clients know to use DPoP.
 For `mtls`, the listener has to ask for client certificates; see
 [Require client certificates](require-client-certificates.md).
 
+## Require fresh proofs with a server nonce
+
+A client creates its own proofs, so one that had its DPoP key copied
+for a moment could have proofs made for later. With a server nonce
+(RFC 9449 section 9), each proof has to carry a value your server
+handed out shortly before:
+
+```erlang
+#{dpop => true,
+  dpop_nonce => #{secret => NonceSecret, ttl => 300}}
+```
+
+A proof without a valid nonce gets `401` with
+`error="use_dpop_nonce"` and a `DPoP-Nonce` header; the client retries
+with that value. Every answer to a DPoP request carries the next
+nonce, so a busy client rarely sees the `401`. Nonces are a timestamp
+signed with the secret, nothing is stored, and nodes that share the
+secret accept each other's nonces.
+
 ## Behind a proxy
 
 A DPoP proof names the URL the client called. When a proxy rewrites the
@@ -71,8 +90,8 @@ scheme, host or path, tell Livery the public URL:
   node. In a cluster, give every node the same store with
   `dpop_replay => fun((Key, ExpiresAt) -> fresh | replayed)`, or a
   proof could be replayed against another node.
-- Server-provided DPoP nonces (RFC 9449 sections 8 and 9) are not
-  supported yet.
+- Browser clients on another origin can only read `DPoP-Nonce` if CORS
+  exposes it: add `<<"dpop-nonce">>` to `expose` in `livery_cors`.
 - Tell clients what you accept by publishing protected resource
   metadata; see [Verify JWT access tokens](verify-access-tokens.md).
 

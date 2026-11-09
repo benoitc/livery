@@ -104,7 +104,7 @@ authorize(Scheme, Token, Claims, Req, Next, State) ->
         ok ->
             case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
                 [] ->
-                    Next(livery_req:set_meta(user, Claims, Req));
+                    granted(Scheme, Next(livery_req:set_meta(user, Claims, Req)), State);
                 Missing ->
                     livery_auth_challenge:respond({insufficient_scope, Missing}, Scheme, State)
             end;
@@ -214,3 +214,7 @@ default_fetch(Url, Headers, Body) ->
 
 form_encode(Value) ->
     iolist_to_binary(uri_string:compose_query([{Value, true}])).
+
+%% A DPoP client gets the nonce for its next proof with every answer.
+granted(dpop, Resp, State) -> livery_auth_challenge:with_nonce(Resp, State);
+granted(bearer, Resp, _State) -> Resp.

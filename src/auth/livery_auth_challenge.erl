@@ -12,6 +12,8 @@ section 5.1).
   `error="invalid_token"`;
 - a missing or bad DPoP proof: `401` with `error="invalid_dpop_proof"`
   on the `DPoP` challenge;
+- a DPoP proof without a valid server nonce, when `dpop_nonce` is set:
+  `401` with `error="use_dpop_nonce"` (RFC 9449 section 9);
 - a valid token without the scopes the route needs: `403` with
   `error="insufficient_scope"` and the `scope` it needs.
 
@@ -21,14 +23,17 @@ Options read from the middleware state: `realm`, `resource_metadata`
 second `DPoP` challenge listing the accepted `algs`. A challenge for
 `Bearer` is left out when `binding => dpop` makes bearer tokens
 useless. The error goes on the challenge of the scheme the client used.
+With `dpop_nonce` set, every refusal also carries a fresh `DPoP-Nonce`,
+so a client can retry at once.
 """.
 
--export([respond/2, respond/3, header/3]).
+-export([respond/2, respond/3, header/3, with_nonce/2]).
 
 -type outcome() ::
     missing_token
     | {invalid_token, binary()}
     | {invalid_dpop_proof, binary()}
+    | {use_dpop_nonce, binary()}
     | {insufficient_scope, [binary()]}.
 
 -type opts() :: #{realm => binary(), resource_metadata => binary(), _ => _}.
@@ -44,9 +49,18 @@ respond(Outcome, Opts) ->
 -spec respond(outcome(), bearer | dpop, opts()) -> livery_resp:resp().
 respond(Outcome, Scheme, Opts) ->
     {Status, Body} = status_body(Outcome),
-    livery_resp:with_header(
+    Resp = livery_resp:with_header(
         <<"www-authenticate">>, header(Outcome, Scheme, Opts), livery_resp:text(Status, Body)
-    ).
+    ),
+    with_nonce(Resp, Opts).
+
+-doc "Add a fresh `DPoP-Nonce` to `Resp` when the options ask for nonces.".
+-spec with_nonce(livery_resp:resp(), opts()) -> livery_resp:resp().
+with_nonce(Resp, Opts) ->
+    case livery_auth_binding:dpop_enabled(Opts) andalso livery_auth_dpop:nonce_enabled(Opts) of
+        true -> livery_resp:with_header(<<"dpop-nonce">>, livery_auth_dpop:nonce(Opts), Resp);
+        false -> Resp
+    end.
 
 -doc "The `WWW-Authenticate` value for the refused request.".
 -spec header(outcome(), bearer | dpop, opts()) -> binary().
@@ -86,6 +100,8 @@ scheme_name(dpop) -> <<"DPoP">>.
 error_params(missing_token, _S, _Used) -> [];
 error_params({invalid_dpop_proof, _} = O, dpop, _Used) -> params(O);
 error_params({invalid_dpop_proof, _}, bearer, _Used) -> [];
+error_params({use_dpop_nonce, _} = O, dpop, _Used) -> params(O);
+error_params({use_dpop_nonce, _}, bearer, _Used) -> [];
 error_params(Outcome, S, S) -> params(Outcome);
 error_params(_Outcome, _S, _Used) -> [].
 
@@ -98,6 +114,7 @@ scheme_params(bearer, _Opts) ->
 status_body(missing_token) -> {401, <<"missing token">>};
 status_body({invalid_token, Detail}) -> {401, Detail};
 status_body({invalid_dpop_proof, Detail}) -> {401, Detail};
+status_body({use_dpop_nonce, Detail}) -> {401, Detail};
 status_body({insufficient_scope, _}) -> {403, <<"insufficient scope">>}.
 
 realm(#{realm := Realm}) when is_binary(Realm) -> [{<<"realm">>, Realm}];
@@ -110,6 +127,8 @@ params({invalid_token, Detail}) ->
     [{<<"error">>, <<"invalid_token">>}, {<<"error_description">>, Detail}];
 params({invalid_dpop_proof, Detail}) ->
     [{<<"error">>, <<"invalid_dpop_proof">>}, {<<"error_description">>, Detail}];
+params({use_dpop_nonce, Detail}) ->
+    [{<<"error">>, <<"use_dpop_nonce">>}, {<<"error_description">>, Detail}];
 params({insufficient_scope, Scopes}) ->
     [
         {<<"error">>, <<"insufficient_scope">>},

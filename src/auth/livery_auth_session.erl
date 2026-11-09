@@ -153,7 +153,7 @@ decode_payload(Json) ->
 
 -spec check_exp(map()) -> {ok, map()} | {error, expired}.
 check_exp(#{<<"exp">> := Exp} = Map) when is_integer(Exp) ->
-    case erlang:system_time(second) =< Exp of
+    case erlang:system_time(second) < Exp of
         true -> {ok, Map};
         false -> {error, expired}
     end;

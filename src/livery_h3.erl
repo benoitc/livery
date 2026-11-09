@@ -140,11 +140,11 @@ start(Opts) when is_map(Opts) ->
 start(undefined, Opts, StartOpts) ->
     start(fresh_name(), Opts, StartOpts);
 start(Name, Opts, _StartOpts) when is_atom(Name) ->
-    Stack = maps:get(stack, Opts),
-    Handler = maps:get(handler, Opts),
-    Port = maps:get(port, Opts, 0),
-    H3Opts = build_h3_opts(Opts, Stack, Handler),
-    quic_h3:start_server(Name, Port, H3Opts).
+    maybe
+        ok ?= livery_tls:check_listen_opts(Opts),
+        H3Opts = build_h3_opts(Opts, maps:get(stack, Opts), maps:get(handler, Opts)),
+        quic_h3:start_server(Name, maps:get(port, Opts, 0), H3Opts)
+    end.
 
 -spec stop(listener()) -> ok.
 stop(Name) when is_atom(Name) ->

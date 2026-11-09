@@ -19,7 +19,11 @@ oauth_test_() ->
             {"retry once after a revoked token", fun revoked/0},
             {"no retry for a streamed body", fun streamed_not_retried/0},
             {"refuse a non-bearer token", fun dpop_token_type/0},
-            {"token error is returned", fun token_error/0}
+            {"token error is returned", fun token_error/0},
+            {"token only for allowed origins", fun origins/0},
+            {"origins from the resource", fun resource_origins/0},
+            {"origins are required", fun origins_required/0},
+            {"a rewrite after the layer cannot leak", fun rewritten_after/0}
         ]}.
 
 %% A client whose token endpoint and API are both answered by `Api',
@@ -44,6 +48,7 @@ client(Counter, TokenReply, Api, Extra) ->
             token_endpoint => ?TOKEN_URL,
             client_id => integer_to_binary(erlang:unique_integer([positive])),
             client_secret => <<"s">>,
+            allowed_origins => [<<"https://api.example">>],
             adapter => livery_client_fun_adapter,
             adapter_opts => AdapterOpts
         },
@@ -159,6 +164,7 @@ token_error() ->
                 token_endpoint => ?TOKEN_URL,
                 client_id => <<"err">>,
                 client_secret => <<"s">>,
+                allowed_origins => [<<"https://api.example">>],
                 adapter => livery_client_fun_adapter,
                 adapter_opts => #{handler => Handler}
             })
@@ -168,3 +174,66 @@ token_error() ->
         {error, {oauth_error, <<"invalid_scope">>, undefined}},
         livery_client:get(Client, <<"https://api.example/x">>)
     ).
+
+%% Where the token may go (RFC 8707 resources, or explicit origins).
+sent_to(Counter) ->
+    fun(#{url := Url} = Req) ->
+        counters:add(Counter, 1, 1),
+        {200, [], iolist_to_binary([Url, " ", livery_client:header(<<"authorization">>, Req)])}
+    end.
+
+origins() ->
+    C = counters:new(1, []),
+    Api = counters:new(1, []),
+    %% No base URL, so requests go to the absolute URL they name.
+    Client = (client(C, fun token/1, sent_to(Api)))#{base_url => <<>>},
+    {ok, R} = livery_client:get(Client, <<"https://api.example/x">>),
+    ?assertEqual(<<"https://api.example/x Bearer t1">>, body(R)),
+    {ok, R2} = livery_client:get(Client, <<"HTTPS://API.EXAMPLE:443/y">>),
+    ?assertEqual(<<"HTTPS://API.EXAMPLE:443/y Bearer t1">>, body(R2)),
+    [
+        ?assertEqual({error, {credential_not_allowed, U}}, livery_client:get(Client, U))
+     || U <- [
+            <<"https://evil.example/x">>,
+            <<"http://api.example/x">>,
+            <<"https://api.example:8443/x">>
+        ]
+    ],
+    ?assertEqual(2, counters:get(Api, 1)).
+
+resource_origins() ->
+    C = counters:new(1, []),
+    Api = counters:new(1, []),
+    Client = client(C, fun token/1, sent_to(Api), #{
+        allowed_origins => undefined, resource => <<"https://api.example/orders">>
+    }),
+    Client1 = (strip_allowed(Client))#{base_url => <<>>},
+    {ok, _} = livery_client:get(Client1, <<"https://api.example/x">>),
+    ?assertMatch(
+        {error, {credential_not_allowed, _}},
+        livery_client:get(Client1, <<"https://other.example/">>)
+    ).
+
+origins_required() ->
+    C = counters:new(1, []),
+    Client = strip_allowed(client(C, fun token/1, fun echo_auth/1)),
+    ?assertEqual({error, {missing_option, allowed_origins}}, livery_client:get(Client, <<"/x">>)),
+    ?assertEqual(0, counters:get(C, 1)).
+
+%% A layer inside the oauth layer that points the request elsewhere, as a
+%% balancer does, is caught before anything is sent.
+rewritten_after() ->
+    C = counters:new(1, []),
+    Api = counters:new(1, []),
+    Client0 = client(C, fun token/1, sent_to(Api)),
+    Rewrite = fun(Req, Next) -> Next(Req#{url => <<"https://evil.example/x">>}) end,
+    Client = Client0#{stack => maps:get(stack, Client0) ++ [Rewrite]},
+    ?assertEqual(
+        {error, {credential_not_allowed, <<"https://evil.example/x">>}},
+        livery_client:get(Client, <<"/x">>)
+    ),
+    ?assertEqual(0, counters:get(Api, 1)).
+
+%% Drop `allowed_origins' from the oauth layer of a test client.
+strip_allowed(#{stack := [{livery_client_oauth, O}]} = Client) ->
+    Client#{stack => [{livery_client_oauth, maps:remove(allowed_origins, O)}]}.

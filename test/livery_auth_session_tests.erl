@@ -165,3 +165,12 @@ req_with_cookie(Value) ->
         path => <<"/">>,
         headers => [{<<"cookie">>, Value}]
     }).
+
+%% RFC 7519 4.1.4 semantics for the session's `exp': expired at `exp'.
+session_expires_at_exp_test() ->
+    Secret = <<"s">>,
+    Now = erlang:system_time(second),
+    Expired = livery_auth_session:sign(#{<<"exp">> => Now}, #{secret => Secret}),
+    Live = livery_auth_session:sign(#{<<"exp">> => Now + 60}, #{secret => Secret}),
+    ?assertEqual({error, expired}, livery_auth_session:verify(Expired, #{secret => Secret})),
+    ?assertMatch({ok, _}, livery_auth_session:verify(Live, #{secret => Secret})).

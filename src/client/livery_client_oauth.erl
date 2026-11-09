@@ -10,7 +10,15 @@ requests wait for a single new one. Add it with `livery_client:oauth/1`.
 
 `Opts` are the `livery_auth_token` options (`token_endpoint`,
 `client_id`, `client_auth`, `client_secret` or `private_key`, ...) plus
-`scope`, `resource` (RFC 8707) and `refresh_skew`.
+`scope`, `resource` (RFC 8707), `allowed_origins` and `refresh_skew`.
+
+The token goes only to the origins it is for: `allowed_origins` (URLs,
+compared by scheme, host and port), or the origins of `resource` when
+that is set instead. One of the two is required. The check runs in
+`livery_client` just before the request leaves, after every other layer,
+so a URL rewritten by `livery_client_balance` or passed in absolute form
+cannot carry the token to another host; such a request fails with
+`{error, {credential_not_allowed, Url}}` and is not sent.
 
 When the API answers `401` with `error="invalid_token"`, the token was
 revoked or rotated early: the layer drops it, gets a new one and sends
@@ -23,7 +31,12 @@ twice.
 -spec call(livery_client:request(), livery_client:next(), map()) ->
     {ok, livery_client:response()} | {error, term()}.
 call(Req, Next, Opts) ->
-    Key = key(Opts),
+    case origins(Opts) of
+        {ok, Origins} -> call(bind(Req, Origins), Next, key(Opts), Opts);
+        {error, _} = E -> E
+    end.
+
+call(Req, Next, Key, Opts) ->
     case token(Key, Opts) of
         {ok, Token} ->
             case Next(authorize(Req, Token)) of
@@ -58,6 +71,31 @@ token(Key, Opts) ->
         {error, _} = E ->
             E
     end.
+
+origins(#{allowed_origins := Urls}) -> parse_origins(Urls);
+origins(#{resource := Resource}) -> parse_origins(lists:flatten([Resource]));
+origins(_Opts) -> {error, {missing_option, allowed_origins}}.
+
+parse_origins(Urls) ->
+    case [livery_client:origin(U) || U <- Urls] of
+        [] ->
+            {error, {missing_option, allowed_origins}};
+        Parsed ->
+            case [O || {ok, O} <- Parsed] of
+                Ok when length(Ok) =:= length(Parsed) -> {ok, Ok};
+                _ -> {error, {invalid_option, allowed_origins}}
+            end
+    end.
+
+%% Several credential layers each narrow where the request may go.
+bind(Req, Origins) ->
+    Meta = maps:get(meta, Req, #{}),
+    Allowed =
+        case maps:find(credential_origins, Meta) of
+            {ok, Prev} -> [O || O <- Prev, lists:member(O, Origins)];
+            error -> Origins
+        end,
+    Req#{meta => Meta#{credential_origins => Allowed}}.
 
 key(Opts) ->
     {

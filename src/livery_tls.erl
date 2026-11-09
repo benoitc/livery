@@ -22,9 +22,19 @@ names Livery knows: `{dns, Bin}`, `{email, Bin}`, `{uri, Bin}` and
 
 -include_lib("public_key/include/public_key.hrl").
 
--export([info/1, peer/1]).
+-export([info/1, peer/1, check_listen_opts/1]).
 
 -export_type([info/0, san/0]).
+
+-define(AUTH_KEYS, [
+    verify,
+    fail_if_no_peer_cert,
+    cacerts,
+    cacertfile,
+    partial_chain,
+    verify_fun,
+    require_client_cert
+]).
 
 -type san() ::
     {dns, binary()}
@@ -38,6 +48,32 @@ names Livery knows: `{dns, Bin}`, `{email, Bin}`, `{uri, Bin}` and
     subject => [{binary(), binary()}],
     san => [san()]
 }.
+
+-doc """
+Refuse raw TLS options that would undo `verify => verify_peer`.
+
+With `verify_peer`, Livery decides how clients are authenticated: it asks
+for a certificate, requires one, and checks it against `cacerts`. A key
+in `ssl_opts` (or `quic_opts` on HTTP/3) that decides the same thing,
+`verify`, `fail_if_no_peer_cert`, `cacerts`, `cacertfile`,
+`partial_chain`, `verify_fun` or `require_client_cert`, would silently
+replace that policy, since raw options are applied last. The listener
+refuses to start instead and names them. `crl_check` and `crl_cache`
+only narrow the check and stay allowed. Without `verify_peer`, the raw
+options are passed through as before.
+""".
+-spec check_listen_opts(map()) -> ok | {error, {conflicting_tls_opts, [atom()]}}.
+check_listen_opts(#{verify := verify_peer} = Opts) ->
+    Raw = keys(maps:get(ssl_opts, Opts, [])) ++ maps:keys(maps:get(quic_opts, Opts, #{})),
+    case lists:usort([K || K <- Raw, lists:member(K, ?AUTH_KEYS)]) of
+        [] -> ok;
+        Conflicts -> {error, {conflicting_tls_opts, Conflicts}}
+    end;
+check_listen_opts(_Opts) ->
+    ok.
+
+keys(SslOpts) ->
+    [element(1, O) || O <- SslOpts, is_tuple(O)].
 
 -doc """
 Build the `tls` map from what the wire library's `peercert/1`

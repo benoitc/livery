@@ -206,8 +206,9 @@ Full guides, tutorials, and the generated API reference live at
 under [`docs/`](docs/README.md): start with the
 [Quickstart](docs/quickstart.md), then the
 [tutorials](docs/README.md#tutorials) and
-[how-to guides](docs/README.md#how-to-guides). For contributors, see
-[AGENTS.md](AGENTS.md).
+[how-to guides](docs/README.md#how-to-guides). To contribute, read
+[CONTRIBUTING.md](CONTRIBUTING.md); to report a vulnerability, see
+[SECURITY.md](SECURITY.md).
 
 ## Sponsors
 

@@ -313,3 +313,23 @@ bearer_optional_still_rejects_bad_token_test() ->
 
 future() ->
     os:system_time(second) + 3600.
+
+%%====================================================================
+%% livery_auth:verify/2 - malformed JOSE structure
+%%====================================================================
+
+%% A header or claims set that is valid JSON but not an object is
+%% rejected like any other malformed token, not crashed on.
+non_object_header_rejected_test() ->
+    {_Key, Jwk} = livery_auth_jwt:rsa_keypair(),
+    Token = raw_token(<<"[]">>, <<"{\"sub\":\"alice\"}">>),
+    ?assertEqual({error, invalid_json}, livery_auth:verify(Token, #{keys => [Jwk]})).
+
+non_object_claims_rejected_test() ->
+    {_Key, Jwk} = livery_auth_jwt:rsa_keypair(),
+    Token = raw_token(<<"{\"alg\":\"RS256\",\"kid\":\"rsa-1\"}">>, <<"42">>),
+    ?assertEqual({error, invalid_json}, livery_auth:verify(Token, #{keys => [Jwk]})).
+
+raw_token(Header, Claims) ->
+    B64 = fun(B) -> base64:encode(B, #{mode => urlsafe, padding => false}) end,
+    <<(B64(Header))/binary, ".", (B64(Claims))/binary, ".", (B64(<<"sig">>))/binary>>.

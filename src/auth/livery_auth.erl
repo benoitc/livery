@@ -292,8 +292,10 @@ audience_ok(_, _) ->
 decode_json(B64) ->
     case b64url(B64) of
         {ok, Bin} ->
-            try
-                {ok, json:decode(Bin)}
+            %% A JOSE header and a claims set are both JSON objects.
+            try json:decode(Bin) of
+                #{} = Map -> {ok, Map};
+                _ -> error
             catch
                 _:_ -> error
             end;

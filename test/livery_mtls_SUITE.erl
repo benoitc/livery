@@ -23,11 +23,14 @@
 ]).
 -export([
     client_cert_on_request/1,
+    certificate_bound_token/1,
     certless_client_refused/1,
     no_client_auth/1
 ]).
 
--define(CASES, [client_cert_on_request, certless_client_refused, no_client_auth]).
+-define(CASES, [
+    client_cert_on_request, certless_client_refused, no_client_auth, certificate_bound_token
+]).
 
 all() ->
     [{group, h1}, {group, h2}, {group, h1h2}, {group, h3}].
@@ -64,7 +67,8 @@ init_per_suite(Config) ->
             %% checked against.
             cacerts => proplists:get_value(cacerts, Server)
         }},
-        {client, Client}
+        {client, Client},
+        {issuer, livery_auth_jwt:rsa_keypair(<<"iss">>)}
         | Config
     ].
 
@@ -78,10 +82,16 @@ end_per_group(_Group, _Config) ->
     ok.
 
 init_per_testcase(TC, Config) ->
+    Mtls = #{verify => verify_peer, cacerts => maps:get(cacerts, ?config(server, Config))},
     Auth =
         case TC of
-            no_client_auth -> #{};
-            _ -> #{verify => verify_peer, cacerts => maps:get(cacerts, ?config(server, Config))}
+            no_client_auth ->
+                #{};
+            certificate_bound_token ->
+                {_Key, IssJwk} = ?config(issuer, Config),
+                Mtls#{stack => [{livery_auth_bearer, #{keys => [IssJwk]}}]};
+            _ ->
+                Mtls
         end,
     {Mod, Ref, Port} = start(?config(proto, Config), ?config(server, Config), Auth),
     [{listener, {Mod, Ref}}, {port, Port} | Config].
@@ -105,6 +115,26 @@ client_cert_on_request(Config) ->
         maps:get(san, Tls)
     ).
 
+%% RFC 8705 3: a token bound to the client certificate is accepted only
+%% from that client.
+certificate_bound_token(Config) ->
+    ClientCert = proplists:get_value(cert, ?config(client, Config)),
+    {IssKey, _} = ?config(issuer, Config),
+    Bound = fun(Der) ->
+        X5t = base64:encode(crypto:hash(sha256, Der), #{mode => urlsafe, padding => false}),
+        Token = livery_auth_jwt:mint(IssKey, #{}, #{
+            <<"sub">> => <<"alice">>,
+            <<"exp">> => os:system_time(second) + 60,
+            <<"cnf">> => #{<<"x5t#S256">> => X5t}
+        }),
+        [{<<"authorization">>, <<"Bearer ", Token/binary>>}]
+    end,
+    ?assertMatch({ok, #{verified := true}}, fetch(Config, with_cert, Bound(ClientCert))),
+    ?assertMatch(
+        {ok, {refused, <<"client certificate does not match the token">>}},
+        fetch(Config, with_cert, Bound(<<"another certificate">>))
+    ).
+
 certless_client_refused(Config) ->
     ?assertMatch({error, _}, fetch(Config, without_cert)).
 
@@ -122,25 +152,31 @@ handler() ->
     end.
 
 start(h3, Server, Auth) ->
-    Opts = maps:merge(Auth, #{
-        port => 0,
-        cert => maps:get(cert, Server),
-        key => maps:get(key, Server),
-        stack => [],
-        handler => handler()
-    }),
+    Opts = maps:merge(
+        #{
+            port => 0,
+            cert => maps:get(cert, Server),
+            key => maps:get(key, Server),
+            stack => [],
+            handler => handler()
+        },
+        Auth
+    ),
     {ok, Name} = livery_h3:start(Opts),
     {ok, Port} = quic:get_server_port(Name),
     {livery_h3, Name, Port};
 start(Proto, Server, Auth) ->
-    Opts = maps:merge(Auth, #{
-        port => 0,
-        transport => ssl,
-        cert => maps:get(cert_file, Server),
-        key => maps:get(key_file, Server),
-        stack => [],
-        handler => handler()
-    }),
+    Opts = maps:merge(
+        #{
+            port => 0,
+            transport => ssl,
+            cert => maps:get(cert_file, Server),
+            key => maps:get(key_file, Server),
+            stack => [],
+            handler => handler()
+        },
+        Auth
+    ),
     case Proto of
         h1 ->
             {ok, Ref} = livery_h1:start(Opts),
@@ -162,6 +198,9 @@ start(Proto, Server, Auth) ->
 %% TLS 1.3 the client may finish its handshake before the server's alert
 %% arrives, so the refusal can show up on the first read).
 fetch(Config, Which) ->
+    fetch(Config, Which, []).
+
+fetch(Config, Which, Extra) ->
     Port = ?config(port, Config),
     ClientOpts =
         case Which of
@@ -169,24 +208,27 @@ fetch(Config, Which) ->
             without_cert -> []
         end,
     case ?config(proto, Config) of
-        h1 -> fetch_h1(Port, ClientOpts);
-        h2 -> fetch_h2(Port, ClientOpts);
-        h1h2 -> fetch_h1(Port, ClientOpts);
-        h3 -> fetch_h3(Port, ClientOpts)
+        h1 -> fetch_h1(Port, ClientOpts, Extra);
+        h2 -> fetch_h2(Port, ClientOpts, Extra);
+        h1h2 -> fetch_h1(Port, ClientOpts, Extra);
+        h3 -> fetch_h3(Port, ClientOpts, Extra)
     end.
 
 ssl_client_opts(ClientOpts) ->
     [{verify, verify_none}, {server_name_indication, "localhost"}] ++
         [{K, V} || {K, V} <- ClientOpts, K =:= cert orelse K =:= key].
 
-fetch_h1(Port, ClientOpts) ->
+fetch_h1(Port, ClientOpts, Extra) ->
     SslOpts = [binary, {active, false} | ssl_client_opts(ClientOpts)],
     case ssl:connect("127.0.0.1", Port, SslOpts, 5000) of
         {ok, Socket} ->
             try
-                _ = ssl:send(
-                    Socket, <<"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n">>
-                ),
+                Lines = [[K, <<": ">>, V, <<"\r\n">>] || {K, V} <- Extra],
+                _ = ssl:send(Socket, [
+                    <<"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n">>,
+                    Lines,
+                    <<"\r\n">>
+                ]),
                 case recv_all(Socket, <<>>) of
                     {ok, Response} -> body_h1(Response);
                     {error, _} = Error -> Error
@@ -206,16 +248,24 @@ recv_all(Socket, Acc) ->
     end.
 
 body_h1(Response) ->
-    [Head, Body] = binary:split(Response, <<"\r\n\r\n">>),
-    <<"HTTP/1.1 200", _/binary>> = Head,
-    {ok, binary_to_term(Body)}.
+    [_Head, Body] = binary:split(Response, <<"\r\n\r\n">>),
+    {ok, decode(Body)}.
 
-fetch_h2(Port, ClientOpts) ->
+%% The handler answers with a term; a middleware that refuses the
+%% request answers with text.
+decode(Body) ->
+    try
+        binary_to_term(Body)
+    catch
+        error:badarg -> {refused, Body}
+    end.
+
+fetch_h2(Port, ClientOpts, Extra) ->
     process_flag(trap_exit, true),
     Opts = #{transport => ssl, ssl_opts => ssl_client_opts(ClientOpts)},
     case catch h2:connect("127.0.0.1", Port, Opts) of
         {ok, Conn} ->
-            try h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"localhost">>}]) of
+            try h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"localhost">>} | Extra]) of
                 {ok, StreamId} -> collect_h2(Conn, StreamId, <<>>);
                 {error, _} = Error -> Error
             catch
@@ -232,7 +282,7 @@ fetch_h2(Port, ClientOpts) ->
 collect_h2(Conn, StreamId, Acc) ->
     receive
         {h2, Conn, {data, StreamId, Chunk, true}} ->
-            {ok, binary_to_term(<<Acc/binary, Chunk/binary>>)};
+            {ok, decode(<<Acc/binary, Chunk/binary>>)};
         {h2, Conn, {data, StreamId, Chunk, false}} ->
             collect_h2(Conn, StreamId, <<Acc/binary, Chunk/binary>>);
         {h2, Conn, {closed, Reason}} ->
@@ -247,7 +297,7 @@ collect_h2(Conn, StreamId, Acc) ->
         {error, timeout}
     end.
 
-fetch_h3(Port, ClientOpts) ->
+fetch_h3(Port, ClientOpts, Extra) ->
     %% The connection is linked to the caller. A refused client can finish
     %% its handshake first, and the connection then exits while draining.
     process_flag(trap_exit, true),
@@ -271,6 +321,7 @@ fetch_h3(Port, ClientOpts) ->
                     {<<":path">>, <<"/">>},
                     {<<":scheme">>, <<"https">>},
                     {<<":authority">>, <<"localhost">>}
+                    | Extra
                 ],
                 case quic_h3:request(Conn, Headers, #{end_stream => true}) of
                     {ok, StreamId} -> collect_h3(Conn, StreamId, <<>>);
@@ -288,7 +339,7 @@ fetch_h3(Port, ClientOpts) ->
 collect_h3(Conn, StreamId, Acc) ->
     receive
         {quic_h3, Conn, {data, StreamId, Chunk, true}} ->
-            {ok, binary_to_term(<<Acc/binary, Chunk/binary>>)};
+            {ok, decode(<<Acc/binary, Chunk/binary>>)};
         {quic_h3, Conn, {data, StreamId, Chunk, false}} ->
             collect_h3(Conn, StreamId, <<Acc/binary, Chunk/binary>>);
         {quic_h3, Conn, {closed, Reason}} ->

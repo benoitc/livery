@@ -178,7 +178,13 @@ profile(Opts) ->
 %%====================================================================
 
 with_decoded(HeaderB64, PayloadB64, SigB64, SigningInput, Opts) ->
-    case {decode_json(HeaderB64), decode_json(PayloadB64), livery_auth_jose:b64url(SigB64)} of
+    case
+        {
+            livery_auth_jose:decode_json(HeaderB64),
+            livery_auth_jose:decode_json(PayloadB64),
+            livery_auth_jose:b64url(SigB64)
+        }
+    of
         {{ok, Header}, {ok, Claims}, {ok, Sig}} ->
             verify_decoded(Header, Claims, Sig, SigningInput, Opts);
         _ ->
@@ -317,22 +323,3 @@ granted_scopes(Claims) ->
 scopes(S) when is_binary(S) -> binary:split(S, <<" ">>, [global, trim_all]);
 scopes(L) when is_list(L) -> [V || V <- L, is_binary(V)];
 scopes(_) -> [].
-
-%%====================================================================
-%% base64url + JSON
-%%====================================================================
-
--spec decode_json(binary()) -> {ok, map()} | error.
-decode_json(B64) ->
-    case livery_auth_jose:b64url(B64) of
-        {ok, Bin} ->
-            %% A JOSE header and a claims set are both JSON objects.
-            try json:decode(Bin) of
-                #{} = Map -> {ok, Map};
-                _ -> error
-            catch
-                _:_ -> error
-            end;
-        error ->
-            error
-    end.

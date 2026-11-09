@@ -21,7 +21,7 @@ because most issuers still send it. See AGENTS.md, Known deviations.
 
 -include_lib("public_key/include/public_key.hrl").
 
--export([algorithms/0, verify/6, b64url/1]).
+-export([algorithms/0, verify/6, b64url/1, decode_json/1]).
 
 -type spec() ::
     {rsa, atom(), pkcs1 | pss}
@@ -61,6 +61,21 @@ verify(Alg, Kid, SigningInput, Sig, Keys, Allowed) ->
                 [] -> {error, no_matching_key};
                 Candidates -> try_keys(Spec, SigningInput, Sig, Candidates)
             end
+    end.
+
+-doc "Decode a base64url JOSE part that must hold a JSON object.".
+-spec decode_json(binary()) -> {ok, map()} | error.
+decode_json(B64) ->
+    case b64url(B64) of
+        {ok, Bin} ->
+            try json:decode(Bin) of
+                #{} = Map -> {ok, Map};
+                _ -> error
+            catch
+                _:_ -> error
+            end;
+        error ->
+            error
     end.
 
 -doc "Decode unpadded base64url.".

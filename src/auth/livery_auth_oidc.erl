@@ -8,6 +8,11 @@ decoded map (notably `jwks_uri`, `issuer`, `authorization_endpoint`,
 `token_endpoint`). Feed the `jwks_uri` to `livery_auth_jwks:keys/1`
 to get verification keys.
 
+The document's `issuer` must be exactly the issuer you passed, as
+OpenID Connect Discovery 1.0 section 4.3 requires. Otherwise you get
+`{error, issuer_mismatch}`, or `{error, invalid_discovery}` when it
+names none.
+
 The HTTP fetch is pluggable via `fetch => fun((Url) -> {ok, Body}
 | {error, _})`; the default uses `livery_auth_jwks:default_fetch/1`
 (`hackney`).
@@ -38,9 +43,12 @@ discover(Issuer, Opts) ->
     Url = well_known_url(Issuer),
     case Fetch(Url) of
         {ok, Body} ->
+            %% OpenID Connect Discovery 1.0 section 4.3: the document must
+            %% name the issuer it was fetched for, or a provider could hand
+            %% out another one's keys and issuer.
             try json:decode(Body) of
-                #{<<"issuer">> := _} = Config -> {ok, Config};
-                #{} = Config -> {ok, Config};
+                #{<<"issuer">> := Issuer} = Config -> {ok, Config};
+                #{<<"issuer">> := _} -> {error, issuer_mismatch};
                 _ -> {error, invalid_discovery}
             catch
                 _:_ -> {error, invalid_json}

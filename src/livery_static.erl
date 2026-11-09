@@ -23,7 +23,9 @@ or `false`), `cache_control` (binary | directive list | `undefined`),
 
 Security: the sub-path is percent-decoded and then confined - any `..`
 segment, control byte, or escape is rejected - and only regular files
-are served (directories and symlinks yield `404`).
+are served. A symlink anywhere below the root, and a directory without
+an index, yield `404`. The checks run before the file is opened, so the
+root must not be writable by anyone you do not trust.
 """.
 
 -include_lib("kernel/include/file.hrl").
@@ -158,9 +160,26 @@ strip_leading_slash(Path) -> Path.
 -spec resolve(string(), binary(), binary() | false) ->
     {ok, string(), non_neg_integer(), integer()} | error.
 resolve(Root, Sub, Index) ->
-    case confine(Root, Sub) of
+    case confine(Sub) of
         error -> error;
-        {ok, Path} -> stat(Path, Index)
+        {ok, Segments} -> walk(Root, Segments, Index)
+    end.
+
+%% Check every component below the root, not only the last one: the OS
+%% follows a symlink anywhere in a path, so a link to a directory outside
+%% the root would otherwise be served through. The root itself may be a
+%% link.
+-spec walk(string(), [string()], binary() | false) ->
+    {ok, string(), non_neg_integer(), integer()} | error.
+walk(Dir, [], Index) ->
+    stat_index(Dir, Index);
+walk(Dir, [Last], Index) ->
+    stat(filename:join(Dir, Last), Index);
+walk(Dir, [Segment | Rest], Index) ->
+    Path = filename:join(Dir, Segment),
+    case file:read_link_info(Path) of
+        {ok, #file_info{type = directory}} -> walk(Path, Rest, Index);
+        _NotADirectory -> error
     end.
 
 -spec stat(string(), binary() | false) ->
@@ -183,16 +202,11 @@ stat_index(Path, Index) when is_binary(Index) ->
     stat(filename:join(Path, binary_to_list(Index)), false).
 
 %% Percent-decode, then split and reject any unsafe segment.
--spec confine(string(), binary()) -> {ok, string()} | error.
-confine(Root, Sub) ->
+-spec confine(binary()) -> {ok, [string()]} | error.
+confine(Sub) ->
     case percent_decode(Sub) of
-        error ->
-            error;
-        {ok, Decoded} ->
-            case clean_segments(binary:split(Decoded, <<"/">>, [global]), []) of
-                {ok, Segments} -> {ok, filename:join([Root | Segments])};
-                error -> error
-            end
+        error -> error;
+        {ok, Decoded} -> clean_segments(binary:split(Decoded, <<"/">>, [global]), [])
     end.
 
 -spec clean_segments([binary()], [string()]) -> {ok, [string()]} | error.

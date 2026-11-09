@@ -34,6 +34,29 @@ discover_parses_config_test() ->
     ),
     ?assertEqual(<<"https://i.example/jwks">>, maps:get(<<"jwks_uri">>, Cfg)).
 
+discover(Issuer, Doc) ->
+    Fetch = fun(_) -> {ok, iolist_to_binary(json:encode(Doc))} end,
+    livery_auth_oidc:discover(Issuer, #{fetch => Fetch}).
+
+%% Discovery 1.0 section 4.3: a document naming another issuer, or none,
+%% must not be used.
+discover_rejects_other_issuer_test() ->
+    Doc = #{
+        <<"issuer">> => <<"https://evil.example">>,
+        <<"jwks_uri">> => <<"https://evil.example/jwks">>
+    },
+    ?assertEqual({error, issuer_mismatch}, discover(<<"https://i.example">>, Doc)).
+
+discover_rejects_missing_issuer_test() ->
+    Doc = #{<<"jwks_uri">> => <<"https://evil.example/jwks">>},
+    ?assertEqual({error, invalid_discovery}, discover(<<"https://i.example">>, Doc)).
+
+%% The match is exact: the trailing slash is part of the issuer.
+discover_keeps_trailing_slash_issuer_test() ->
+    Doc = #{<<"issuer">> => <<"https://i.example/">>},
+    ?assertMatch({ok, _}, discover(<<"https://i.example/">>, Doc)),
+    ?assertEqual({error, issuer_mismatch}, discover(<<"https://i.example">>, Doc)).
+
 discover_propagates_fetch_error_test() ->
     Fetch = fun(_) -> {error, nxdomain} end,
     ?assertEqual(

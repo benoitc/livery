@@ -15,8 +15,13 @@ The jar keeps no cookies of its own; it reads and writes them through a
 an in-memory per-jar store shared across the request processes that run
 the client.
 
-This is a subset: no public suffix list, no third-party-cookie policy,
-no persistence. `SameSite` is parsed but not enforced.
+A cookie whose `Domain` the responding host does not domain-match is
+dropped, so one site cannot set cookies for another. There is no public
+suffix list: a single-label `Domain` such as `com` is refused, but a
+multi-label suffix such as `co.uk` is accepted from a host under it.
+
+This is a subset: no third-party-cookie policy, no persistence.
+`SameSite` is parsed but not enforced.
 """.
 
 -export([jar/0, jar/1, call/3]).
@@ -247,8 +252,13 @@ parse_attr(Part) ->
     end.
 
 build_cookie(Name, Value, Attrs, Host, ReqPath) ->
+    case domain_attr(attr(<<"domain">>, Attrs), Host) of
+        ignore -> ignore;
+        {Domain, HostOnly} -> build_cookie(Name, Value, Attrs, ReqPath, Domain, HostOnly)
+    end.
+
+build_cookie(Name, Value, Attrs, ReqPath, Domain, HostOnly) ->
     Now = erlang:system_time(second),
-    {Domain, HostOnly} = domain_attr(attr(<<"domain">>, Attrs), Host),
     #{
         name => Name,
         value => Value,
@@ -270,17 +280,30 @@ attr(Key, Attrs) ->
 
 has_attr(Key, Attrs) -> lists:keymember(Key, 1, Attrs).
 
-%% No Domain => host-only, scoped to the exact request host. With a Domain,
-%% strip a leading dot; an IP host ignores any Domain that is not itself.
+%% No Domain => host-only, scoped to the exact request host. A Domain the
+%% request host does not domain-match is ignored with its cookie (RFC 6265
+%% 5.3 step 6), so a host cannot set cookies for an unrelated one. An IP
+%% host only matches itself, and a single-label Domain such as `com' is
+%% refused, since without a public suffix list it would cover every site
+%% under that label.
 domain_attr(undefined, Host) ->
     {Host, true};
 domain_attr(<<>>, Host) ->
     {Host, true};
 domain_attr(Domain0, Host) ->
-    Domain = string:lowercase(strip_dot(Domain0)),
-    case is_ip(Host) andalso Domain =/= Host of
-        true -> {Host, true};
-        false -> {Domain, false}
+    case string:lowercase(strip_dot(Domain0)) of
+        Host -> {Host, is_ip(Host)};
+        Domain -> sub_domain_attr(Domain, Host)
+    end.
+
+sub_domain_attr(Domain, Host) ->
+    case
+        not is_ip(Host) andalso
+            binary:match(Domain, <<".">>) =/= nomatch andalso
+            suffix_match(Host, Domain)
+    of
+        true -> {Domain, false};
+        false -> ignore
     end.
 
 strip_dot(<<".", Rest/binary>>) -> Rest;

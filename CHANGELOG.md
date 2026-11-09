@@ -23,6 +23,17 @@ and hackney 4.10.0. Erlang/OTP 27 or later is required, as before.
 
 ### Security
 
+- `livery_static` could serve files outside its root through a symbolic
+  link to a directory inside it. Every part of the path below the root is
+  now checked, and a link anywhere in it is answered with 404.
+- The client cookie jar stored a cookie for any domain a response named,
+  and sent it to that domain later. A cookie is now kept only for a
+  domain the responding host belongs to (RFC 6265 section 5.3), and a
+  single-label domain such as `com` is refused.
+- `livery_auth_oidc:discover/1,2` accepted a discovery document naming a
+  different issuer, or none, so an application could take another
+  provider's keys and issuer for its own. The issuer must now match the
+  one requested exactly (OpenID Connect Discovery 1.0 section 4.3).
 - HTTP/2 servers now close connections that abuse stream resets
   (MadeYouReset, CVE-2025-8671) or flood SETTINGS frames
   (CVE-2019-9515). Either let one client tie up the server.

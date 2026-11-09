@@ -10,6 +10,9 @@ static_test_() ->
             {"404 for a missing file", fun() -> missing(Ctx) end},
             {"rejects literal traversal", fun() -> traversal_literal(Ctx) end},
             {"rejects encoded traversal", fun() -> traversal_encoded(Ctx) end},
+            {"rejects a symlinked directory", fun() -> symlinked_dir(Ctx) end},
+            {"rejects a symlinked file", fun() -> symlinked_file(Ctx) end},
+            {"serves a real sub-directory", fun() -> sub_directory(Ctx) end},
             {"MIME by extension", fun() -> mime(Ctx) end},
             {"conditional GET 304", fun() -> conditional(Ctx) end},
             {"directory index", fun() -> index(Ctx) end},
@@ -38,6 +41,12 @@ setup() ->
     write(Root, "index.html", <<"<h1>home</h1>">>),
     SecretName = "secret.txt",
     ok = file:write_file(filename:join(Base, SecretName), <<"TOPSECRET">>),
+    %% Links inside the root that point out of it: to the parent directory,
+    %% and straight at the secret file.
+    ok = file:make_symlink(Base, filename:join(Root, "escape")),
+    ok = file:make_symlink(filename:join(Base, SecretName), filename:join(Root, "leak.txt")),
+    ok = filelib:ensure_path(filename:join(Root, "css")),
+    write(filename:join(Root, "css"), "site.css", <<"a{}">>),
     #{base => Base, root => Root, secret => SecretName}.
 
 cleanup(#{base := Base}) ->
@@ -77,6 +86,19 @@ traversal_encoded(#{root := Root, secret := Secret}) ->
     Cap = run(handler(Root), <<"..%2f", (list_to_binary(Secret))/binary>>),
     ?assertEqual(404, status(Cap)),
     ?assertNotEqual(<<"TOPSECRET">>, body(Cap)).
+
+symlinked_dir(#{root := Root, secret := Secret}) ->
+    Cap = run(handler(Root), <<"escape/", (list_to_binary(Secret))/binary>>),
+    ?assertEqual(404, status(Cap)),
+    ?assertNotEqual(<<"TOPSECRET">>, body(Cap)).
+
+symlinked_file(#{root := Root}) ->
+    Cap = run(handler(Root), <<"leak.txt">>),
+    ?assertEqual(404, status(Cap)),
+    ?assertNotEqual(<<"TOPSECRET">>, body(Cap)).
+
+sub_directory(#{root := Root}) ->
+    ?assertEqual(200, status(run(handler(Root), <<"css/site.css">>))).
 
 mime(#{root := Root}) ->
     H = handler(Root),

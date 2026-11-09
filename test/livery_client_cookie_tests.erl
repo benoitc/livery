@@ -69,6 +69,38 @@ domain_subdomain_test() ->
     ?assertEqual(<<"a=1">>, sent(J, <<"http://sub.example.com/">>)),
     ?assertEqual(undefined, sent(J, <<"http://other.com/">>)).
 
+%% RFC 6265 5.3 step 6: a host may only set cookies for a domain it
+%% belongs to. A foreign Domain drops the cookie instead of storing it.
+foreign_domain_ignored_test() ->
+    J = new_jar(),
+    set(J, <<"http://attacker.test/">>, [<<"sid=secret; Domain=victim.test">>]),
+    ?assertEqual(undefined, sent(J, <<"http://victim.test/">>)),
+    ?assertEqual(undefined, sent(J, <<"http://attacker.test/">>)),
+    ?assertEqual(0, count(J)).
+
+%% A sub-domain may set a cookie for its parent, not for a sibling.
+sibling_domain_ignored_test() ->
+    J = new_jar(),
+    set(J, <<"http://a.example.com/">>, [
+        <<"p=1; Domain=example.com">>, <<"s=1; Domain=b.example.com">>
+    ]),
+    ?assertEqual(<<"p=1">>, sent(J, <<"http://b.example.com/">>)),
+    ?assertEqual(1, count(J)).
+
+%% A single-label Domain would cover every site under it.
+single_label_domain_ignored_test() ->
+    J = new_jar(),
+    set(J, <<"http://shop.example.com/">>, [<<"t=1; Domain=com">>]),
+    ?assertEqual(undefined, sent(J, <<"http://victim.com/">>)),
+    ?assertEqual(0, count(J)).
+
+%% An IP host only sets cookies for itself.
+ip_host_foreign_domain_ignored_test() ->
+    J = new_jar(),
+    set(J, <<"http://127.0.0.1/">>, [<<"a=1; Domain=example.com">>, <<"b=1; Domain=127.0.0.1">>]),
+    ?assertEqual(<<"b=1">>, sent(J, <<"http://127.0.0.1/">>)),
+    ?assertEqual(undefined, sent(J, <<"http://example.com/">>)).
+
 secure_scheme_test() ->
     J = new_jar(),
     set(J, <<"https://h.test/">>, [<<"s=1; Secure">>]),

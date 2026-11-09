@@ -21,7 +21,7 @@ because most issuers still send it. See AGENTS.md, Known deviations.
 
 -include_lib("public_key/include/public_key.hrl").
 
--export([algorithms/0, verify/6, b64url/1, decode_json/1]).
+-export([algorithms/0, verify/6, sign/3, b64url/1, decode_json/1]).
 
 -type spec() ::
     {rsa, atom(), pkcs1 | pss}
@@ -62,6 +62,19 @@ verify(Alg, Kid, SigningInput, Sig, Keys, Allowed) ->
                 Candidates -> try_keys(Spec, SigningInput, Sig, Candidates)
             end
     end.
+
+-doc """
+Sign `Claims` into a compact JWS with `{Alg, PrivateKey}`. `Header` is
+merged over `#{alg => Alg}`. `PrivateKey` is an OTP private key record:
+`#'RSAPrivateKey'{}` for RS and PS, `#'ECPrivateKey'{}` for ES, Ed25519
+and Ed448.
+""".
+-spec sign({binary(), term()}, map(), map()) -> binary().
+sign({Alg, _} = Key, Header, Claims) ->
+    H64 = b64(iolist_to_binary(json:encode(maps:merge(#{<<"alg">> => Alg}, Header)))),
+    P64 = b64(iolist_to_binary(json:encode(Claims))),
+    Input = <<H64/binary, ".", P64/binary>>,
+    <<Input/binary, ".", (b64(sign_input(spec(Alg), Key, Input)))/binary>>.
 
 -doc "Decode a base64url JOSE part that must hold a JSON object.".
 -spec decode_json(binary()) -> {ok, map()} | error.
@@ -233,6 +246,22 @@ ed_key(#{<<"crv">> := Crv, <<"x">> := X64}) ->
     end;
 ed_key(_) ->
     error.
+
+%%====================================================================
+%% Signing
+%%====================================================================
+
+sign_input({rsa, Hash, Padding}, {_, Priv}, Input) ->
+    public_key:sign(Input, Hash, Priv, rsa_opts(Padding, Hash));
+sign_input({ec, Hash, _Crv, Size}, {_, Priv}, Input) ->
+    Der = public_key:sign(Input, Hash, Priv),
+    #'ECDSA-Sig-Value'{r = R, s = S} = public_key:der_decode('ECDSA-Sig-Value', Der),
+    <<R:Size/unit:8, S:Size/unit:8>>;
+sign_input({okp, _}, {_, Priv}, Input) ->
+    public_key:sign(Input, none, Priv).
+
+b64(Bin) ->
+    base64:encode(Bin, #{mode => urlsafe, padding => false}).
 
 %% JWS ECDSA signatures are the raw r||s concatenation (RFC 7518 3.4);
 %% `public_key:verify' wants a DER ECDSA-Sig-Value.

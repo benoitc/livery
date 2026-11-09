@@ -95,42 +95,9 @@ mint({Alg, _} = Key, HeaderExtra, Claims) ->
     Header = maps:merge(#{<<"alg">> => Alg, <<"typ">> => <<"JWT">>}, HeaderExtra),
     mint_raw(Key, Header, Claims).
 
-%% @doc Sign exactly `Header' and `Claims'.
+%% @doc Sign `Header' and `Claims' with `livery_auth_jose:sign/3'.
 mint_raw(Key, Header, Claims) ->
-    H64 = b64url(iolist_to_binary(json:encode(Header))),
-    P64 = b64url(iolist_to_binary(json:encode(Claims))),
-    SigningInput = <<H64/binary, ".", P64/binary>>,
-    <<SigningInput/binary, ".", (b64url(sign(Key, SigningInput)))/binary>>.
-
-%%====================================================================
-%% Signing
-%%====================================================================
-
-sign({<<"RS", Bits/binary>>, Priv}, Input) ->
-    public_key:sign(Input, hash(Bits), Priv);
-sign({<<"PS", Bits/binary>>, Priv}, Input) ->
-    Hash = hash(Bits),
-    public_key:sign(Input, Hash, Priv, [
-        {rsa_padding, rsa_pkcs1_pss_padding},
-        {rsa_pss_saltlen, binary_to_integer(Bits) div 8},
-        {rsa_mgf1_md, Hash}
-    ]);
-sign({<<"ES", Bits/binary>> = Alg, Priv}, Input) ->
-    {_, _, Size} = ec_curve(Alg),
-    DerSig = public_key:sign(Input, hash(Bits), Priv),
-    #'ECDSA-Sig-Value'{r = R, s = S} = public_key:der_decode('ECDSA-Sig-Value', DerSig),
-    <<
-        (pad(binary:encode_unsigned(R), Size))/binary, (pad(binary:encode_unsigned(S), Size))/binary
-    >>;
-sign({_EdAlg, Priv}, Input) ->
-    public_key:sign(Input, none, Priv).
-
-hash(<<"256">>) -> sha256;
-hash(<<"384">>) -> sha384;
-hash(<<"512">>) -> sha512.
-
-pad(B, Size) when byte_size(B) =:= Size -> B;
-pad(B, Size) when byte_size(B) < Size -> <<0:((Size - byte_size(B)) * 8), B/binary>>.
+    livery_auth_jose:sign(Key, Header, Claims).
 
 b64url(Bin) ->
     base64:encode(Bin, #{mode => urlsafe, padding => false}).

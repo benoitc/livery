@@ -33,6 +33,7 @@ The transport is a `livery_client_adapter`; the default,
 -export([stream_next/1, stop_stream/1]).
 -export([timeout/1, concurrency/1, retry/1, circuit_breaker/1, balance/1]).
 -export([cookie_jar/0, cookie_jar/1]).
+-export([oauth/1]).
 -export([add_endpoint/2, remove_endpoint/2]).
 -export([before/1, after_response/1, wrap/1]).
 -export([rebase/2]).
@@ -263,6 +264,14 @@ the client's request processes. `Opts`: `max_cookies` (default 3000),
 """.
 -spec cookie_jar() -> entry().
 cookie_jar() -> {livery_client_cookie, livery_client_cookie:jar()}.
+
+-doc """
+Add an OAuth 2.0 client-credentials token to every request, fetched from
+`token_endpoint` and cached until shortly before it expires. See
+`livery_client_oauth`.
+""".
+-spec oauth(map()) -> entry().
+oauth(Opts) -> {livery_client_oauth, Opts}.
 
 -spec cookie_jar(map()) -> entry().
 cookie_jar(Opts) -> {livery_client_cookie, livery_client_cookie:jar(Opts)}.

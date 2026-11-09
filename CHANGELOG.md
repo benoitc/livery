@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `livery_client:oauth/1` adds an OAuth client-credentials token to
+  outbound requests. Tokens are cached until shortly before they expire,
+  a burst of requests shares one new token, and a revoked token is
+  replaced once. Clients can authenticate with a secret, a signed
+  assertion (RFC 7523 as updated by RFC 10070) or mutual TLS.
+- `livery_auth_login` signs users in with OpenID Connect: authorization
+  code with PKCE, `state` and `nonce`, the RFC 9207 issuer check and full
+  ID token validation, ending in a signed session cookie.
+- `livery_auth_token:request/3` makes token requests directly.
 - Sender-constrained access tokens. A token bound to a client
   certificate (RFC 8705) or to a DPoP key (RFC 9449) is now accepted
   only from that client, and `dpop => true` lets clients send DPoP

@@ -45,6 +45,49 @@ Authoritative behaviour is the test suites under `test/` (the
 parity SUITE diffs externally observable behaviour across all four
 adapters) and the module docs.
 
+## Specification issues are bugs, not security issues
+
+A report is a specification issue when the fix is to make Livery do what a
+spec it implements says (see [Specifications](#specifications)), or to make a
+limit one of its options defines hold:
+
+- a request accepted, rejected or answered differently from the spec:
+  status, fields, `Vary`, conditional requests, ranges, content coding,
+  multipart, SSE framing, cookie parsing;
+- a limit not holding: `max_body`, `livery_body_limit`, `livery_timeout`,
+  `livery_ratelimit`, `livery_concurrency`, the H1 slow-client guards;
+- behaviour that differs across adapters where the parity suite says it
+  should not.
+
+This holds even when the report calls it denial of service, resource
+exhaustion or a remote crash. Treat it as a bug:
+
+- fix it in a public pull request, with a public issue if one is needed;
+- list it under **Fixed** in the CHANGELOG, in plain English, citing the spec
+  section or the option;
+- do not open a GitHub Security Advisory, request a CVE, embargo the fix,
+  give it a severity, or describe how to attack it;
+- when it arrived as an advisory, close the advisory as not a vulnerability
+  and link the pull request that fixes it.
+
+A problem in framing, header compression, flow control or the TLS handshake
+is not Livery's: it belongs to the wire library that does it (see
+[CONTRIBUTING.md](CONTRIBUTING.md#where-to-report)) and goes upstream under
+that project's policy. Do not work around it in an adapter.
+
+Only a problem that lets someone past what the configuration protects goes
+through [SECURITY.md](SECURITY.md): code execution, or request data turned
+into atoms or terms; a request accepted without the authentication or
+authorization the configuration asks for (bearer and JWT checks, token
+introspection, session cookies, OIDC and JWKS, client certificates); one
+request's, session's or connection's data reaching another client;
+`livery_static` serving outside its root; CORS granting an origin the
+configuration does not allow; the client sending credentials or cookies to
+another host; Livery weakening TLS below what the configuration asks for.
+Authentication stays a security issue even where a spec describes the
+check. If unsure, ask the maintainer before treating anything as a security
+issue.
+
 ## Required Checks
 
 Every change must be formatted and pass all checks before committing:
@@ -62,6 +105,56 @@ rebar3 ct           # Common Test (adapters, parity, service, ws, wt, mcp)
 CI (`.github/workflows/ci.yml`) runs `format`, `lint`, `xref`, and
 `dialyzer` as fast-fail static checks, then gates `build`/`eunit`/
 `ct` on them.
+
+## Pull Requests
+
+Work on one issue goes in one pull request. Give each change a reviewer has
+to look at its own commit, with its tests. Docs and CHANGELOG entries go in
+the same pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for the rest of
+the workflow.
+
+- Every bug fix and feature has a test. Show it failing on main.
+- A change to how Livery reads or answers requests (routing, headers,
+  caching, ranges, content coding, cookies, CORS, auth) is checked against
+  the spec section it cites, that spec being the current one, and safety
+  against a hostile client, before it is opened.
+- Never relax a limit or a check to make a client pass; exclude the
+  legitimate case precisely.
+- Descriptions state what was wrong, the fix in a few lines, and breaking
+  changes. Reference issues with `Fixes #N`. No test plan, no file-by-file
+  or commit-by-commit walkthrough.
+- No `Co-Authored-By`, "Generated with" or similar trailers, in commits or
+  pull requests.
+- CHANGELOG: plain English, what was wrong and what it means for the user,
+  the spec section when there is one. No implementation details, no attack
+  narratives.
+- Follow "Write for the person who reads it" in
+  [CONTRIBUTING.md](CONTRIBUTING.md#write-for-the-person-who-reads-it): plain
+  English, no inflated or pseudo-technical wording, and a person has read
+  the change before it is opened.
+
+## Specifications
+
+What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
+9204, 6455 and the WebTransport drafts) is delegated to the wire libraries.
+
+| Spec | Scope in Livery | Code |
+|---|---|---|
+| RFC 9110 HTTP semantics | methods, status, fields, conditional requests, ranges, content coding | `livery_router`, `livery_req`, `livery_resp`, `livery_static`, `livery_etag`, `livery_compress` |
+| RFC 9111 HTTP caching | validators, 304, `Vary` | `livery_etag`, `livery_compress` |
+| RFC 1950, 1951, 1952 | zlib, deflate and gzip codings | `src/codec/` |
+| RFC 7578 multipart/form-data | form and upload parsing | `livery_multipart` |
+| RFC 6265 cookies | session cookies, client cookie jar | `livery_auth_session`, `livery_client_cookie` |
+| Fetch standard, CORS | preflight and response headers | `livery_cors` |
+| HTML, server-sent events | `text/event-stream` framing | `livery_resp`, `livery` |
+| RFC 6797 HSTS | `Strict-Transport-Security` and the other security headers | `livery_security_headers` |
+| RFC 7838 Alt-Svc | advertising HTTP/3 | `livery_alt_svc`, `livery_service` |
+| RFC 8441, RFC 9220 extended CONNECT | WebSocket and WebTransport handoff | `livery_ws`, `livery_wt`, `livery_h2`, `livery_h3` |
+| RFC 6750 bearer tokens | `Authorization: Bearer`, `WWW-Authenticate` | `livery_auth_bearer` |
+| RFC 7515, 7517, 7518, 7519 JWS, JWK, JWA, JWT | token verification, key sets | `livery_auth`, `livery_auth_jwks` |
+| RFC 7662 token introspection | introspection client | `livery_auth_introspect` |
+| OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
+| OpenAPI 3.2, JSON Schema (subset) | document generation, request validation | `livery_openapi`, `livery_openapi_validate` |
 
 ## Build & Development Commands
 

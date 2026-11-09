@@ -32,6 +32,7 @@
     cancel_on_connection_close/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
+    scheme_and_authority_on_request/1,
     inform_unsupported/1,
     body_too_large_no_disconnect/1,
     oversize_upload_delivers_413/1,
@@ -58,6 +59,7 @@ all() ->
         cancel_on_connection_close,
         send_to_gone_client_is_closed,
         peer_on_request,
+        scheme_and_authority_on_request,
         inform_unsupported,
         body_too_large_no_disconnect,
         oversize_upload_delivers_413,
@@ -106,6 +108,14 @@ peer_on_request(Config) ->
     {Status, _Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"peer-ok">>, Body).
+
+%% Regression: H3 requests carry the client's `:scheme' and
+%% `:authority'. The scheme used to read `http', so WebTransport refused
+%% every session and HSTS was never sent over HTTP/3.
+scheme_and_authority_on_request(Config) ->
+    {Status, _Headers, Body, _} = get(Config, <<"/">>),
+    ?assertEqual(200, Status),
+    ?assertEqual(<<"https localhost">>, Body).
 
 %% The H3 adapter does not implement interim responses yet: inform/3
 %% reports {error, unsupported} instead of crashing the handler.
@@ -239,6 +249,10 @@ handler_for(bodyless_get_reads_eof) ->
             {ok, Bytes, _} when Bytes =:= <<>>; Bytes =:= [] -> livery_resp:text(200, <<"eof">>);
             Other -> livery_resp:text(500, iolist_to_binary(io_lib:format("~p", [Other])))
         end
+    end;
+handler_for(scheme_and_authority_on_request) ->
+    fun(R) ->
+        livery_resp:text(200, [livery_req:scheme(R), <<" ">>, livery_req:authority(R)])
     end;
 handler_for(peer_on_request) ->
     fun(R) ->

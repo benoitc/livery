@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Dependency release: h1 0.10.0, h2 0.15.0, quic 2.6.1, webtransport 0.5.3
+and hackney 4.10.0. Erlang/OTP 27 or later is required, as before.
+
+### Security
+
+- HTTP/2 servers now close connections that abuse stream resets
+  (MadeYouReset, CVE-2025-8671) or flood SETTINGS frames
+  (CVE-2019-9515). Either let one client tie up the server.
+- An HTTP/3 request with a large header block could keep a CPU busy for
+  minutes. Header blocks now decode in linear time and stop at the size
+  limit, trailers included.
+- The hackney client no longer buffers an unlimited amount of data past
+  `max_body_size` when a server sends one huge chunk.
+
+### Changed
+
+- WebTransport moves to the current drafts: draft-17 over HTTP/3 and
+  draft-16 over HTTP/2. Chrome, Firefox and Safari 26 still connect
+  over HTTP/3. Over HTTP/2 a session now needs TLS 1.3, and peers still
+  on draft-14 no longer interoperate.
+- The client now waits for a free stream when an HTTP/2 or HTTP/3
+  server is at its concurrent stream limit, instead of failing, and
+  sends a request the server refused without processing once more on a
+  fresh connection.
+
+### Fixed
+
+- HTTP/3 requests reported their scheme as `http` and an empty
+  authority. webtransport 0.5 refuses such a session with 400, the
+  security headers middleware never sent HSTS over HTTP/3, and traces
+  recorded the wrong scheme and server address. They now carry the
+  scheme and authority the client sent.
+- The HTTP/3 listener now passes on the options `webtransport:h3_settings/0`
+  sets: requests wait for the client's settings, resets report their
+  final size for flow control, and a WebTransport handler that could not
+  open a stream because the peer allowed no more is told when it can try
+  again.
+- Data a client sends right after a CONNECT tunnel or an Upgrade is
+  accepted over HTTP/1.1 is no longer lost.
+- Large HTTP/3 downloads no longer stop part way with a flow-control
+  error, and transfers on paths that reorder packets are several times
+  faster.
+
 ## [0.10.7] - 2026-10-26
 
 Dependency release: hackney 4.9.0 and h2 0.12.5.

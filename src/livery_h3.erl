@@ -79,6 +79,14 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
     ),
     settings => map(),
     quic_opts => map(),
+    %% Extension hooks forwarded to `quic_h3' as is. `webtransport:h3_settings/0'
+    %% sets all of them.
+    stream_type_handler => fun(),
+    h3_datagram_enabled => boolean(),
+    connection_handler => fun(),
+    stream_reset_final_size => boolean(),
+    defer_requests_until_settings => boolean(),
+    notify_streams_available => boolean(),
     %% Size of the `quic' connection worker pool, forwarded to `quic_h3'.
     pool_size => pos_integer(),
     max_body => non_neg_integer() | infinity,
@@ -378,6 +386,13 @@ build_h3_opts(Opts, Stack, Handler) ->
             stream_type_handler,
             h3_datagram_enabled,
             connection_handler,
+            %% WebTransport draft-17 needs the client's SETTINGS before the
+            %% request is accepted (they pick the draft), the final size of
+            %% reset streams for its flow control, and to hear when a stream
+            %% refused at the peer's limit can be opened again.
+            defer_requests_until_settings,
+            stream_reset_final_size,
+            notify_streams_available,
             %% Number of UDP listener processes. >1 enables SO_REUSEPORT
             %% so the kernel spreads packets across readers, letting H3
             %% use more than one core for transport.
@@ -522,6 +537,9 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
     livery_req:new(#{
         protocol => h3,
         method => Method,
+        %% HTTP/3 always runs over TLS.
+        scheme => proplists:get_value(<<":scheme">>, Headers, <<"https">>),
+        authority => proplists:get_value(<<":authority">>, Headers, <<>>),
         path => Path,
         headers => Headers,
         body => {stream, Reader},

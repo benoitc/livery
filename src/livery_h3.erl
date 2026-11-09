@@ -69,6 +69,11 @@ adapter callbacks, which call into `quic_h3:send_response/4`,
     inet6 => boolean(),
     cert := binary(),
     key := term(),
+    %% Client-certificate policy. `verify_peer' asks for (and requires) a
+    %% client certificate, checked against `cacerts'; `quic' refuses to
+    %% start the listener without them.
+    cacerts => [binary()],
+    verify => verify_none | verify_peer,
     %% Per-SNI certificate selection. Invoked per connection with the
     %% ClientHello SNI; the returned cert/key override the static
     %% `cert'/`key' for that handshake. Forwarded to `quic' (>= 1.6.5).
@@ -386,6 +391,7 @@ build_h3_opts(Opts, Stack, Handler) ->
             stream_type_handler,
             h3_datagram_enabled,
             connection_handler,
+            cacerts,
             %% WebTransport draft-17 needs the client's SETTINGS before the
             %% request is accepted (they pick the draft), the final size of
             %% reset streams for its flow control, and to hear when a stream
@@ -405,9 +411,9 @@ build_h3_opts(Opts, Stack, Handler) ->
 %% Build the `quic_opts' map handed to `quic_h3'. Folds the `ip'/`inet6'
 %% bind options into `extra_socket_opts' (an IPv6 `ip' tuple or
 %% `inet6 => true' selects the inet6 family; caller-supplied
-%% `extra_socket_opts' are preserved) and carries `sni_callback' here so
-%% it reaches `quic:start_server' (`quic_h3' only lifts cert/key/cacerts
-%% from the top level).
+%% `extra_socket_opts' are preserved) and carries `sni_callback' and the
+%% client-certificate policy here so they reach `quic:start_server'
+%% (`quic_h3' only lifts cert/key/cacerts from the top level).
 -spec quic_opts(listen_opts()) -> map().
 quic_opts(Opts) ->
     QuicOpts0 = maps:get(quic_opts, Opts, #{}),
@@ -419,9 +425,14 @@ quic_opts(Opts) ->
                 Extra = maps:get(extra_socket_opts, QuicOpts0, []),
                 QuicOpts0#{extra_socket_opts => Addr ++ Extra}
         end,
+    QuicOpts2 =
+        case maps:get(verify, Opts, verify_none) of
+            verify_peer -> QuicOpts1#{require_client_cert => true};
+            verify_none -> QuicOpts1
+        end,
     case maps:find(sni_callback, Opts) of
-        {ok, Fun} -> QuicOpts1#{sni_callback => Fun};
-        error -> QuicOpts1
+        {ok, Fun} -> QuicOpts2#{sni_callback => Fun};
+        error -> QuicOpts2
     end.
 
 -spec copy_keys([atom()], map(), map()) -> map().
@@ -546,7 +557,9 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         adapter => ?MODULE,
         stream => {Conn, StreamId},
         engine_pid => Conn,
-        peer => h3_peer(Conn)
+        peer => h3_peer(Conn),
+        %% HTTP/3 always runs over TLS, so the map is always there.
+        tls => livery_tls:peer(fun() -> quic:peercert(quic_h3:get_quic_conn(Conn)) end)
     }).
 
 -spec split_query(binary()) -> {binary(), binary()}.

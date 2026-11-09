@@ -501,15 +501,13 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
         stream => Stream,
         engine_pid => Conn,
         peer => h2_peer(Conn),
-        tls => tls_info(Transport)
+        tls => tls_info(Conn, Transport)
     }).
 
-%% Mark TLS connections so handlers can tell a secure listener from an
-%% h2c one, as the H1 adapter already does. h2 does not surface
-%% certificate details, so this is an empty map rather than undefined.
--spec tls_info(tcp | ssl) -> undefined | map().
-tls_info(ssl) -> #{};
-tls_info(_) -> undefined.
+%% `undefined' marks an h2c listener.
+-spec tls_info(h2:connection(), tcp | ssl) -> undefined | livery_tls:info().
+tls_info(Conn, ssl) -> livery_tls:peer(fun() -> h2:peercert(Conn) end);
+tls_info(_Conn, _) -> undefined.
 
 %% h2 (>= 0.10.2) keeps `:authority' and `:scheme' in the handler header
 %% list. Drop them from the application-visible headers (they are exposed

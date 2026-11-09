@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Dependency release: h1 0.10.0, h2 0.15.0, quic 2.6.1, webtransport 0.5.3
 and hackney 4.10.0. Erlang/OTP 27 or later is required, as before.
 
+### Added
+
+- Mutual TLS on every listener. With `verify => verify_peer` and
+  `cacerts`, HTTP/1.1, HTTP/2 and HTTP/3 listeners refuse clients
+  without a certificate signed by your CAs, and `livery_req:tls/1` now
+  returns the verified certificate with its subject and alternative
+  names, so you can map a client to an identity. HTTP/3 listeners
+  accept `verify` for the first time. Over TLS without client
+  certificates the request reads `#{verified => false}` instead of an
+  empty map.
+
 ### Security
 
 - HTTP/2 servers now close connections that abuse stream resets

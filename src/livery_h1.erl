@@ -594,15 +594,14 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
         stream => Stream,
         engine_pid => Conn,
         peer => conn_peer(Conn),
-        tls => tls_info(Transport)
+        tls => tls_info(Conn, Transport)
     }).
 
-%% Mark TLS connections so handlers and the WebSocket handoff can tell a
-%% secure listener from a plaintext one. h1 does not surface certificate
-%% details, so this is an empty map rather than undefined.
--spec tls_info(tcp | ssl) -> undefined | map().
-tls_info(ssl) -> #{};
-tls_info(_) -> undefined.
+%% `undefined' marks a plaintext listener, which the WebSocket handoff
+%% relies on to pick `ws' over `wss'.
+-spec tls_info(h1:connection(), tcp | ssl) -> undefined | livery_tls:info().
+tls_info(Conn, ssl) -> livery_tls:info(h1:peercert(Conn));
+tls_info(_Conn, _) -> undefined.
 
 -spec split_query(binary()) -> {binary(), binary()}.
 split_query(Path) ->

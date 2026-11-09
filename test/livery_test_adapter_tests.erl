@@ -227,3 +227,48 @@ informational_capability_test() ->
         livery_test_adapter:capabilities(Tab)
     ),
     livery_test_adapter:stop(Tab).
+
+%% SSE framing (HTML Living Standard, server-sent events): one `data:'
+%% per line, no line breaks in other fields, `retry' only as a number.
+sse_body(Event) ->
+    Cap = livery_test_adapter:run(
+        [],
+        fun(_Req) ->
+            livery_resp:sse(200, fun(Emit) ->
+                Emit(Event),
+                ok
+            end)
+        end,
+        #{}
+    ),
+    livery_test_adapter:body(Cap).
+
+sse_framing_test_() ->
+    [
+        {"multi-line data",
+            ?_assertEqual(
+                <<"data: a\ndata: b\ndata: c\ndata: d\n\n">>,
+                sse_body(#{data => <<"a\nb\r\nc\rd">>})
+            )},
+        {"empty data", ?_assertEqual(<<"data: \n\n">>, sse_body(#{data => <<>>}))},
+        {"bare iodata", ?_assertEqual(<<"data: x\ndata: y\n\n">>, sse_body([<<"x\n">>, "y"]))},
+        {"event and id on one line",
+            ?_assertEqual(
+                <<"event: ab\nid: 12\ndata: d\n\n">>,
+                sse_body(#{event => <<"a\r\nb">>, id => <<"1\n2", 0>>, data => <<"d">>})
+            )},
+        {"numeric retry",
+            ?_assertEqual(
+                <<"retry: 3000\ndata: d\n\n">>, sse_body(#{retry => 3000, data => <<"d">>})
+            )},
+        {"digit-string retry",
+            ?_assertEqual(
+                <<"retry: 3000\ndata: d\n\n">>, sse_body(#{retry => <<"3000">>, data => <<"d">>})
+            )},
+        {"bad retry dropped",
+            ?_assertEqual(
+                <<"data: d\n\n">>, sse_body(#{retry => <<"3s\ndata: x">>, data => <<"d">>})
+            )},
+        {"negative retry dropped",
+            ?_assertEqual(<<"data: d\n\n">>, sse_body(#{retry => -1, data => <<"d">>}))}
+    ].

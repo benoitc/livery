@@ -15,14 +15,17 @@ their apps register a codec. Configure as a stack entry
 - `types` — compressible `Content-Type` prefixes (default text and the
   common structured types).
 
-## Negotiation
+## Negotiation (RFC 9110 section 12.5.3)
 
-A coding is acceptable iff its `Accept-Encoding` q-value is `> 0` (by
-exact name or `*`; `q=0` rejects). Among acceptable codings the SERVER
-preference order wins; client q-weights are only an accept/reject
-filter. With no acceptable coding the response is sent uncompressed
-(identity); `identity;q=0` is deliberately treated as identity, not a
-`406`.
+Each coding gets the q-value of its own `Accept-Encoding` entry, or of
+`*`, or 0. The codec with the highest q above 0 wins; the `codecs` order
+only breaks ties. Unencoded content (`identity`) is acceptable unless
+`identity;q=0`, or `*;q=0` with no `identity` entry, refuses it. When
+the client names it (or `*`), it wins if its q is higher than every
+codec's; when it does not, it is used only if no codec is acceptable. When no codec is
+acceptable and identity is refused, the response is `406 Not
+Acceptable`. A malformed q-value makes Livery ignore that entry. An
+absent or empty `Accept-Encoding` gets unencoded content.
 
 ## Scope
 
@@ -47,8 +50,12 @@ call(Req, Next, State) ->
             Resp1 = append_vary(<<"Accept-Encoding">>, Resp),
             Accept = livery_req:header(<<"accept-encoding">>, Req, <<>>),
             case choose(Accept, maps:get(codecs, Cfg)) of
-                none -> Resp1;
-                {ok, Codec} -> apply_codec(Codec, Resp1)
+                identity ->
+                    Resp1;
+                {ok, Codec} ->
+                    apply_codec(Codec, Resp1);
+                not_acceptable ->
+                    append_vary(<<"Accept-Encoding">>, livery_resp:text(406, <<"not acceptable">>))
             end
     end.
 
@@ -112,29 +119,38 @@ is_prefix(_Prefix, _Bin) ->
 %% Negotiation
 %%====================================================================
 
--spec choose(binary(), [module()]) -> none | {ok, module()}.
+-spec choose(binary(), [module()]) -> {ok, module()} | identity | not_acceptable.
 choose(Accept, Codecs) ->
-    select(Codecs, parse_accept_encoding(Accept)).
-
--spec select([module()], #{binary() => float()}) -> none | {ok, module()}.
-select([], _Accepted) ->
-    none;
-select([Codec | Rest], Accepted) ->
-    case acceptable(normalize(Codec:name()), Accepted) of
-        true -> {ok, Codec};
-        false -> select(Rest, Accepted)
+    Accepted = parse_accept_encoding(Accept),
+    Ranked = [
+        {Q, -I, Codec}
+     || {I, Codec} <- lists:enumerate(Codecs),
+        Q <- [q(normalize(Codec:name()), Accepted, 0.0)],
+        Q > 0
+    ],
+    case {lists:reverse(lists:sort(Ranked)), identity_q(Accepted)} of
+        {[{_, _, Codec} | _], fallback} -> {ok, Codec};
+        {[{Q, _, Codec} | _], IdQ} when Q >= IdQ -> {ok, Codec};
+        {_, fallback} -> identity;
+        {_, IdQ} when IdQ > 0 -> identity;
+        _ -> not_acceptable
     end.
 
--spec acceptable(binary(), #{binary() => float()}) -> boolean().
-acceptable(Name, Accepted) ->
+%% A coding's own entry, else `*', else `Default'.
+q(Name, Accepted, Default) ->
     case maps:find(Name, Accepted) of
-        {ok, Q} -> Q > 0;
-        error -> wildcard_q(Accepted) > 0
+        {ok, Q} -> Q;
+        error -> maps:get(<<"*">>, Accepted, Default)
     end.
 
--spec wildcard_q(#{binary() => float()}) -> float().
-wildcard_q(Accepted) ->
-    maps:get(<<"*">>, Accepted, 0.0).
+%% Rule 2: unencoded is acceptable unless `identity' or `*' says q=0. Not
+%% named at all, it is only the fallback when no coding is acceptable;
+%% named, its q competes with the codings'.
+identity_q(Accepted) ->
+    case q(<<"identity">>, Accepted, fallback) of
+        fallback -> fallback;
+        Q -> Q
+    end.
 
 -spec parse_accept_encoding(binary()) -> #{binary() => float()}.
 parse_accept_encoding(Bin) ->
@@ -148,42 +164,49 @@ parse_entry(Part, Acc) ->
         <<>> ->
             Acc;
         Trimmed ->
-            {Coding, Q} = split_q(Trimmed),
-            maps:put(normalize(Coding), Q, Acc)
+            case split_q(Trimmed) of
+                {Coding, Q} -> maps:put(normalize(Coding), Q, Acc);
+                error -> Acc
+            end
     end.
 
--spec split_q(binary()) -> {binary(), float()}.
+-spec split_q(binary()) -> {binary(), float()} | error.
 split_q(Entry) ->
     case binary:split(Entry, <<";">>) of
         [Coding] -> {Coding, 1.0};
-        [Coding, Params] -> {Coding, parse_q(Params)}
+        [Coding, Params] -> with_q(Coding, find_q(binary:split(Params, <<";">>, [global])))
     end.
 
--spec parse_q(binary()) -> float().
-parse_q(Params) ->
-    Lower = iolist_to_binary(string:lowercase(Params)),
-    find_q(binary:split(Lower, <<";">>, [global])).
+with_q(Coding, {ok, Q}) -> {Coding, Q};
+with_q(_Coding, error) -> error.
 
--spec find_q([binary()]) -> float().
 find_q([]) ->
-    1.0;
+    {ok, 1.0};
 find_q([Token | Rest]) ->
-    case iolist_to_binary(string:trim(Token)) of
-        <<"q=", Value/binary>> -> to_q(Value);
+    case string:lowercase(iolist_to_binary(string:trim(Token))) of
+        <<"q=", Value/binary>> -> qvalue(Value);
         _Other -> find_q(Rest)
     end.
 
--spec to_q(binary()) -> float().
-to_q(Value) ->
-    Str = binary_to_list(iolist_to_binary(string:trim(Value))),
-    case string:to_float(Str) of
-        {Float, _Rest} when is_float(Float) ->
-            Float;
-        {error, _} ->
-            case string:to_integer(Str) of
-                {Int, _} when is_integer(Int) -> float(Int);
-                {error, _} -> 0.0
-            end
+%% RFC 9110 12.4.2: qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+qvalue(<<"1">>) -> {ok, 1.0};
+qvalue(<<"1.", Zeros/binary>>) when byte_size(Zeros) =< 3 -> all_zeros(Zeros);
+qvalue(<<"0">>) -> {ok, 0.0};
+qvalue(<<"0.", Digits/binary>>) when byte_size(Digits) =< 3 -> fraction(Digits);
+qvalue(_) -> error.
+
+all_zeros(Zeros) ->
+    case [C || <<C>> <= Zeros, C =/= $0] of
+        [] -> {ok, 1.0};
+        _ -> error
+    end.
+
+fraction(<<>>) ->
+    {ok, 0.0};
+fraction(Digits) ->
+    case [C || <<C>> <= Digits, C < $0 orelse C > $9] of
+        [] -> {ok, binary_to_integer(Digits) / math:pow(10, byte_size(Digits))};
+        _ -> error
     end.
 
 %%====================================================================

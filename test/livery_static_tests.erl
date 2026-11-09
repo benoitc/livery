@@ -2,6 +2,7 @@
 -compile([export_all, nowarn_export_all]).
 
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 
 static_test_() ->
     {setup, fun setup/0, fun cleanup/1, fun(Ctx) ->
@@ -20,7 +21,14 @@ static_test_() ->
             {"405 on POST", fun() -> not_allowed(Ctx) end},
             {"HEAD bodyless", fun() -> head(Ctx) end},
             {"Range partial content", fun() -> range(Ctx) end},
-            {"Range suffix", fun() -> range_suffix(Ctx) end}
+            {"Range suffix", fun() -> range_suffix(Ctx) end},
+            {"Range at the size is 416", fun() -> range_at_size(Ctx) end},
+            {"last byte is a 206", fun() -> range_last_byte(Ctx) end},
+            {"any range on an empty file is 416", fun() -> range_empty_file(Ctx) end},
+            {"If-Range with an ETag sends it all", fun() -> if_range_etag(Ctx) end},
+            {"If-Range with the date serves the range", fun() -> if_range_date(Ctx) end},
+            {"If-Range with another date sends it all", fun() -> if_range_other_date(Ctx) end},
+            {"Last-Modified is sent", fun() -> last_modified(Ctx) end}
         ]
     end}.
 
@@ -39,6 +47,12 @@ setup() ->
     write(Root, "logo.svg", <<"<svg/>">>),
     write(Root, "data.bin", <<0, 1, 2, 3, 4, 5, 6, 7, 8, 9>>),
     write(Root, "index.html", <<"<h1>home</h1>">>),
+    write(Root, "empty.txt", <<>>),
+    write(Root, "old.txt", <<"0123456789">>),
+    %% 2000-01-01T00:00:00Z, old enough for its date to be a strong validator.
+    ok = file:write_file_info(
+        filename:join(Root, "old.txt"), #file_info{mtime = 946684800}, [{time, posix}]
+    ),
     SecretName = "secret.txt",
     ok = file:write_file(filename:join(Base, SecretName), <<"TOPSECRET">>),
     %% Links inside the root that point out of it: to the parent directory,
@@ -159,6 +173,56 @@ range_suffix(#{root := Root}) ->
 %%====================================================================
 %% Helpers
 %%====================================================================
+
+%% RFC 9110 14.1.2 and 14.4
+range_at_size(#{root := Root}) ->
+    Cap = run(handler(Root), <<"style.css">>, <<"GET">>, [{<<"range">>, <<"bytes=14-">>}]),
+    ?assertEqual(416, status(Cap)),
+    ?assertEqual(<<"bytes */14">>, iolist_to_binary(hdr(<<"content-range">>, Cap))).
+
+range_last_byte(#{root := Root}) ->
+    Cap = run(handler(Root), <<"style.css">>, <<"GET">>, [{<<"range">>, <<"bytes=13-">>}]),
+    ?assertEqual(206, status(Cap)),
+    ?assertEqual(<<"}">>, body(Cap)).
+
+range_empty_file(#{root := Root}) ->
+    [
+        begin
+            Cap = run(handler(Root), <<"empty.txt">>, <<"GET">>, [{<<"range">>, R}]),
+            ?assertEqual(416, status(Cap)),
+            ?assertEqual(<<"bytes */0">>, iolist_to_binary(hdr(<<"content-range">>, Cap)))
+        end
+     || R <- [<<"bytes=0-">>, <<"bytes=-5">>, <<"bytes=0-0">>]
+    ].
+
+%% RFC 9110 13.1.5
+if_range_etag(#{root := Root}) ->
+    ETag = hdr(<<"etag">>, run(handler(Root), <<"old.txt">>)),
+    Cap = run(handler(Root), <<"old.txt">>, <<"GET">>, [
+        {<<"range">>, <<"bytes=0-3">>}, {<<"if-range">>, ETag}
+    ]),
+    ?assertEqual(200, status(Cap)),
+    ?assertEqual(<<"0123456789">>, body(Cap)).
+
+if_range_date(#{root := Root}) ->
+    Cap = run(handler(Root), <<"old.txt">>, <<"GET">>, [
+        {<<"range">>, <<"bytes=0-3">>}, {<<"if-range">>, <<"Sat, 01 Jan 2000 00:00:00 GMT">>}
+    ]),
+    ?assertEqual(206, status(Cap)),
+    ?assertEqual(<<"0123">>, body(Cap)).
+
+if_range_other_date(#{root := Root}) ->
+    Cap = run(handler(Root), <<"old.txt">>, <<"GET">>, [
+        {<<"range">>, <<"bytes=0-3">>}, {<<"if-range">>, <<"Sun, 02 Jan 2000 00:00:00 GMT">>}
+    ]),
+    ?assertEqual(200, status(Cap)),
+    ?assertEqual(<<"0123456789">>, body(Cap)).
+
+last_modified(#{root := Root}) ->
+    ?assertEqual(
+        <<"Sat, 01 Jan 2000 00:00:00 GMT">>,
+        hdr(<<"last-modified">>, run(handler(Root), <<"old.txt">>))
+    ).
 
 handler(Root) ->
     livery_static:handler(Root).

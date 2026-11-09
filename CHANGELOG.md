@@ -77,6 +77,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Compression now follows the client's preferences: the coding with the
+  highest `Accept-Encoding` q-value wins, where before the server's
+  order did. A client that refuses unencoded content and accepts none of
+  the available codings gets `406` instead of an unencoded body
+  (RFC 9110 section 12.5.3). Malformed q-values are ignored.
+- A range that starts at the end of a file, or any range on an empty
+  file, was answered with an empty `206`. It now gets `416`, and every
+  `416` says how long the file is with `Content-Range: bytes */<size>`
+  (RFC 9110 sections 14.1.2 and 14.4).
+- Static files ignored `If-Range`, so a client resuming a download of a
+  file that had changed could get a mix of old and new bytes. A range is
+  now served only when the `If-Range` date matches, and static responses
+  carry `Last-Modified` (RFC 9110 section 13.1.5).
+- Server-sent events with several lines of `data` were sent as one
+  broken field, and a line break in `event`, `id` or `retry` could
+  start a new field or event. Every line now gets its own `data:`, and
+  the other fields are kept to one line.
 - A listener with `verify => verify_peer` could have client
   certificates turned off, or its trusted CAs replaced, by a matching
   key in `ssl_opts` or `quic_opts`, without any warning. It now refuses

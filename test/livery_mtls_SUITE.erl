@@ -248,6 +248,9 @@ collect_h2(Conn, StreamId, Acc) ->
     end.
 
 fetch_h3(Port, ClientOpts) ->
+    %% The connection is linked to the caller. A refused client can finish
+    %% its handshake first, and the connection then exits while draining.
+    process_flag(trap_exit, true),
     Opts0 = #{verify => verify_none, sync => true},
     Opts =
         case ClientOpts of
@@ -293,7 +296,9 @@ collect_h3(Conn, StreamId, Acc) ->
         {quic_h3, Conn, {stream_reset, StreamId, Reason}} ->
             {error, Reason};
         {quic_h3, Conn, _Other} ->
-            collect_h3(Conn, StreamId, Acc)
+            collect_h3(Conn, StreamId, Acc);
+        {'EXIT', Conn, Reason} ->
+            {error, Reason}
     after 5000 ->
         {error, timeout}
     end.

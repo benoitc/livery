@@ -80,21 +80,36 @@ Body} | {error, _})`; the default uses `hackney`.
 -spec call(livery_req:req(), livery_middleware:next(), map()) ->
     livery_resp:resp().
 call(Req, Next, State) ->
-    case livery_ext:bearer_token(Req) of
+    case livery_auth_binding:token(Req, State) of
         undefined ->
             case maps:get(required, State, true) of
                 true -> livery_auth_challenge:respond(missing_token, State);
                 false -> Next(Req)
             end;
-        Token ->
-            case introspect(Token, State) of
+        {Scheme, Token} ->
+            %% Scopes are checked once the token is known to come from the
+            %% client it is bound to.
+            case introspect(Token, maps:remove(scope, State)) of
                 {ok, Claims} ->
-                    Next(livery_req:set_meta(user, Claims, Req));
-                {error, {insufficient_scope, Missing}} ->
-                    livery_auth_challenge:respond({insufficient_scope, Missing}, State);
+                    authorize(Scheme, Token, Claims, Req, Next, State);
                 {error, _} ->
-                    livery_auth_challenge:respond({invalid_token, <<"invalid token">>}, State)
+                    livery_auth_challenge:respond(
+                        {invalid_token, <<"invalid token">>}, Scheme, State
+                    )
             end
+    end.
+
+authorize(Scheme, Token, Claims, Req, Next, State) ->
+    case livery_auth_binding:check(Scheme, Token, Claims, Req, State) of
+        ok ->
+            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
+                [] ->
+                    Next(livery_req:set_meta(user, Claims, Req));
+                Missing ->
+                    livery_auth_challenge:respond({insufficient_scope, Missing}, Scheme, State)
+            end;
+        {error, Failure} ->
+            livery_auth_challenge:respond(Failure, Scheme, State)
     end.
 
 %%====================================================================

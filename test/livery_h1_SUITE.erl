@@ -35,6 +35,8 @@
     disconnect_mid_response_is_quiet/1,
     peer_on_request_tcp/1,
     peer_on_request_tls/1,
+    scheme_and_authority_tcp/1,
+    scheme_and_authority_tls/1,
     early_hints_before_response/1
 ]).
 
@@ -65,6 +67,8 @@ all() ->
         disconnect_mid_response_is_quiet,
         peer_on_request_tcp,
         peer_on_request_tls,
+        scheme_and_authority_tcp,
+        scheme_and_authority_tls,
         early_hints_before_response
     ].
 
@@ -319,6 +323,42 @@ peer_on_request_tls(_Config) ->
         livery_h1:stop(Listener)
     end.
 
+%% Regression: H1 requests carry the scheme of the listener and the
+%% authority from `Host'. They used to read `http' and empty over TLS.
+scheme_and_authority_tcp(Config) ->
+    {ok, Sock} = gen_tcp:connect(
+        "127.0.0.1", ?config(port, Config), [binary, {active, false}, {packet, raw}]
+    ),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nHost: api.example:8080\r\n\r\n">>),
+    Resp = recv_all(Sock, <<>>),
+    ok = gen_tcp:close(Sock),
+    ?assertMatch({_, _}, binary:match(Resp, <<"http api.example:8080">>)).
+
+scheme_and_authority_tls(_Config) ->
+    {CertFile, KeyFile} = livery_test_certs:paths(),
+    {ok, Listener} = livery_h1:start(#{
+        port => 0,
+        transport => ssl,
+        cert => CertFile,
+        key => KeyFile,
+        stack => [],
+        handler => handler_for(scheme_and_authority_tls)
+    }),
+    try
+        {ok, Sock} = ssl:connect(
+            "127.0.0.1",
+            h1:server_port(Listener),
+            [binary, {active, false}, {packet, raw}, {verify, verify_none}],
+            5000
+        ),
+        ok = ssl:send(Sock, <<"GET / HTTP/1.1\r\nHost: api.example\r\n\r\n">>),
+        Resp = ssl_recv_all(Sock, <<>>),
+        _ = ssl:close(Sock),
+        ?assertMatch({_, _}, binary:match(Resp, <<"https api.example">>))
+    after
+        livery_h1:stop(Listener)
+    end.
+
 %% Two 103 Early Hints go out ahead of the final 200 on the wire.
 early_hints_before_response(Config) ->
     Port = ?config(port, Config),
@@ -350,6 +390,8 @@ max_body_for(_TC) -> 16 * 1024 * 1024.
 
 handler_for(peer_on_request_tcp) ->
     fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
+handler_for(Case) when Case =:= scheme_and_authority_tcp; Case =:= scheme_and_authority_tls ->
+    fun(R) -> livery_resp:text(200, [livery_req:scheme(R), <<" ">>, livery_req:authority(R)]) end;
 handler_for(peer_on_request_tls) ->
     fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
 handler_for(early_hints_before_response) ->

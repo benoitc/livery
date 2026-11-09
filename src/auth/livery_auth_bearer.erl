@@ -47,45 +47,52 @@ still rejected.
     map()
 ) -> livery_resp:resp().
 call(Req, Next, State) ->
-    case livery_ext:bearer_token(Req) of
+    case livery_auth_binding:token(Req, State) of
         undefined ->
             case maps:get(required, State, true) of
                 true -> livery_auth_challenge:respond(missing_token, State);
                 false -> Next(Req)
             end;
-        Token ->
+        {Scheme, Token} ->
+            Ctx = {Scheme, Token, State, Req, Next},
             case resolve_keys(State) of
-                {ok, VerifyOpts} ->
-                    verify_with_rotation(Token, VerifyOpts, State, Req, Next);
-                {error, _} ->
-                    invalid(<<"key resolution failed">>, State)
+                {ok, VerifyOpts} -> verify_with_rotation(VerifyOpts, Ctx);
+                {error, _} -> invalid(<<"key resolution failed">>, Ctx)
             end
     end.
 
 %% Verify; on a no_matching_key failure with a jwks_uri, refresh the
 %% JWKS (rotation, throttled) and retry once before giving up.
-verify_with_rotation(Token, VerifyOpts, State, Req, Next) ->
+verify_with_rotation(VerifyOpts, {_Scheme, Token, State, _Req, _Next} = Ctx) ->
     case livery_auth:verify(Token, VerifyOpts) of
         {error, no_matching_key} when is_map_key(jwks_uri, State) ->
             case refresh_keys(State) of
-                {ok, VerifyOpts1} ->
-                    outcome(livery_auth:verify(Token, VerifyOpts1), State, Req, Next);
-                {error, _} ->
-                    invalid(<<"no matching key">>, State)
+                {ok, VerifyOpts1} -> outcome(livery_auth:verify(Token, VerifyOpts1), Ctx);
+                {error, _} -> invalid(<<"no matching key">>, Ctx)
             end;
         Result ->
-            outcome(Result, State, Req, Next)
+            outcome(Result, Ctx)
     end.
 
-outcome({ok, Claims}, _State, Req, Next) ->
-    Next(livery_req:set_meta(user, Claims, Req));
-outcome({error, {insufficient_scope, Missing}}, State, _Req, _Next) ->
-    livery_auth_challenge:respond({insufficient_scope, Missing}, State);
-outcome({error, Reason}, State, _Req, _Next) ->
-    invalid(reason_text(Reason), State).
+%% A valid token still has to come from the client it is bound to; only
+%% then is it worth saying which scopes it lacks.
+outcome({ok, Claims}, {Scheme, Token, State, Req, Next}) ->
+    case livery_auth_binding:check(Scheme, Token, Claims, Req, State) of
+        ok ->
+            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
+                [] ->
+                    Next(livery_req:set_meta(user, Claims, Req));
+                Missing ->
+                    livery_auth_challenge:respond({insufficient_scope, Missing}, Scheme, State)
+            end;
+        {error, Failure} ->
+            livery_auth_challenge:respond(Failure, Scheme, State)
+    end;
+outcome({error, Reason}, Ctx) ->
+    invalid(reason_text(Reason), Ctx).
 
-invalid(Detail, State) ->
-    livery_auth_challenge:respond({invalid_token, Detail}, State).
+invalid(Detail, {Scheme, _Token, State, _Req, _Next}) ->
+    livery_auth_challenge:respond({invalid_token, Detail}, Scheme, State).
 
 -spec resolve_keys(map()) -> {ok, livery_auth:verify_opts()} | {error, term()}.
 resolve_keys(#{jwks_uri := Uri} = State) ->
@@ -107,7 +114,9 @@ jwks_opts(State) ->
 
 -spec verify_opts(map()) -> livery_auth:verify_opts().
 verify_opts(State) ->
-    maps:without([required, realm, jwks_uri, fetch, ttl, min_refresh_interval], State).
+    maps:without(
+        [jwks_uri, fetch, ttl, min_refresh_interval, scope], livery_auth_binding:stripped(State)
+    ).
 
 -spec reason_text(livery_auth:error_reason()) -> binary().
 reason_text(expired) -> <<"token expired">>;

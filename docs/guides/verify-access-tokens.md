@@ -63,6 +63,32 @@ end.
 With `required => false`, a request without a token goes through and
 the handler sees no user; a bad token is still refused.
 
+## Tell clients where to get a token
+
+Publish protected resource metadata (RFC 9728), so a client that gets a
+`401` can find your authorization server, and point the challenge at
+it:
+
+```erlang
+Resource = <<"https://api.example">>,
+Meta = #{
+    resource => Resource,
+    authorization_servers => [Issuer],
+    scopes_supported => [<<"orders:read">>]
+},
+Router1 = livery_router:add(
+    <<"GET">>, livery_auth_resource:well_known_path(Resource),
+    livery_auth_resource:handler(Meta), #{}, Router0
+),
+Bearer = {livery_auth_bearer, #{
+    jwks_uri => JwksUri, issuer => Issuer, audience => Resource,
+    resource_metadata => livery_auth_resource:well_known_url(Resource)
+}}.
+```
+
+Set `resource` to the URL clients use, not the one your listener sees
+behind a proxy.
+
 ## Verify a token yourself
 
 `livery_auth:verify/2` does the same checks without the middleware:
@@ -94,4 +120,5 @@ end.
 
 - Guide: [Verify opaque tokens with introspection](token-introspection.md)
 - Guide: [Require client certificates](require-client-certificates.md)
+- Guide: [Bind access tokens to their clients](bind-tokens-to-clients.md)
 - Reference: `livery_auth_bearer`, `livery_auth`, `livery_auth_jwks`, `livery_auth_oidc`

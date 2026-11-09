@@ -587,6 +587,8 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
     livery_req:new(#{
         protocol => h1,
         method => Method,
+        scheme => scheme(Transport),
+        authority => host(Headers),
         path => Path,
         headers => Headers,
         body => {stream, Reader},
@@ -596,6 +598,16 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
         peer => conn_peer(Conn),
         tls => tls_info(Conn, Transport)
     }).
+
+scheme(ssl) -> <<"https">>;
+scheme(_) -> <<"http">>.
+
+%% HTTP/1.1 carries the authority in `Host' (RFC 9112 3.2).
+host(Headers) ->
+    case [V || {K, V} <- Headers, string:lowercase(K) =:= <<"host">>] of
+        [Host | _] -> Host;
+        [] -> <<>>
+    end.
 
 %% `undefined' marks a plaintext listener, which the WebSocket handoff
 %% relies on to pick `ws' over `wss'.

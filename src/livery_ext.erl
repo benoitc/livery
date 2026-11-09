@@ -22,6 +22,7 @@ when the route is configured for buffered intake).
     query/2,
     header/2,
     bearer_token/1,
+    auth_token/1,
     cookie/2,
     user/1,
     user/2,
@@ -193,6 +194,31 @@ bearer_token(Req) ->
             case parse_bearer(Value) of
                 {ok, Token} -> Token;
                 error -> undefined
+            end
+    end.
+
+-doc """
+Return the access token from the `Authorization` header with the scheme
+it was sent under: `{bearer, Token}` (RFC 6750) or `{dpop, Token}`
+(RFC 9449). The scheme name is matched without case (RFC 9110 11.1).
+Returns `undefined` for no header, another scheme, or an empty token.
+""".
+-spec auth_token(livery_req:req()) -> {bearer | dpop, binary()} | undefined.
+auth_token(Req) ->
+    case livery_req:header(<<"authorization">>, Req) of
+        undefined ->
+            undefined;
+        Value ->
+            case binary:split(Value, <<" ">>) of
+                [Scheme, Token0] ->
+                    case {string:lowercase(Scheme), string:trim(Token0)} of
+                        {_, <<>>} -> undefined;
+                        {<<"bearer">>, Token} -> {bearer, Token};
+                        {<<"dpop">>, Token} -> {dpop, Token};
+                        _ -> undefined
+                    end;
+                _ ->
+                    undefined
             end
     end.
 

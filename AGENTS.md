@@ -157,6 +157,10 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 9068 JWT access token profile | `profile => access_token` | `livery_auth` |
 | RFC 7662 token introspection | introspection client, audience and scope checks | `livery_auth_introspect` |
 | RFC 8414 authorization server metadata | `discover_oauth/1,2` | `livery_auth_oidc` |
+| RFC 8705 certificate-bound access tokens | `cnf.x5t#S256` against the client certificate | `livery_auth_binding` |
+| RFC 9449 DPoP | proof checks, `cnf.jkt`, `DPoP` scheme and challenge | `livery_auth_dpop`, `livery_auth_binding`, `livery_auth_dpop_store` |
+| RFC 7638 JWK thumbprint | DPoP key thumbprint | `livery_auth_dpop` |
+| RFC 9728 protected resource metadata | metadata document, `resource_metadata` challenge parameter | `livery_auth_resource`, `livery_auth_challenge` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
 | OpenAPI 3.2, JSON Schema (subset) | document generation, request validation | `livery_openapi`, `livery_openapi_validate` |
 
@@ -176,6 +180,8 @@ treated as a new bug.
 | RFC 9068 section 2.2.3 | reads the `scp` list as well as `scope` | Azure AD and Okta issue `scp` | `livery_auth` |
 | RFC 7662 section 4 | does not cache introspection answers | a cache has to stay shorter than each token's life, which only the application can judge | `livery_auth_introspect` |
 | OpenID Connect Discovery 1.0 section 3, RFC 8414 section 2 | checks only `issuer`, not the other REQUIRED metadata | the document is handed back as is; `issuer` is the field discovery has to trust | `livery_auth_oidc` |
+| RFC 9449 section 11.1 | remembers used proofs per node, not across a cluster, unless `dpop_replay` is set | Livery has no shared store of its own | `livery_auth_dpop_store` |
+| RFC 9728 section 3.3 | does not check that `resource` is the URL clients use | only the application knows its public URL | `livery_auth_resource` |
 | RFC 6265 section 5.3 step 5 | no public suffix list; refuses single-label domains instead | no dependency ships the list | `livery_client_cookie` |
 | RFC 6265bis `SameSite` | parsed but not enforced by the client jar | the jar has no notion of the site a request comes from | `livery_client_cookie` |
 | JSON Schema 2020-12 | OpenAPI request validation covers a subset of keywords | a full validator is out of scope | `livery_openapi_validate` |

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sender-constrained access tokens. A token bound to a client
+  certificate (RFC 8705) or to a DPoP key (RFC 9449) is now accepted
+  only from that client, and `dpop => true` lets clients send DPoP
+  proofs. `binding` refuses tokens that are not bound at all.
+- `livery_auth_resource` publishes OAuth protected resource metadata
+  (RFC 9728), and the `resource_metadata` option points refused clients
+  at it.
 - JWT access tokens signed with RS384, RS512, PS256, PS384, PS512,
   ES384, ES512, Ed25519 or Ed448 are now accepted, along with RS256 and
   ES256. You can narrow the list with `algorithms`.
@@ -24,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A token carrying `cnf.jkt` is refused when sent as `Bearer`, and one
+  carrying `cnf.x5t#S256` is refused without the matching client
+  certificate. Before, both were accepted like any bearer token.
 - Refused requests now tell the client why, as RFC 6750 asks: a bad
   token gets `error="invalid_token"` in `WWW-Authenticate`, and a token
   without a required scope gets `403` with `error="insufficient_scope"`
@@ -38,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- HTTP/1.1 requests reported their scheme as `http` and an empty
+  authority, even over TLS. They now carry `https` on a TLS listener and
+  the authority from `Host`, as HTTP/2 and HTTP/3 already did.
 - A token with a `crit` header was accepted although Livery understands
   none of the extensions it may name. It is now refused (RFC 7515
   section 4.1.11).

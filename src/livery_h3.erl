@@ -121,7 +121,11 @@ port for this reason.
 """.
 -spec start(listen_opts()) -> {ok, listener()} | {error, term()}.
 start(Opts) when is_map(Opts) ->
-    Name = maps:get(name, Opts, fresh_name()),
+    Name =
+        case maps:find(name, Opts) of
+            {ok, N} -> N;
+            error -> fresh_name()
+        end,
     case start(Name, Opts, #{}) of
         {ok, _Pid} -> {ok, Name};
         Other -> Other
@@ -134,8 +138,7 @@ start(Opts) when is_map(Opts) ->
 -spec start(atom() | undefined, listen_opts(), map()) ->
     {ok, pid()} | {error, term()}.
 start(undefined, Opts, StartOpts) ->
-    Name = fresh_name(),
-    start(Name, Opts, StartOpts);
+    start(fresh_name(), Opts, StartOpts);
 start(Name, Opts, _StartOpts) when is_atom(Name) ->
     Stack = maps:get(stack, Opts),
     Handler = maps:get(handler, Opts),
@@ -367,10 +370,7 @@ is_pseudo(_) -> false.
 
 -spec fresh_name() -> atom().
 fresh_name() ->
-    list_to_atom(
-        "livery_h3_" ++
-            integer_to_list(erlang:unique_integer([positive, monotonic]))
-    ).
+    list_to_atom("livery_h3_" ++ integer_to_list(erlang:unique_integer([positive, monotonic]))).
 
 -spec build_h3_opts(
     listen_opts(),

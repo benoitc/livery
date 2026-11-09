@@ -45,6 +45,13 @@ and hackney 4.10.0. Erlang/OTP 27 or later is required, as before.
 
 ### Fixed
 
+- Starting an HTTP/3 listener created a new atom every time, even when
+  you gave it a `name`. Atoms are never freed, so a service that kept
+  restarting listeners slowly filled the atom table. A named listener
+  now creates none.
+- A bearer token whose header or claims are valid JSON but not an
+  object crashed verification, so the request got a 500. It is now
+  rejected as an invalid token.
 - HTTP/3 requests reported their scheme as `http` and an empty
   authority. webtransport 0.5 refuses such a session with 400, the
   security headers middleware never sent HSTS over HTTP/3, and traces

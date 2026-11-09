@@ -33,6 +33,7 @@
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     scheme_and_authority_on_request/1,
+    named_restart_creates_no_atom/1,
     inform_unsupported/1,
     body_too_large_no_disconnect/1,
     oversize_upload_delivers_413/1,
@@ -60,6 +61,7 @@ all() ->
         send_to_gone_client_is_closed,
         peer_on_request,
         scheme_and_authority_on_request,
+        named_restart_creates_no_atom,
         inform_unsupported,
         body_too_large_no_disconnect,
         oversize_upload_delivers_413,
@@ -116,6 +118,26 @@ scheme_and_authority_on_request(Config) ->
     {Status, _Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"https localhost">>, Body).
+
+%% Regression: start/1 used to mint a fresh atom on every call, even
+%% when the caller passed a stable `name'.
+named_restart_creates_no_atom(Config) ->
+    Opts = #{
+        name => livery_h3_named_restart,
+        port => 0,
+        cert => ?config(cert, Config),
+        key => ?config(key, Config),
+        stack => [],
+        handler => fun(_) -> livery_resp:text(200, <<"ok">>) end
+    },
+    Cycle = fun() ->
+        {ok, Name} = livery_h3:start(Opts),
+        livery_h3:stop(Name)
+    end,
+    Cycle(),
+    Before = erlang:system_info(atom_count),
+    [Cycle() || _ <- lists:seq(1, 5)],
+    ?assertEqual(Before, erlang:system_info(atom_count)).
 
 %% The H3 adapter does not implement interim responses yet: inform/3
 %% reports {error, unsupported} instead of crashing the handler.
@@ -250,6 +272,8 @@ handler_for(bodyless_get_reads_eof) ->
             Other -> livery_resp:text(500, iolist_to_binary(io_lib:format("~p", [Other])))
         end
     end;
+handler_for(named_restart_creates_no_atom) ->
+    fun(_) -> livery_resp:text(200, <<"ok">>) end;
 handler_for(scheme_and_authority_on_request) ->
     fun(R) ->
         livery_resp:text(200, [livery_req:scheme(R), <<" ">>, livery_req:authority(R)])

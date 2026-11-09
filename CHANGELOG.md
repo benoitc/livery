@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Dependency release: h1 0.10.0, h2 0.15.0, quic 2.6.1, webtransport 0.5.3
-and hackney 4.10.0. Erlang/OTP 27 or later is required, as before.
+## [0.10.8] - 2026-11-09
+
+Security release (GHSA-q86r-w492-w8c2), with mutual TLS on every listener
+and h1 0.10.0, h2 0.15.0, quic 2.6.1, webtransport 0.5.3 and hackney
+4.10.0. Erlang/OTP 27 or later is required, as before.
 
 ### Added
 

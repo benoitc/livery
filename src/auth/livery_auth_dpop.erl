@@ -22,17 +22,25 @@ Options: `algorithms`, `leeway`, `now`, `dpop_iat_window`, and
 client used, and `dpop_replay => fun((Key, ExpiresAt) -> fresh |
 replayed)` to replace the node-local replay store.
 
-Server-provided nonces (RFC 9449 sections 8 and 9) are not supported.
+With `dpop_nonce => #{secret => Secret}`, every proof must also carry a
+`nonce` this server issued (RFC 9449 section 9), so a proof cannot be
+made in advance, before the server handed out the nonce. `nonce/1`
+issues one. A nonce is a timestamp signed with `Secret`, valid for `ttl`
+seconds (default 300): nothing is stored, and every node that shares
+the secret accepts the nonces of the others. A proof without a valid
+nonce fails with `use_dpop_nonce`, which the middlewares answer with a
+fresh nonce in a `DPoP-Nonce` header.
 """.
 
--export([verify_proof/3, thumbprint/1]).
+-export([verify_proof/3, thumbprint/1, nonce/1, nonce_enabled/1]).
 
 -type error_reason() ::
     missing_proof
     | multiple_proofs
     | malformed_proof
     | {invalid_proof, binary()}
-    | replayed_proof.
+    | replayed_proof
+    | use_dpop_nonce.
 
 -export_type([error_reason/0]).
 
@@ -47,6 +55,20 @@ verify_proof(Req, AccessToken, Opts) ->
         [Proof] -> check_proof(Proof, Req, AccessToken, Opts);
         _ -> {error, multiple_proofs}
     end.
+
+-doc "Whether the options ask for server-provided nonces.".
+-spec nonce_enabled(map()) -> boolean().
+nonce_enabled(#{dpop_nonce := #{secret := Secret}}) when is_binary(Secret) -> true;
+nonce_enabled(_) -> false.
+
+-doc """
+A fresh nonce for the `DPoP-Nonce` header: the current time and an HMAC
+of it under the `dpop_nonce` secret, base64url encoded.
+""".
+-spec nonce(map()) -> binary().
+nonce(#{dpop_nonce := #{secret := Secret}} = Opts) ->
+    Ts = maps:get(now, Opts, os:system_time(second)),
+    b64(<<Ts:64, (nonce_mac(Secret, Ts))/binary>>).
 
 -doc "RFC 7638 SHA-256 thumbprint of a public JWK, base64url without padding.".
 -spec thumbprint(map()) -> binary() | error.
@@ -134,8 +156,15 @@ check_claims(Claims, Jkt, Req, AccessToken, Opts) ->
             maps:get(<<"ath">>, Claims, undefined) =:= b64(crypto:hash(sha256, AccessToken))}
     ],
     case [Name || {Name, false} <- Checks] of
-        [] -> claim(<<Jkt/binary, 0, Jti/binary>>, trunc(Iat) + Window + Leeway, Jkt, Opts);
-        [First | _] -> invalid(First)
+        [] ->
+            case nonce_ok(maps:get(<<"nonce">>, Claims, undefined), Now, Leeway, Opts) of
+                true ->
+                    claim(<<Jkt/binary, 0, Jti/binary>>, trunc(Iat) + Window + Leeway, Jkt, Opts);
+                false ->
+                    {error, use_dpop_nonce}
+            end;
+        [First | _] ->
+            invalid(First)
     end.
 
 claim(Key, ExpiresAt, Jkt, Opts) ->
@@ -147,6 +176,28 @@ claim(Key, ExpiresAt, Jkt, Opts) ->
 
 invalid(What) ->
     {error, {invalid_proof, What}}.
+
+%%====================================================================
+%% Nonce (RFC 9449 section 9)
+%%====================================================================
+
+nonce_ok(Nonce, Now, Leeway, #{dpop_nonce := #{secret := Secret} = Cfg}) when is_binary(Nonce) ->
+    Ttl = maps:get(ttl, Cfg, 300),
+    case livery_auth_jose:b64url(Nonce) of
+        {ok, <<Ts:64, Mac:16/binary>>} ->
+            crypto:hash_equals(Mac, nonce_mac(Secret, Ts)) andalso
+                Ts =< Now + Leeway andalso
+                Now - Ts =< Ttl + Leeway;
+        _ ->
+            false
+    end;
+nonce_ok(_Nonce, _Now, _Leeway, #{dpop_nonce := #{secret := _}}) ->
+    false;
+nonce_ok(_Nonce, _Now, _Leeway, _Opts) ->
+    true.
+
+nonce_mac(Secret, Ts) ->
+    binary:part(crypto:mac(hmac, sha256, Secret, <<"livery-dpop-nonce", Ts:64>>), 0, 16).
 
 %%====================================================================
 %% URL

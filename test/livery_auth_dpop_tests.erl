@@ -284,3 +284,76 @@ resource_metadata_in_challenge_test() ->
 %% Middleware state with a private replay store.
 mw(State) ->
     maps:merge(maps:with([dpop_replay], opts()), State).
+
+%%====================================================================
+%% Server-provided nonces (RFC 9449 section 9)
+%%====================================================================
+
+nonce_opts(Now) -> (opts())#{now => Now, dpop_nonce => #{secret => <<"nonce secret">>}}.
+
+nonce_checks_test_() ->
+    {Key, Jwk} = key(),
+    Opts = nonce_opts(?NOW),
+    Fresh = livery_auth_dpop:nonce(Opts),
+    Old = livery_auth_dpop:nonce(nonce_opts(?NOW - 301)),
+    Future = livery_auth_dpop:nonce(nonce_opts(?NOW + 30)),
+    Foreign = livery_auth_dpop:nonce((nonce_opts(?NOW))#{dpop_nonce => #{secret => <<"other">>}}),
+    <<First, Rest/binary>> = Fresh,
+    Tampered = <<(First bxor 1), Rest/binary>>,
+    With = fun(N) -> [proof(Key, Jwk, #{<<"nonce">> => N}, #{})] end,
+    [
+        {"fresh nonce accepted", ?_assertMatch({ok, _}, check(With(Fresh), Opts))},
+        {"no nonce", ?_assertEqual({error, use_dpop_nonce}, check([proof(Key, Jwk)], Opts))},
+        {"expired nonce", ?_assertEqual({error, use_dpop_nonce}, check(With(Old), Opts))},
+        {"nonce from the future",
+            ?_assertEqual({error, use_dpop_nonce}, check(With(Future), Opts))},
+        {"nonce from another secret",
+            ?_assertEqual({error, use_dpop_nonce}, check(With(Foreign), Opts))},
+        {"tampered nonce", ?_assertEqual({error, use_dpop_nonce}, check(With(Tampered), Opts))},
+        {"not a nonce", ?_assertEqual({error, use_dpop_nonce}, check(With(<<"abc">>), Opts))}
+    ].
+
+%% The client is told to use a nonce, retries with it, and gets the next
+%% one with the answer.
+nonce_round_trip_test() ->
+    {Key, Jwk} = key(),
+    {Token, IssJwk} = issued(#{<<"jkt">> => livery_auth_dpop:thumbprint(Jwk)}),
+    State = #{keys => [IssJwk], dpop => true, dpop_nonce => #{secret => <<"nonce secret">>}},
+    Run = fun(Proof) ->
+        Cap = livery_test_adapter:run(
+            [{livery_auth_bearer, mw(State)}],
+            fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+            request(<<"DPoP">>, Token, [Proof])
+        ),
+        {
+            livery_test_adapter:status(Cap),
+            livery_test_adapter:header(<<"www-authenticate">>, Cap),
+            livery_test_adapter:header(<<"dpop-nonce">>, Cap)
+        }
+    end,
+    {401, Challenge, Nonce} = Run(live_proof(Key, Jwk, Token)),
+    ?assertMatch({_, _}, binary:match(Challenge, <<"DPoP error=\"use_dpop_nonce\"">>)),
+    ?assert(is_binary(Nonce)),
+    Proof = proof(
+        Key,
+        Jwk,
+        #{<<"iat">> => os:system_time(second), <<"ath">> => ath(Token), <<"nonce">> => Nonce},
+        #{}
+    ),
+    {Status, _, Next} = Run(Proof),
+    ?assertEqual(200, Status),
+    ?assert(is_binary(Next)).
+
+nonce_offered_without_token_test() ->
+    {_, IssJwk} = issued(#{}),
+    Cap = livery_test_adapter:run(
+        [
+            {livery_auth_bearer, #{
+                keys => [IssJwk], dpop => true, dpop_nonce => #{secret => <<"s">>}
+            }}
+        ],
+        fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+        #{headers => []}
+    ),
+    ?assertEqual(401, livery_test_adapter:status(Cap)),
+    ?assert(is_binary(livery_test_adapter:header(<<"dpop-nonce">>, Cap))).

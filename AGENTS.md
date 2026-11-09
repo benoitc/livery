@@ -158,7 +158,7 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 7662 token introspection | introspection client, audience and scope checks | `livery_auth_introspect` |
 | RFC 8414 authorization server metadata | `discover_oauth/1,2` | `livery_auth_oidc` |
 | RFC 8705 certificate-bound access tokens | `cnf.x5t#S256` against the client certificate | `livery_auth_binding` |
-| RFC 9449 DPoP | proof checks, `cnf.jkt`, `DPoP` scheme and challenge | `livery_auth_dpop`, `livery_auth_binding`, `livery_auth_dpop_store` |
+| RFC 9449 DPoP | proof checks, `cnf.jkt`, `DPoP` scheme and challenge, server nonces | `livery_auth_dpop`, `livery_auth_binding`, `livery_auth_dpop_store` |
 | RFC 7638 JWK thumbprint | DPoP key thumbprint | `livery_auth_dpop` |
 | RFC 6749 (client side, updated by RFC 9700) | token requests, client authentication, client credentials and authorization code grants | `livery_auth_token`, `livery_client_oauth`, `livery_auth_login` |
 | RFC 7523 (updated by RFC 10070) | `private_key_jwt` client assertions | `livery_auth_token` |
@@ -166,6 +166,7 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 8707 resource indicators | `resource` on token requests | `livery_auth_token` |
 | RFC 9207 issuer identification | `iss` check on the authorization response | `livery_auth_login` |
 | OpenID Connect Core 1.0 | authorization code flow, ID token validation | `livery_auth_login` |
+| OpenID Connect RP-Initiated Logout 1.0 | logout redirect to `end_session_endpoint` | `livery_auth_login` |
 | RFC 9728 protected resource metadata | metadata document, `resource_metadata` challenge parameter | `livery_auth_resource`, `livery_auth_challenge` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
 | OpenAPI 3.2, JSON Schema (subset) | document generation, request validation | `livery_openapi`, `livery_openapi_validate` |

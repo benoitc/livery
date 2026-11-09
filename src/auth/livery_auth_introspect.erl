@@ -102,11 +102,11 @@ call(Req, Next, State) ->
 authorize(Scheme, Token, Claims, Req, Next, State) ->
     case livery_auth_binding:check(Scheme, Token, Claims, Req, State) of
         ok ->
-            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
-                [] ->
+            case authorized(Claims, State) of
+                ok ->
                     granted(Scheme, Next(livery_req:set_meta(user, Claims, Req)), State);
-                Missing ->
-                    livery_auth_challenge:respond({insufficient_scope, Missing}, Scheme, State)
+                {error, Outcome} ->
+                    livery_auth_challenge:respond(Outcome, Scheme, State)
             end;
         {error, Failure} ->
             livery_auth_challenge:respond(Failure, Scheme, State)
@@ -218,3 +218,15 @@ form_encode(Value) ->
 %% A DPoP client gets the nonce for its next proof with every answer.
 granted(dpop, Resp, State) -> livery_auth_challenge:with_nonce(Resp, State);
 granted(bearer, Resp, _State) -> Resp.
+
+%% Who signed in, and how (RFC 9470), before what the token may do.
+authorized(Claims, State) ->
+    case livery_auth_stepup:check(Claims, State) of
+        ok ->
+            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
+                [] -> ok;
+                Missing -> {error, {insufficient_scope, Missing}}
+            end;
+        {error, _} = E ->
+            E
+    end.

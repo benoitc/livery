@@ -45,7 +45,7 @@ endpoint in the assertion's `aud`, which RFC 10070 no longer allows,
 for servers that still expect it. See AGENTS.md, Known deviations.
 """.
 
--export([request/3]).
+-export([request/3, push_request/3]).
 
 -export_type([token/0, opts/0, error_reason/0]).
 
@@ -91,10 +91,55 @@ request(Grant, Params, Opts) ->
     case client_auth(Opts) of
         {ok, Headers, AuthForm} ->
             Form = AuthForm ++ grant_form(Grant, Params),
-            post(Headers, iolist_to_binary(uri_string:compose_query(Form)), Opts);
+            case post(maps:get(token_endpoint, Opts), Headers, Form, Opts) of
+                {ok, Status, Body} -> response(Status, Body, Opts);
+                {error, _} = E -> E
+            end;
         {error, _} = E ->
             E
     end.
+
+-doc """
+Push an authorization request to `Endpoint` (RFC 9126), with the same
+client authentication as token requests, and return the `request_uri`
+to send the browser with. `Params` are the authorization request
+parameters; a `request_uri` among them is dropped, as section 2.1
+requires. `expires_in` is in seconds.
+""".
+-spec push_request(binary(), [{binary(), binary()}], opts()) ->
+    {ok, #{request_uri := binary(), expires_in := integer() | undefined}}
+    | {error, error_reason()}.
+push_request(Endpoint, Params, Opts) ->
+    case client_auth(Opts) of
+        {ok, Headers, AuthForm} ->
+            %% `client_id' is required here (2.1); the client authentication
+            %% may already carry it.
+            Dup = lists:keymember(<<"client_id">>, 1, AuthForm),
+            Form =
+                AuthForm ++
+                    [
+                        P
+                     || {K, _} = P <- Params,
+                        K =/= <<"request_uri">>,
+                        not (Dup andalso K =:= <<"client_id">>)
+                    ],
+            case post(Endpoint, Headers, Form, Opts) of
+                {ok, 201, Body} -> pushed(decode(Body));
+                {ok, Status, Body} -> error_response(Status, Body);
+                {error, _} = E -> E
+            end;
+        {error, _} = E ->
+            E
+    end.
+
+pushed(#{<<"request_uri">> := Uri} = Raw) when is_binary(Uri) ->
+    In = maps:get(<<"expires_in">>, Raw, undefined),
+    {ok, #{request_uri => Uri, expires_in => if_number(In)}};
+pushed(_) ->
+    {error, invalid_response}.
+
+if_number(N) when is_number(N) -> trunc(N);
+if_number(_) -> undefined.
 
 %%====================================================================
 %% Request
@@ -185,7 +230,8 @@ assertion_jwt(Id, Aud, #{private_key := Key} = Opts) ->
 form(Value) ->
     iolist_to_binary(uri_string:compose_query([{Value, true}])).
 
-post(Headers, Body, Opts) ->
+post(Url, Headers, Form, Opts) ->
+    Body = iolist_to_binary(uri_string:compose_query(Form)),
     Client = livery_client:new(maps:with([adapter, adapter_opts], Opts)),
     ReqOpts = #{
         headers => [
@@ -196,8 +242,8 @@ post(Headers, Body, Opts) ->
         body => {full, Body},
         timeout => maps:get(timeout, Opts, 10000)
     },
-    case livery_client:request(Client, post, maps:get(token_endpoint, Opts), ReqOpts) of
-        {ok, Resp} -> response(livery_client:status(Resp), body(Resp), Opts);
+    case livery_client:request(Client, post, Url, ReqOpts) of
+        {ok, Resp} -> {ok, livery_client:status(Resp), body(Resp)};
         {error, _} = E -> E
     end.
 
@@ -228,6 +274,9 @@ response(200, Body, Opts) ->
             {error, invalid_response}
     end;
 response(Status, Body, _Opts) ->
+    error_response(Status, Body).
+
+error_response(Status, Body) ->
     case decode(Body) of
         #{<<"error">> := Code} = Err when is_binary(Code) ->
             {error, {oauth_error, Code, maps:get(<<"error_description">>, Err, undefined)}};

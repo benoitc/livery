@@ -166,6 +166,8 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 8707 resource indicators | `resource` on token requests | `livery_auth_token` |
 | RFC 9207 issuer identification | `iss` check on the authorization response | `livery_auth_login` |
 | OpenID Connect Core 1.0 | authorization code flow, ID token validation | `livery_auth_login` |
+| RFC 9470 step-up authentication | `acr_values` and `max_age` on the API and the login flow | `livery_auth_stepup`, `livery_auth_bearer`, `livery_auth_introspect`, `livery_auth_login` |
+| RFC 9126 pushed authorization requests (updated by RFC 10070) | `push_request/3`, `par` option on login | `livery_auth_token`, `livery_auth_login` |
 | OpenID Connect RP-Initiated Logout 1.0 | logout redirect to `end_session_endpoint` | `livery_auth_login` |
 | RFC 9728 protected resource metadata | metadata document, `resource_metadata` challenge parameter | `livery_auth_resource`, `livery_auth_challenge` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
@@ -191,6 +193,7 @@ treated as a new bug.
 | RFC 9728 section 3.3 | does not check that `resource` is the URL clients use | only the application knows its public URL | `livery_auth_resource` |
 | RFC 10070 section 2 | `assertion_audience => token_endpoint` puts the token endpoint in the assertion's `aud`, which RFC 10070 no longer allows; off by default | some authorization servers still expect the old audience | `livery_auth_token` |
 | OpenID Connect Core 1.0 section 3.1.3.8 | `at_hash` is not checked for Ed448 ID tokens | the spec names no hash for that curve | `livery_auth_login` |
+| OpenID Connect Core 1.0 section 5.5.1.1 | refuses an ID token whose `acr` is not one of the `acr_values` requested, where OIDC lets the provider answer with another | accepting it would silently grant a weaker sign-in than the route asked for (RFC 9470 section 4) | `livery_auth_login` |
 | RFC 6265 section 5.3 step 5 | no public suffix list; refuses single-label domains instead | no dependency ships the list | `livery_client_cookie` |
 | RFC 6265bis `SameSite` | parsed but not enforced by the client jar | the jar has no notion of the site a request comes from | `livery_client_cookie` |
 | JSON Schema 2020-12 | OpenAPI request validation covers a subset of keywords | a full validator is out of scope | `livery_openapi_validate` |

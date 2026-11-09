@@ -54,6 +54,8 @@ stripped(Opts) ->
             dpop_replay,
             dpop_iat_window,
             dpop_nonce,
+            acr_values,
+            max_age,
             realm,
             resource_metadata,
             required

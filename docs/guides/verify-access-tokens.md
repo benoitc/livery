@@ -63,6 +63,29 @@ end.
 With `required => false`, a request without a token goes through and
 the handler sees no user; a bad token is still refused.
 
+## Require a stronger or more recent sign-in
+
+Some routes deserve more than a valid token: a payment, a change of
+email, an admin action. Ask for a sign-in method (`acr_values`, as your
+provider names them) or a recent sign-in (`max_age`, in seconds) on the
+route's own stack:
+
+```erlang
+{livery_auth_bearer, #{
+    jwks_uri   => JwksUri,
+    issuer     => Issuer,
+    audience   => <<"https://api.example">>,
+    acr_values => [<<"urn:example:mfa">>],
+    max_age    => 300
+}}
+```
+
+A token from a weaker or older sign-in gets `401` with
+`error="insufficient_user_authentication"` and the `acr_values` and
+`max_age` to sign in again with (RFC 9470). The token has to carry
+`acr` and `auth_time` for this; most providers add them to access tokens
+when asked to.
+
 ## Tell clients where to get a token
 
 Publish protected resource metadata (RFC 9728), so a client that gets a

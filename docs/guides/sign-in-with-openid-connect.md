@@ -64,6 +64,36 @@ Login#{on_login => fun(Claims, _Token) ->
 end}
 ```
 
+## Ask for a stronger sign-in when a route needs it
+
+When your API answers `insufficient_user_authentication` (see
+[Verify JWT access tokens](verify-access-tokens.md)), send the user back
+through login with what it asked for:
+
+```erlang
+Login#{step_up_acr_values => [<<"urn:example:mfa">>]}
+%% then redirect to
+%% /login?acr_values=urn:example:mfa&max_age=300&return_to=/payments
+```
+
+Only the levels listed in `step_up_acr_values` are taken from the link,
+so nobody can craft a login with a level of their choosing. Set
+`acr_values` or `max_age` in the options to ask for them on every login.
+The callback refuses an ID token whose `acr` is not one requested, or
+whose `auth_time` is older than `max_age`, and the session keeps `acr`
+and `auth_time` so your handlers can check them too.
+
+## Keep the login request out of the URL
+
+When the provider supports pushed authorization requests (RFC 9126, it
+then lists `pushed_authorization_request_endpoint` in its metadata),
+Livery sends the login parameters to the provider directly first, and
+the browser only carries a short reference. Nothing to configure:
+`par => auto` is the default. Set `par => false` to keep the classic
+redirect, unless the provider requires PAR, in which case Livery always
+uses it. With PAR, PKCE, `private_key_jwt` and DPoP-bound tokens, your
+app follows the FAPI 2.0 security profile.
+
 ## What is checked for you
 
 - `state` and a PKCE verifier tie the callback to the browser that

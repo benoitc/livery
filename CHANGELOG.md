@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Routes can require a stronger or more recent sign-in with
+  `acr_values` and `max_age` (RFC 9470). A token that falls short gets
+  `401` with `error="insufficient_user_authentication"`, and
+  `livery_auth_login` can send the user back through sign-in with the
+  level asked for, then checks that the provider delivered it.
+- `livery_auth_login` sends the login request to the provider directly
+  when it supports pushed authorization requests (RFC 9126), so it no
+  longer travels in the browser's URL. `livery_auth_token:push_request/3`
+  does it on its own.
 - `livery_client:oauth/1` adds an OAuth client-credentials token to
   outbound requests. Tokens are cached until shortly before they expire,
   a burst of requests shares one new token, and a revoked token is

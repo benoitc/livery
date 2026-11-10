@@ -18,7 +18,7 @@ oauth_test_() ->
             {"refresh before expiry", fun skew/0},
             {"retry once after a revoked token", fun revoked/0},
             {"no retry for a streamed body", fun streamed_not_retried/0},
-            {"refuse a non-bearer token", fun dpop_token_type/0},
+            {"refuse a DPoP token unless dpop is set", fun dpop_token_type/0},
             {"token error is returned", fun token_error/0},
             {"token only for allowed origins", fun origins/0},
             {"origins from the resource", fun resource_origins/0},

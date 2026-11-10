@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   origin, RP ID, challenge (used once), user presence and verification,
   backup flags, signature and counter, and `none` or `packed`
   attestation. Passkeys resist phishing, which one-time codes do not.
+- The OAuth client layer can bind its tokens to a key with DPoP (RFC
+  9449), so a token copied from a log or a proxy cannot be used by
+  anyone else. With `dpop => true`, the token request and every API
+  request carry a proof signed by that key, and a server's request for
+  a nonce is followed. Before, an authorization server issuing DPoP
+  tokens could not be used at all.
 
 ### Changed
 

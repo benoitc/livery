@@ -40,6 +40,12 @@ seconds, from `expires_in`, or `undefined`), `scope`, `refresh_token`,
 `id_token` when present, and `raw` with the whole response. An error
 body (RFC 6749 5.2) gives `{error, {oauth_error, Code, Description}}`.
 
+With `dpop => Ctx` (a `livery_client_dpop` context), every request
+carries a DPoP proof (RFC 9449 section 5), so the server binds the token
+to that key and answers `token_type` `DPoP`; a `use_dpop_nonce` answer
+is retried once with the nonce the server sent (section 8). Pushed
+authorization requests carry the proof too.
+
 Deviations: `assertion_audience => token_endpoint` puts the token
 endpoint in the assertion's `aud`, which RFC 10070 no longer allows,
 for servers that still expect it. See AGENTS.md, Known deviations.
@@ -74,6 +80,7 @@ for servers that still expect it. See AGENTS.md, Known deviations.
     adapter => module(),
     adapter_opts => map(),
     timeout => timeout(),
+    dpop => livery_client_dpop:ctx(),
     now => integer()
 }.
 
@@ -88,16 +95,38 @@ for servers that still expect it. See AGENTS.md, Known deviations.
 -spec request(client_credentials | authorization_code | refresh_token, map(), opts()) ->
     {ok, token()} | {error, error_reason()}.
 request(Grant, Params, Opts) ->
+    request(Grant, Params, Opts, nonce_retry).
+
+%% RFC 9449 section 8: a server that wants a nonce answers 400
+%% `use_dpop_nonce' with one; the request is made again, once, from the
+%% start, so a client assertion is not sent twice.
+request(Grant, Params, Opts, Retry) ->
     case client_auth(Opts) of
         {ok, Headers, AuthForm} ->
             Form = AuthForm ++ grant_form(Grant, Params),
             case post(maps:get(token_endpoint, Opts), Headers, Form, Opts) of
-                {ok, Status, Body} -> response(Status, Body, Opts);
-                {error, _} = E -> E
+                {ok, 400, RespHeaders, Body} when Retry =:= nonce_retry ->
+                    case wants_nonce(Opts, RespHeaders, Body) of
+                        true -> request(Grant, Params, Opts, no_retry);
+                        false -> response(400, Body, Opts)
+                    end;
+                {ok, Status, _, Body} ->
+                    response(Status, Body, Opts);
+                {error, _} = E ->
+                    E
             end;
         {error, _} = E ->
             E
     end.
+
+wants_nonce(#{dpop := _}, Headers, Body) ->
+    lists:any(fun({K, _}) -> string:lowercase(K) =:= <<"dpop-nonce">> end, Headers) andalso
+        case decode(Body) of
+            #{<<"error">> := <<"use_dpop_nonce">>} -> true;
+            _ -> false
+        end;
+wants_nonce(_Opts, _Headers, _Body) ->
+    false.
 
 -doc """
 Push an authorization request to `Endpoint` (RFC 9126), with the same
@@ -124,8 +153,8 @@ push_request(Endpoint, Params, Opts) ->
                         not (Dup andalso K =:= <<"client_id">>)
                     ],
             case post(Endpoint, Headers, Form, Opts) of
-                {ok, 201, Body} -> pushed(decode(Body));
-                {ok, Status, Body} -> error_response(Status, Body);
+                {ok, 201, _, Body} -> pushed(decode(Body));
+                {ok, Status, _, Body} -> error_response(Status, Body);
                 {error, _} = E -> E
             end;
         {error, _} = E ->
@@ -237,15 +266,24 @@ post(Url, Headers, Form, Opts) ->
         headers => [
             {<<"content-type">>, <<"application/x-www-form-urlencoded">>},
             {<<"accept">>, <<"application/json">>}
-            | Headers
+            | Headers ++ dpop_header(Url, Opts)
         ],
         body => {full, Body},
         timeout => maps:get(timeout, Opts, 10000)
     },
     case livery_client:request(Client, post, Url, ReqOpts) of
-        {ok, Resp} -> {ok, livery_client:status(Resp), body(Resp)};
-        {error, _} = E -> E
+        {ok, #{headers := RespHeaders} = Resp} ->
+            _ = [livery_client_dpop:remember(Ctx, Url, RespHeaders) || Ctx <- dpop_ctx(Opts)],
+            {ok, livery_client:status(Resp), RespHeaders, body(Resp)};
+        {error, _} = E ->
+            E
     end.
+
+dpop_header(Url, Opts) ->
+    [{<<"dpop">>, livery_client_dpop:proof(Ctx, post, Url, undefined)} || Ctx <- dpop_ctx(Opts)].
+
+dpop_ctx(#{dpop := Ctx}) -> [Ctx];
+dpop_ctx(_Opts) -> [].
 
 body(Resp) ->
     case livery_client:body(Resp) of

@@ -588,3 +588,15 @@ par_with_private_key_jwt_test() ->
             ?assertEqual(?ISS, maps:get(<<"aud">>, Claims))
     after 1000 -> error(not_pushed)
     end.
+
+%% The sign-in state cookie cannot stand in for a session cookie.
+state_cookie_is_not_a_session_test() ->
+    #{cookie := Cookie} = start(<<>>),
+    [_Name, Value] = binary:split(Cookie, <<"=">>),
+    Stack = [{livery_auth_session, #{secret => ?SECRET, required => true}}],
+    Cap = livery_test_adapter:run(
+        Stack,
+        fun(_) -> livery_resp:text(200, <<"in">>) end,
+        #{headers => [{<<"cookie">>, <<"session=", Value/binary>>}]}
+    ),
+    ?assertEqual(401, livery_test_adapter:status(Cap)).

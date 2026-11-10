@@ -508,7 +508,11 @@ state_cookie_name(Opts) ->
     <<(maps:get(name, maps:get(session, Opts), <<"session">>))/binary, "_login">>.
 
 signing(Opts, MaxAge) ->
-    #{secret => maps:get(secret, maps:get(session, Opts)), max_age => MaxAge}.
+    #{
+        secret => maps:get(secret, maps:get(session, Opts)),
+        purpose => <<"oidc-state">>,
+        max_age => MaxAge
+    }.
 
 callback_path(Opts) ->
     #{path := Path} = uri_string:parse(maps:get(redirect_uri, Opts)),

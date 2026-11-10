@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The cookie that carries an OpenID Connect sign-in in progress was
+  signed with the session secret, and `livery_auth_session` accepted it
+  as a session (GHSA-r4pj-gcrj-m4fv). Each kind of signed cookie now
+  has its own key derived from the secret, so a cookie made for one use
+  is refused for any other. Existing session cookies stay valid; a
+  sign-in started before the upgrade has to start again.
+
 ### Added
 
 - Passkeys (WebAuthn Level 3). `livery_auth_passkey` gives the routes to

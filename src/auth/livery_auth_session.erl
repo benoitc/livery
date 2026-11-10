@@ -23,6 +23,12 @@ A missing cookie is allowed through when `required => false` (the
 default); the handler sees no `session` meta. A present but
 tampered or expired cookie is always rejected with `401`.
 
+`sign/2` and `verify/2` also sign other short-lived cookies. Give each
+kind its own `purpose` (a binary): its cookies are then signed with a
+key derived from the secret for that purpose, and are refused by the
+middleware and by any other purpose. `livery_auth_login` and
+`livery_auth_passkey` do this for their state and challenge cookies.
+
 Issue and clear cookies from a handler with `sign/2` plus
 `set_cookie_header/2` and `clear_cookie_header/1`:
 
@@ -205,8 +211,15 @@ path(Opts) -> maps:get(path, Opts, <<"/">>).
 -spec meta_key(map()) -> term().
 meta_key(Opts) -> maps:get(meta_key, Opts, session).
 
+%% A cookie signed for a `purpose' (a sign-in state, a passkey challenge)
+%% uses a key of its own, so it is never accepted as a session cookie or
+%% for another purpose. Session cookies keep the raw secret, so cookies
+%% issued before purposes existed stay valid.
 -spec secret(map()) -> binary().
-secret(#{secret := S}) -> S.
+secret(#{secret := S, purpose := Purpose}) when is_binary(Purpose) ->
+    crypto:mac(hmac, sha256, S, <<"livery-cookie:", Purpose/binary>>);
+secret(#{secret := S}) ->
+    S.
 
 -spec mac(binary(), binary()) -> binary().
 mac(Secret, Data) ->

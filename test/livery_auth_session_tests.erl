@@ -174,3 +174,28 @@ session_expires_at_exp_test() ->
     Live = livery_auth_session:sign(#{<<"exp">> => Now + 60}, #{secret => Secret}),
     ?assertEqual({error, expired}, livery_auth_session:verify(Expired, #{secret => Secret})),
     ?assertMatch({ok, _}, livery_auth_session:verify(Live, #{secret => Secret})).
+
+%%====================================================================
+%% Purposes: a cookie signed for one use is refused for any other
+%%====================================================================
+
+purpose_roundtrip_test() ->
+    Opts = #{secret => ?SECRET, purpose => <<"state">>},
+    Cookie = livery_auth_session:sign(#{<<"s">> => 1}, Opts),
+    ?assertEqual({ok, #{<<"s">> => 1}}, livery_auth_session:verify(Cookie, Opts)).
+
+purposes_do_not_cross_test() ->
+    Cookie = livery_auth_session:sign(#{<<"s">> => 1}, #{secret => ?SECRET, purpose => <<"a">>}),
+    ?assertEqual(
+        {error, bad_signature},
+        livery_auth_session:verify(Cookie, #{secret => ?SECRET, purpose => <<"b">>})
+    ),
+    ?assertEqual({error, bad_signature}, livery_auth_session:verify(Cookie, #{secret => ?SECRET})).
+
+purpose_cookie_is_not_a_session_test() ->
+    Cookie = livery_auth_session:sign(#{<<"s">> => 1}, #{secret => ?SECRET, purpose => <<"a">>}),
+    Stack = [{livery_auth_session, #{secret => ?SECRET, required => true}}],
+    Cap = livery_test_adapter:run(
+        Stack, handler(), #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}
+    ),
+    ?assertEqual(401, livery_test_adapter:status(Cap)).

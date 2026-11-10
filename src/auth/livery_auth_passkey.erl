@@ -192,7 +192,11 @@ cookie_name(Opts) ->
     <<(maps:get(name, maps:get(session, Opts), <<"session">>))/binary, "_passkey">>.
 
 signing(Opts) ->
-    #{secret => maps:get(secret, maps:get(session, Opts)), max_age => ?CHALLENGE_AGE}.
+    #{
+        secret => maps:get(secret, maps:get(session, Opts)),
+        purpose => <<"passkey-challenge">>,
+        max_age => ?CHALLENGE_AGE
+    }.
 
 %%====================================================================
 %% Helpers

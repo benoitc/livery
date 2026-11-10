@@ -23,7 +23,8 @@ passkey_test_() ->
             {"no challenge cookie", fun no_challenge/0},
             {"a credential id is registered once", fun duplicate_refused/0},
             {"a store's own refusal of a duplicate", fun store_refuses_duplicate/0},
-            {"sign-in needs the user handle", fun user_handle_required/0}
+            {"sign-in needs the user handle", fun user_handle_required/0},
+            {"a challenge cookie is not a session", fun challenge_not_session/0}
         ]}.
 
 %%====================================================================
@@ -225,3 +226,14 @@ user_handle_required() ->
         {400, #{<<"error">> := <<"user_handle_missing">>}, _},
         post(Opts, <<"login">>, [cookie(<<"session_passkey">>, Set)], Assertion)
     ).
+%% Anyone can get a challenge cookie; it must not open a session.
+challenge_not_session() ->
+    {200, _, Set} = post(opts(ets:new(creds, [public]), undefined), <<"login/options">>, [], #{}),
+    <<"session_passkey=", Value/binary>> = cookie(<<"session_passkey">>, Set),
+    Stack = [{livery_auth_session, #{secret => ?SECRET, required => true}}],
+    Cap = livery_test_adapter:run(
+        Stack,
+        fun(_) -> livery_resp:text(200, <<"in">>) end,
+        #{headers => [{<<"cookie">>, <<"session=", Value/binary>>}]}
+    ),
+    ?assertEqual(401, livery_test_adapter:status(Cap)).

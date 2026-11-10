@@ -63,7 +63,12 @@ cached(Key, Skew) ->
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
-    _ = ets:new(?TABLE, [named_table, public, set, {read_concurrency, true}]),
+    %% The second table holds generated DPoP keys and the nonces servers
+    %% sent, for `livery_client_dpop'.
+    _ = [
+        ets:new(T, [named_table, public, set, {read_concurrency, true}])
+     || T <- [?TABLE, livery_client_dpop:table()]
+    ],
     {ok, #state{}}.
 
 -spec handle_call(term(), gen_server:from(), state()) ->

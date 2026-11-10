@@ -21,7 +21,7 @@ because most issuers still send it. See AGENTS.md, Known deviations.
 
 -include_lib("public_key/include/public_key.hrl").
 
--export([algorithms/0, verify/6, sign/3, b64url/1, decode_json/1]).
+-export([algorithms/0, verify/6, sign/3, public_jwk/1, b64url/1, decode_json/1]).
 
 -type spec() ::
     {rsa, atom(), pkcs1 | pss}
@@ -75,6 +75,43 @@ sign({Alg, _} = Key, Header, Claims) ->
     P64 = b64(iolist_to_binary(json:encode(Claims))),
     Input = <<H64/binary, ".", P64/binary>>,
     <<Input/binary, ".", (b64(sign_input(spec(Alg), Key, Input)))/binary>>.
+
+-doc """
+The public JWK of a signing key `{Alg, PrivateKey}` (the key records
+`sign/3` takes), with only its public members and `alg`.
+""".
+-spec public_jwk({binary(), term()}) -> map().
+public_jwk({Alg, #'RSAPrivateKey'{modulus = N, publicExponent = E}}) ->
+    #{
+        <<"kty">> => <<"RSA">>,
+        <<"alg">> => Alg,
+        <<"n">> => b64(binary:encode_unsigned(N)),
+        <<"e">> => b64(binary:encode_unsigned(E))
+    };
+public_jwk({Alg, #'ECPrivateKey'{parameters = {namedCurve, Oid}, publicKey = Pub}}) ->
+    case Oid of
+        ?'id-Ed25519' -> okp_jwk(Alg, <<"Ed25519">>, Pub);
+        ?'id-Ed448' -> okp_jwk(Alg, <<"Ed448">>, Pub);
+        _ -> ec_jwk(Alg, Oid, Pub)
+    end.
+
+okp_jwk(Alg, Crv, X) ->
+    #{<<"kty">> => <<"OKP">>, <<"alg">> => Alg, <<"crv">> => Crv, <<"x">> => b64(X)}.
+
+ec_jwk(Alg, Oid, <<4, XY/binary>>) ->
+    Size = byte_size(XY) div 2,
+    <<X:Size/binary, Y:Size/binary>> = XY,
+    #{
+        <<"kty">> => <<"EC">>,
+        <<"alg">> => Alg,
+        <<"crv">> => curve_name(Oid),
+        <<"x">> => b64(X),
+        <<"y">> => b64(Y)
+    }.
+
+curve_name(?'secp256r1') -> <<"P-256">>;
+curve_name(?'secp384r1') -> <<"P-384">>;
+curve_name(?'secp521r1') -> <<"P-521">>.
 
 -doc "Decode a base64url JOSE part that must hold a JSON object.".
 -spec decode_json(binary()) -> {ok, map()} | error.

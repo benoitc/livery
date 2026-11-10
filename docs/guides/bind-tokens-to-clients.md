@@ -30,7 +30,10 @@ plain `Bearer`. To accept DPoP proofs, turn the scheme on:
 
 The client then sends `Authorization: DPoP <token>` and a `DPoP` header
 with its proof. Livery checks the proof (method, URL, age, access token
-hash, single use) and that its key is the one the token names.
+hash, single use) and that its key is the one the token names. A Livery
+service calling such an API sends the proofs with `dpop => true` on
+`livery_client:oauth/1`; see
+[Call an API that wants an OAuth token](call-apis-with-oauth.md).
 
 ## Require bound tokens
 

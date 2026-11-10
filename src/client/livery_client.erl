@@ -145,18 +145,19 @@ run(Client, Req) ->
         Pid when is_pid(Pid) ->
             start_push(Adapter, AdapterOpts, Req, Pid);
         _ ->
-            Handler = fun(R) ->
-                case credentials_allowed(R) of
-                    ok -> Adapter:request(R, AdapterOpts);
-                    {error, _} = E -> E
-                end
-            end,
-            run_stack(Stack, Handler, Req)
+            run_stack(Stack, fun(R) -> send(Adapter, AdapterOpts, R) end, Req)
+    end.
+
+send(Adapter, AdapterOpts, Req) ->
+    case credentials_allowed(Req) of
+        ok -> livery_client_dpop:send(Req, fun(R) -> Adapter:request(R, AdapterOpts) end);
+        {error, _} = E -> E
     end.
 
 %% A layer that adds credentials (`livery_client_oauth') lists the origins
 %% they are for in `meta'. Checked here, after every layer has had its say
-%% on the URL, so a later rewrite cannot send them elsewhere.
+%% on the URL, so a later rewrite cannot send them elsewhere. A DPoP proof
+%% is signed here too, as it names that final URL.
 credentials_allowed(#{meta := #{credential_origins := Allowed}, url := Url}) ->
     case origin(Url) of
         {ok, Origin} ->

@@ -77,6 +77,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `livery_body_limit` only checked bodies that were already buffered,
+  which the adapters never produce, so its limit did not apply. A
+  `Content-Length` above it now gets `413` before the handler runs, and
+  a streamed body is read through a reader that refuses to go past it.
+- `livery_concurrency` released its slot as soon as the handler
+  returned, so streamed responses such as SSE stopped counting while
+  they were still being sent. The slot is now held until the response
+  has been sent.
+- Multipart parsing was looser than RFC 2046: it took any boundary,
+  found delimiters in the middle of a line, treated text that merely
+  started like a delimiter as one, and broke quoted parameters such as
+  a `filename` holding `;` or `\"`. Boundaries are now checked, a
+  delimiter must start a line and end correctly, and quoted values are
+  read properly.
 - Compression now follows the client's preferences: the coding with the
   highest `Accept-Encoding` q-value wins, where before the server's
   order did. A client that refuses unencoded content and accepts none of

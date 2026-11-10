@@ -41,7 +41,6 @@ handler MUST confine/sanitize it before using it as a path.
 
 -record(mp, {
     reader :: livery_body:reader() | undefined,
-    dash :: binary(),
     crlfdash :: binary(),
     buffer = <<>> :: binary(),
     state = start :: start | after_boundary | body | closed,
@@ -89,6 +88,8 @@ handler MUST confine/sanitize it before using it as a path.
         | max_body}.
 
 -define(CRLF, <<"\r\n">>).
+%% Transport padding allowed after a boundary before its CRLF.
+-define(MAX_PADDING, 64).
 
 %%====================================================================
 %% Construction
@@ -119,7 +120,6 @@ init_mp(Req, Boundary, Opts) ->
     {Buffer, Reader, Consumed} = source(Req),
     #mp{
         reader = Reader,
-        dash = <<"--", Boundary/binary>>,
         crlfdash = <<"\r\n--", Boundary/binary>>,
         buffer = Buffer,
         opts = Opts,
@@ -162,8 +162,10 @@ next_part(#mp{} = MP0, Timeout) ->
 -spec advance(mp()) -> {part, part(), mp()} | {done, mp()} | {error, reason(), mp()}.
 advance(#mp{state = closed} = MP) ->
     {done, MP};
-advance(#mp{state = start} = MP) ->
-    case start_scan(MP) of
+advance(#mp{state = start, buffer = Buf} = MP) ->
+    %% RFC 2046 5.1.1: a delimiter starts a line. A virtual CRLF before
+    %% the body lets the first one, at the very start, match like the rest.
+    case start_scan(MP#mp{buffer = <<"\r\n", Buf/binary>>}) of
         {ok, MP1} -> at_boundary(MP1);
         {done, MP1} -> {done, MP1};
         {error, R, MP1} -> {error, R, MP1}
@@ -262,25 +264,32 @@ body_chunk(#mp{buffer = Buf, crlfdash = Needle} = MP) ->
     case binary:match(Buf, Needle) of
         {Pos, Len} ->
             <<Body:Pos/binary, _:Len/binary, Rest/binary>> = Buf,
-            MP1 = MP#mp{buffer = Rest, state = after_boundary},
-            case Pos of
-                0 -> {done, MP1};
-                _ -> {ok, Body, MP1}
+            case delimiter_end(Rest) of
+                ok when Pos =:= 0 -> {done, MP#mp{buffer = Rest, state = after_boundary}};
+                ok -> {ok, Body, MP#mp{buffer = Rest, state = after_boundary}};
+                more -> more(MP, fun body_chunk/1);
+                %% Not a delimiter: the bytes up to the end of the match are
+                %% part content. A boundary holds no CR, so no real
+                %% delimiter can start inside them.
+                content -> {ok, binary:part(Buf, 0, Pos + Len), MP#mp{buffer = Rest}}
             end;
         nomatch ->
-            HoldBack = byte_size(MP#mp.crlfdash) - 1,
+            HoldBack = byte_size(Needle) - 1,
             case byte_size(Buf) > HoldBack of
                 true ->
                     Emit = binary:part(Buf, 0, byte_size(Buf) - HoldBack),
-                    Keep = binary:part(Buf, byte_size(Buf) - HoldBack, HoldBack),
-                    {ok, Emit, MP#mp{buffer = Keep}};
+                    {ok, Emit, MP#mp{buffer = tail(Buf, HoldBack)}};
                 false ->
-                    case pull(MP) of
-                        {ok, MP1} -> body_chunk(MP1);
-                        {eof, MP1} -> {error, malformed, MP1};
-                        {error, R, MP1} -> {error, R, MP1}
-                    end
+                    more(MP, fun body_chunk/1)
             end
+    end.
+
+%% Pull another chunk and try again; the body ending here is malformed.
+more(MP, Again) ->
+    case pull(MP) of
+        {ok, MP1} -> Again(MP1);
+        {eof, MP1} -> {error, malformed, MP1};
+        {error, R, MP1} -> {error, R, MP1}
     end.
 
 -spec skip_body(mp()) -> {ok, mp()} | {error, reason(), mp()}.
@@ -347,13 +356,20 @@ collect_body(MP0, Acc, Size, Max) ->
 
 %% Skip the preamble, locate the first `--boundary`, position after it.
 -spec start_scan(mp()) -> {ok, mp()} | {done, mp()} | {error, reason(), mp()}.
-start_scan(#mp{buffer = Buf, dash = Dash} = MP) ->
-    case binary:match(Buf, Dash) of
+start_scan(#mp{buffer = Buf, crlfdash = Needle} = MP) ->
+    case binary:match(Buf, Needle) of
         {Pos, Len} ->
             Rest = binary:part(Buf, Pos + Len, byte_size(Buf) - Pos - Len),
-            {ok, MP#mp{buffer = Rest, state = after_boundary}};
+            case delimiter_end(Rest) of
+                ok ->
+                    {ok, MP#mp{buffer = Rest, state = after_boundary}};
+                more ->
+                    more(MP, fun start_scan/1);
+                content ->
+                    start_scan(MP#mp{buffer = Rest})
+            end;
         nomatch ->
-            HoldBack = byte_size(Dash) - 1,
+            HoldBack = byte_size(Needle) - 1,
             Keep = tail(Buf, HoldBack),
             case pull(MP#mp{buffer = Keep}) of
                 {ok, MP1} ->
@@ -367,6 +383,25 @@ start_scan(#mp{buffer = Buf, dash = Dash} = MP) ->
                     {error, R, MP1}
             end
     end.
+
+%% What follows `--boundary' decides whether it is a delimiter (RFC 2046
+%% 5.1.1): `--' closes, optional spaces or tabs then CRLF opens a part,
+%% anything else is ordinary content. `more' asks for more bytes.
+-spec delimiter_end(binary()) -> ok | more | content.
+delimiter_end(<<"--", _/binary>>) -> ok;
+delimiter_end(<<"-">>) -> more;
+delimiter_end(Bin) -> padding_end(Bin, 0).
+
+padding_end(<<"\r\n", _/binary>>, _N) ->
+    ok;
+padding_end(<<"\r">>, _N) ->
+    more;
+padding_end(<<>>, _N) ->
+    more;
+padding_end(<<$\s, Rest/binary>>, N) when N < ?MAX_PADDING -> padding_end(Rest, N + 1);
+padding_end(<<$\t, Rest/binary>>, N) when N < ?MAX_PADDING -> padding_end(Rest, N + 1);
+padding_end(_, _N) ->
+    content.
 
 %% Read one CRLF-terminated line, returning the content before the CRLF.
 -spec read_line(mp(), integer()) -> {line, binary(), mp()} | {error, reason(), mp()}.
@@ -426,8 +461,9 @@ pull(#mp{reader = Reader, timeout = Timeout, buffer = Buf, consumed = Consumed} 
 max_body_ok(#mp{consumed = C, opts = Opts}) ->
     C =< maps:get(max_body, Opts).
 
--spec normalize_error(timeout | {client_reset, term()}) -> reason().
+-spec normalize_error(timeout | body_too_large | {client_reset, term()}) -> reason().
 normalize_error(timeout) -> timeout;
+normalize_error(body_too_large) -> {limit, max_body};
 normalize_error({client_reset, _} = E) -> E.
 
 -spec tail(binary(), non_neg_integer()) -> binary().
@@ -483,35 +519,52 @@ param(Key, Params) ->
         false -> undefined
     end.
 
-%% Parse `;`-separated parameters after the leading token, unquoting
-%% double-quoted values. Keys are lowercased.
+%% Parameters after the leading token: `; name=value', where the value is
+%% a token or a quoted-string whose backslash escapes are undone, so a `;'
+%% or `"' inside quotes stays in the value (RFC 9110 5.6.6). Keys are
+%% lowercased; a malformed parameter is skipped.
 -spec params(binary()) -> [{binary(), binary()}].
 params(Value) ->
-    case binary:split(Value, <<";">>, [global]) of
-        [_Type | Rest] -> lists:filtermap(fun param_pair/1, Rest);
-        [] -> []
+    case binary:split(Value, <<";">>) of
+        [_Type, Rest] -> param_list(Rest, []);
+        [_Type] -> []
     end.
 
--spec param_pair(binary()) -> {true, {binary(), binary()}} | false.
-param_pair(Part) ->
-    case binary:split(trim(Part), <<"=">>) of
-        [K, V] when K =/= <<>> -> {true, {downcase(trim(K)), unquote(trim(V))}};
-        _ -> false
+param_list(Bin, Acc) ->
+    case binary:split(trim(Bin), <<"=">>) of
+        [Key, Rest0] ->
+            {Val, Rest} = param_value(trim_leading(Rest0)),
+            Acc1 =
+                case trim(Key) of
+                    <<>> -> Acc;
+                    K -> [{downcase(K), Val} | Acc]
+                end,
+            next_param(Rest, Acc1);
+        _ ->
+            lists:reverse(Acc)
     end.
 
--spec unquote(binary()) -> binary().
-unquote(<<$", Rest/binary>>) ->
-    case byte_size(Rest) of
-        0 ->
-            Rest;
-        N ->
-            case binary:at(Rest, N - 1) of
-                $" -> binary:part(Rest, 0, N - 1);
-                _ -> <<$", Rest/binary>>
-            end
-    end;
-unquote(V) ->
-    V.
+next_param(Rest, Acc) ->
+    case binary:split(Rest, <<";">>) of
+        [_, More] -> param_list(More, Acc);
+        [_] -> lists:reverse(Acc)
+    end.
+
+param_value(<<$", Rest/binary>>) ->
+    quoted(Rest, <<>>);
+param_value(Bin) ->
+    case binary:split(Bin, <<";">>) of
+        [V, Rest] -> {trim(V), <<";", Rest/binary>>};
+        [V] -> {trim(V), <<>>}
+    end.
+
+quoted(<<$\\, C, Rest/binary>>, Acc) -> quoted(Rest, <<Acc/binary, C>>);
+quoted(<<$", Rest/binary>>, Acc) -> {Acc, Rest};
+quoted(<<C, Rest/binary>>, Acc) -> quoted(Rest, <<Acc/binary, C>>);
+quoted(<<>>, Acc) -> {Acc, <<>>}.
+
+trim_leading(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t -> trim_leading(Rest);
+trim_leading(Bin) -> Bin.
 
 %%====================================================================
 %% Content-Type / boundary
@@ -535,8 +588,20 @@ boundary_param(Value) ->
     case param(<<"boundary">>, params(Value)) of
         undefined -> {error, no_boundary};
         <<>> -> {error, no_boundary};
-        Boundary -> {ok, Boundary}
+        Boundary -> valid_boundary(Boundary)
     end.
+
+%% RFC 2046 5.1.1: 1 to 70 `bchars', the last one not a space.
+valid_boundary(B) when byte_size(B) > 70 ->
+    {error, invalid_boundary};
+valid_boundary(B) ->
+    case binary:last(B) =/= $\s andalso lists:all(fun bchar/1, binary_to_list(B)) of
+        true -> {ok, B};
+        false -> {error, invalid_boundary}
+    end.
+
+bchar(C) when C >= $0, C =< $9; C >= $a, C =< $z; C >= $A, C =< $Z -> true;
+bchar(C) -> lists:member(C, "'()+_,-./:=? ").
 
 %%====================================================================
 %% Helpers

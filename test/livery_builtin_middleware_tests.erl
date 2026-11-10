@@ -60,12 +60,67 @@ body_limit_rejects_over_cap_test() ->
     ?assertEqual(413, livery_test_adapter:status(Cap)),
     ?assertEqual(<<"payload too large">>, livery_test_adapter:body(Cap)).
 
-body_limit_passes_streaming_body_through_test() ->
-    Handler = fun(_R) -> livery_resp:text(200, <<"streamed">>) end,
+%% A streamed body, queued in this process's mailbox as the adapters
+%% deliver it (the test adapter runs the handler in the calling process).
+streamed(Chunks) ->
+    Ref = make_ref(),
+    [self() ! {livery_body, Ref, {data, C}} || C <- Chunks],
+    self() ! {livery_body, Ref, eof},
+    {stream, livery_body:new(Ref)}.
+
+read_all_handler() ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader) of
+            {ok, Body, _} -> livery_resp:text(200, Body);
+            {error, Reason, _} -> livery_resp:text(413, atom_to_binary(element(1, {Reason})))
+        end
+    end.
+
+body_limit_streamed_under_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_body_limit, #{max => 10}}], read_all_handler(), #{
+            body => streamed([<<"hello">>, <<"world">>])
+        }
+    ),
+    ?assertEqual({200, <<"helloworld">>}, {
+        livery_test_adapter:status(Cap), livery_test_adapter:body(Cap)
+    }).
+
+body_limit_streamed_over_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_body_limit, #{max => 9}}], read_all_handler(), #{
+            body => streamed([<<"hello">>, <<"world">>])
+        }
+    ),
+    ?assertEqual({413, <<"body_too_large">>}, {
+        livery_test_adapter:status(Cap), livery_test_adapter:body(Cap)
+    }).
+
+%% A Content-Length over the limit is refused before the handler runs.
+body_limit_declared_length_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_body_limit, #{max => 4}}],
+        fun(_R) -> error(must_not_be_called) end,
+        #{headers => [{<<"content-length">>, <<"5">>}], body => streamed([<<"hello">>])}
+    ),
+    ?assertEqual(413, livery_test_adapter:status(Cap)).
+
+%% The limit is per reader: read/2 refuses the chunk that crosses it and
+%% every read after.
+body_limit_reader_test() ->
+    {stream, Reader0} = streamed([<<"abc">>, <<"def">>, <<"g">>]),
+    Reader = livery_body:limit(Reader0, 5),
+    {ok, <<"abc">>, R1} = livery_body:read(Reader, 100),
+    {error, body_too_large, R2} = livery_body:read(R1, 100),
+    ?assertMatch({error, body_too_large, _}, livery_body:read(R2, 100)),
+    ?assertEqual(Reader, livery_body:limit(Reader, 50)).
+
+body_limit_unread_body_test() ->
     Cap = livery_test_adapter:run(
         [{livery_body_limit, #{max => 1}}],
-        Handler,
-        #{body => {stream, fake}}
+        fun(_R) -> livery_resp:text(200, <<"not read">>) end,
+        #{body => streamed([<<"hello">>])}
     ),
     ?assertEqual(200, livery_test_adapter:status(Cap)).
 
@@ -774,3 +829,48 @@ has_vary(Token, Cap) ->
 
 normalize_token(Token) ->
     iolist_to_binary(string:trim(string:lowercase(Token))).
+
+%% The slot covers the whole response, streams included.
+concurrency_holds_slot_while_streaming_test() ->
+    State = livery_concurrency:limiter(1),
+    Stack = [{livery_concurrency, State}],
+    Ok = fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+    Self = self(),
+    Streaming = fun(_R) ->
+        livery_resp:sse(200, fun(Emit) ->
+            Emit(#{data => <<"first">>}),
+            %% A second request while this stream is still open.
+            Self ! {during, livery_test_adapter:status(livery_test_adapter:run(Stack, Ok, #{}))},
+            Emit(#{data => <<"last">>}),
+            ok
+        end)
+    end,
+    ?assertEqual(200, livery_test_adapter:status(livery_test_adapter:run(Stack, Streaming, #{}))),
+    ?assertEqual(
+        503,
+        receive
+            {during, S} -> S
+        after 1000 -> timeout
+        end
+    ),
+    ?assertEqual(200, livery_test_adapter:status(livery_test_adapter:run(Stack, Ok, #{}))).
+
+concurrency_frees_slot_on_crash_test() ->
+    State = livery_concurrency:limiter(1),
+    Stack = [{livery_concurrency, State}],
+    ?assertEqual(
+        500,
+        livery_test_adapter:status(livery_test_adapter:run(Stack, fun(_) -> error(boom) end, #{}))
+    ),
+    ?assertEqual(0, atomics:get(maps:get(ref, State), 1)).
+
+%% Outside a request worker there is no emit hook: released on return.
+concurrency_outside_worker_test() ->
+    State = livery_concurrency:limiter(1),
+    Resp = livery:dispatch(
+        [{livery_concurrency, State}],
+        fun(_) -> livery_resp:text(200, <<"ok">>) end,
+        livery_req:new(#{})
+    ),
+    ?assertEqual(200, livery_resp:status(Resp)),
+    ?assertEqual(0, atomics:get(maps:get(ref, State), 1)).

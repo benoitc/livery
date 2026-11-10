@@ -48,11 +48,9 @@ InferStack = [{livery_concurrency, livery_concurrency:limiter(8)} | Common].
 
 ## Notes
 
-- A slot is held from admission until the handler RETURNS its response.
-  Body streaming runs after that (outside the middleware stack), so the
-  slot does not cover a long streamed/SSE body. For inference that
-  streams tokens, gate the streaming work yourself if you need to bound
-  active streams.
+- A slot is held from admission until the response has been sent,
+  streamed bodies (SSE, chunked, files) included, so a long token stream
+  counts for as long as it runs.
 - The slot is always released, including when the handler crashes.
 - The limit is approximate under a burst (a request that increments past
   the limit decrements again), which is the expected behavior for

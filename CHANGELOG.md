@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-11
+
+Moves the MCP and A2A support to barrel_mcp 4.5.0 and barrel_a2a 0.3.0,
+both security releases. Nothing changes in Livery itself.
+
 ### Changed
 
 - Livery is tested against barrel_mcp 4.5.0 and barrel_a2a 0.3.0, and

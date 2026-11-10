@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Livery is tested against barrel_mcp 4.5.0 and barrel_a2a 0.3.0, and
+  the MCP and A2A guides now ask for them. Both are security releases
+  (requests steered to private addresses, cleartext credentials,
+  webhook secrets stored in clear); if you serve MCP or A2A, upgrade
+  the one you list in your own dependencies.
+
 ## [0.12.0] - 2026-11-10
 
 Security release (GHSA-r4pj-gcrj-m4fv), with passkeys and DPoP for the

@@ -13,6 +13,10 @@ length that runs past the input.
 
 `decode/1` returns the rest of the input after the first item, since a
 WebAuthn `authData` holds a COSE key followed by optional extensions.
+
+Deviations: the CTAP2 canonical form (shortest lengths, sorted map
+keys) is not required; authenticators must produce it, but no relying
+party step asks to check it. See AGENTS.md, Known deviations.
 """.
 
 -export([decode/1]).

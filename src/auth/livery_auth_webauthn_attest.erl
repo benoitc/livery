@@ -9,12 +9,19 @@ WebAuthn attestation statements (WebAuthn Level 3, sections 8.2 and 8.7).
   this.
 - `packed` without `x5c` (self attestation): signed by the credential's
   own key, with the credential's algorithm.
-- `packed` with `x5c`: signed by the leaf certificate, which must meet
-  section 8.2.1 (version 3, subject `OU=Authenticator Attestation`,
-  not a CA, AAGUID extension equal to the credential's when present) and
-  chain to one of the `attestation_roots` (DER) you configure.
+- `packed` with `x5c`: signed by the leaf certificate with an `alg`
+  that fits its key, the leaf meeting section 8.2.1 (version 3; subject
+  with C, O, `OU=Authenticator Attestation` and CN; Basic Constraints
+  with CA false; an AAGUID extension, when present, not critical and
+  equal to the credential's) and chaining to one of the
+  `attestation_roots` (DER) you configure.
 - any other format: refused, or reported as `unattested` when
   `allow_unattested => true`.
+
+With `attestation_roots` set, only the last kind is accepted: `none`
+and self attestation say nothing about the authenticator, so they are
+refused as `{untrusted_attestation, none | self}`, unless
+`allow_unattested => true`.
 
 Deviations: only `none` and `packed` are verified, and the FIDO
 Metadata Service is not consulted. See AGENTS.md, Known deviations.
@@ -36,15 +43,30 @@ Verify the statement in `Att`: `fmt`, `att_stmt`, `auth_data` (raw),
 `client_data_hash`, and the credential's `alg`, `key` and `aaguid`.
 """.
 -spec verify(map(), map()) -> {ok, result()} | {error, term()}.
-verify(#{fmt := <<"none">>, att_stmt := Stmt}, _Opts) when map_size(Stmt) =:= 0 ->
+verify(Att, Opts) ->
+    case statement(Att, Opts) of
+        {ok, Kind} when Kind =:= none; Kind =:= self ->
+            case trusted_only(Opts) of
+                true -> {error, {untrusted_attestation, Kind}};
+                false -> {ok, Kind}
+            end;
+        Other ->
+            Other
+    end.
+
+trusted_only(#{allow_unattested := true}) -> false;
+trusted_only(#{attestation_roots := [_ | _]}) -> true;
+trusted_only(_Opts) -> false.
+
+statement(#{fmt := <<"none">>, att_stmt := Stmt}, _Opts) when map_size(Stmt) =:= 0 ->
     {ok, none};
-verify(#{fmt := <<"none">>}, _Opts) ->
+statement(#{fmt := <<"none">>}, _Opts) ->
     {error, {invalid_attestation, none}};
-verify(#{fmt := <<"packed">>, att_stmt := Stmt} = Att, Opts) ->
+statement(#{fmt := <<"packed">>, att_stmt := Stmt} = Att, Opts) ->
     packed(Stmt, Att, Opts);
-verify(#{fmt := Fmt}, #{allow_unattested := true}) when is_binary(Fmt) ->
+statement(#{fmt := Fmt}, #{allow_unattested := true}) when is_binary(Fmt) ->
     {ok, unattested};
-verify(#{fmt := Fmt}, _Opts) ->
+statement(#{fmt := Fmt}, _Opts) ->
     {error, {unsupported_attestation, Fmt}}.
 
 packed(#{<<"alg">> := Alg, <<"sig">> := {bytes, Sig}} = Stmt, Att, Opts) ->
@@ -92,34 +114,47 @@ run([Step | Rest]) ->
         {error, _} = E -> E
     end.
 
+%% The statement's `alg' must fit the leaf's key (curve, RSA, Ed25519):
+%% otherwise a signature could be checked with a hash the key never used.
 leaf_signature(Alg, Sig, Data, Cert) ->
-    Key = cert_key(Cert),
-    Digest =
-        case Alg of
-            -7 -> sha256;
-            -35 -> sha384;
-            -36 -> sha512;
-            -257 -> sha256;
-            _ -> undefined
-        end,
-    case Digest =/= undefined andalso catch_verify(Data, Digest, Sig, Key) of
-        true -> ok;
-        _ -> {error, {invalid_attestation, signature}}
+    case cert_key(Cert) of
+        {Kind, Key} ->
+            case fits(Alg, Kind) of
+                true -> leaf_verify(Alg, Key, Data, Sig);
+                false -> {error, {invalid_attestation, alg}}
+            end;
+        error ->
+            {error, {invalid_attestation, certificate}}
     end.
 
-catch_verify(Data, Digest, Sig, Key) ->
-    try
-        public_key:verify(Data, Digest, Sig, Key)
-    catch
-        _:_ -> false
+leaf_verify(Alg, Key, Data, Sig) ->
+    case livery_auth_cose:verify(Alg, Key, Data, Sig) of
+        true -> ok;
+        false -> {error, {invalid_attestation, signature}}
     end.
+
+fits(Alg, {ec, Oid}) ->
+    case livery_auth_cose:ec_curve(Alg) of
+        {_, Oid, _} -> true;
+        _ -> false
+    end;
+fits(Alg, rsa) ->
+    Alg =:= -257 orelse Alg =:= -37;
+fits(Alg, ed25519) ->
+    Alg =:= -8 orelse Alg =:= -19.
 
 cert_key(#'OTPCertificate'{tbsCertificate = Tbs}) ->
     #'OTPSubjectPublicKeyInfo'{algorithm = AlgId, subjectPublicKey = Key} =
         Tbs#'OTPTBSCertificate'.subjectPublicKeyInfo,
-    case AlgId of
-        #'PublicKeyAlgorithm'{parameters = {namedCurve, _} = Params} -> {Key, Params};
-        _ -> Key
+    case {AlgId, Key} of
+        {#'PublicKeyAlgorithm'{parameters = {namedCurve, Oid} = Params}, #'ECPoint'{}} ->
+            {{ec, Oid}, {Key, Params}};
+        {_, #'RSAPublicKey'{}} ->
+            {rsa, Key};
+        {#'PublicKeyAlgorithm'{algorithm = ?'id-Ed25519'}, #'ECPoint'{}} ->
+            {ed25519, {Key, {namedCurve, ?'id-Ed25519'}}};
+        _ ->
+            error
     end.
 
 %% WebAuthn L3 8.2.1
@@ -129,10 +164,19 @@ leaf_requirements(#'OTPCertificate'{tbsCertificate = Tbs}, Aaguid) ->
             L when is_list(L) -> L;
             _ -> []
         end,
+    Subject = subject(Tbs),
     Checks = [
         {Tbs#'OTPTBSCertificate'.version =:= v3, version},
-        {lists:member(<<"Authenticator Attestation">>, subject_ous(Tbs)), subject_ou},
-        {not is_ca(Exts), basic_constraints},
+        {country(Subject), subject_c},
+        {has(?'id-at-organizationName', Subject), subject_o},
+        {
+            lists:member(
+                <<"Authenticator Attestation">>, values(?'id-at-organizationalUnitName', Subject)
+            ),
+            subject_ou
+        },
+        {has(?'id-at-commonName', Subject), subject_cn},
+        {not_ca(Exts), basic_constraints},
         {aaguid_ok(Exts, Aaguid), aaguid}
     ],
     case [What || {false, What} <- Checks] of
@@ -140,26 +184,39 @@ leaf_requirements(#'OTPCertificate'{tbsCertificate = Tbs}, Aaguid) ->
         [What | _] -> {error, {invalid_attestation, What}}
     end.
 
-subject_ous(#'OTPTBSCertificate'{subject = {rdnSequence, Rdns}}) ->
-    [
-        text(V)
-     || Rdn <- Rdns,
-        #'AttributeTypeAndValue'{type = ?'id-at-organizationalUnitName', value = V} <- Rdn
-    ].
+subject(#'OTPTBSCertificate'{subject = {rdnSequence, Rdns}}) ->
+    [{T, text(V)} || Rdn <- Rdns, #'AttributeTypeAndValue'{type = T, value = V} <- Rdn].
+
+values(Type, Subject) -> [V || {T, V} <- Subject, T =:= Type].
+
+has(Type, Subject) -> lists:any(fun(V) -> V =/= <<>> end, values(Type, Subject)).
+
+%% ISO 3166 code: two letters.
+country(Subject) ->
+    lists:any(
+        fun(V) -> byte_size(V) =:= 2 andalso lists:all(fun is_letter/1, binary_to_list(V)) end,
+        values(?'id-at-countryName', Subject)
+    ).
+
+is_letter(C) -> (C >= $A andalso C =< $Z) orelse (C >= $a andalso C =< $z).
 
 text({_Tag, V}) -> text(V);
 text(V) when is_binary(V) -> V;
-text(V) when is_list(V) -> unicode:characters_to_binary(V).
+text(V) when is_list(V) -> unicode:characters_to_binary(V);
+text(_) -> <<>>.
 
-is_ca(Exts) ->
+%% Basic Constraints must be there, with CA false.
+not_ca(Exts) ->
     case lists:keyfind(?'id-ce-basicConstraints', #'Extension'.extnID, Exts) of
-        #'Extension'{extnValue = #'BasicConstraints'{cA = true}} -> true;
+        #'Extension'{extnValue = #'BasicConstraints'{cA = true}} -> false;
+        #'Extension'{extnValue = #'BasicConstraints'{}} -> true;
         _ -> false
     end.
 
 aaguid_ok(Exts, Aaguid) ->
     case lists:keyfind(?AAGUID_EXT, #'Extension'.extnID, Exts) of
         false -> true;
+        #'Extension'{critical = true} -> false;
         #'Extension'{extnValue = <<4, 16, Value:16/binary>>} -> Value =:= Aaguid;
         #'Extension'{extnValue = Value} -> Value =:= Aaguid
     end.

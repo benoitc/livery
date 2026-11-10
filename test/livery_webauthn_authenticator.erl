@@ -34,16 +34,20 @@ new(Alg) ->
     {Priv, Cose} = key(Alg),
     #{alg => Alg, priv => Priv, cose => cbor(Cose), id => crypto:strong_rand_bytes(16), count => 0}.
 
-key(-7) ->
-    ec(secp256r1, 1, 32, -7);
-key(-35) ->
-    ec(secp384r1, 2, 48, -35);
-key(-36) ->
-    ec(secp521r1, 3, 66, -36);
+key(P256) when P256 =:= -7; P256 =:= -9 ->
+    ec(secp256r1, 1, 32, P256);
+key(P384) when P384 =:= -35; P384 =:= -51 ->
+    ec(secp384r1, 2, 48, P384);
+key(P521) when P521 =:= -36; P521 =:= -52 ->
+    ec(secp521r1, 3, 66, P521);
 key(Ed) when Ed =:= -8; Ed =:= -19 ->
     Priv = public_key:generate_key({namedCurve, ed25519}),
     #'ECPrivateKey'{publicKey = X} = Priv,
     {Priv, #{1 => 1, 3 => Ed, -1 => 6, -2 => {bytes, X}}};
+key(-53) ->
+    Priv = public_key:generate_key({namedCurve, ed448}),
+    #'ECPrivateKey'{publicKey = X} = Priv,
+    {Priv, #{1 => 1, 3 => -53, -1 => 7, -2 => {bytes, X}}};
 key(Rsa) when Rsa =:= -257; Rsa =:= -37 ->
     Priv = public_key:generate_key({rsa, 2048, 65537}),
     #'RSAPrivateKey'{modulus = N, publicExponent = E} = Priv,
@@ -62,13 +66,13 @@ ec(Curve, Crv, Size, Alg) ->
 sign(#{alg := Alg, priv := Priv}, Data) ->
     sign(Alg, Priv, Data).
 
-sign(-7, Priv, Data) ->
+sign(P256, Priv, Data) when P256 =:= -7; P256 =:= -9 ->
     public_key:sign(Data, sha256, Priv);
-sign(-35, Priv, Data) ->
+sign(P384, Priv, Data) when P384 =:= -35; P384 =:= -51 ->
     public_key:sign(Data, sha384, Priv);
-sign(-36, Priv, Data) ->
+sign(P521, Priv, Data) when P521 =:= -36; P521 =:= -52 ->
     public_key:sign(Data, sha512, Priv);
-sign(Ed, Priv, Data) when Ed =:= -8; Ed =:= -19 -> public_key:sign(Data, none, Priv);
+sign(Ed, Priv, Data) when Ed =:= -8; Ed =:= -19; Ed =:= -53 -> public_key:sign(Data, none, Priv);
 sign(-257, Priv, Data) ->
     public_key:sign(Data, sha256, Priv);
 sign(-37, Priv, Data) ->
@@ -82,7 +86,8 @@ sign(-37, Priv, Data) ->
 
 %% `Opts': `challenge' (raw, required), `attestation' (`none' default,
 %% `self', `x5c', or `{fmt, Name}'), and overrides: `type', `origin',
-%% `cross_origin', `rp_id', `flags', `x5c_leaf' ...
+%% `cross_origin', `top_origin', `bom', `rp_id', `flags', `x5c_leaf',
+%% `x5c_alg' ...
 register(Cred, Opts) ->
     ClientData = client_data(<<"webauthn.create">>, Opts),
     Flags = maps:get(flags, Opts, 16#45),
@@ -117,9 +122,10 @@ statement(self, Cred, Data, _Opts) ->
     {<<"packed">>, #{<<"alg">> => maps:get(alg, Cred), <<"sig">> => {bytes, sign(Cred, Data)}}};
 statement(x5c, _Cred, Data, Opts) ->
     {LeafDer, LeafKey, Chain} = maps:get(x5c_leaf, Opts, leaf(#{})),
+    Alg = maps:get(x5c_alg, Opts, -7),
     {<<"packed">>, #{
-        <<"alg">> => -7,
-        <<"sig">> => {bytes, public_key:sign(Data, sha256, LeafKey)},
+        <<"alg">> => Alg,
+        <<"sig">> => {bytes, sign(Alg, LeafKey, Data)},
         <<"x5c">> => [{bytes, D} || D <- [LeafDer | Chain]]
     }};
 statement({fmt, Name}, _Cred, _Data, _Opts) ->
@@ -143,32 +149,20 @@ attestation_ca() ->
             CA
     end.
 
-%% A leaf issued by the test root. `Overrides': `ou', `ca', `aaguid'.
+%% A leaf issued by the test root. `Overrides': `ou', `ca', `aaguid',
+%% `aaguid_critical', `key' (`p256' default, `rsa', `ed25519') and `drop'
+%% (subject attributes or `basic_constraints' to leave out).
 leaf(Overrides) ->
     {RootDer, RootKey} = attestation_ca(),
     #'OTPCertificate'{tbsCertificate = #'OTPTBSCertificate'{subject = Issuer}} =
         public_key:pkix_decode_cert(RootDer, otp),
-    Priv = public_key:generate_key({namedCurve, secp256r1}),
-    #'ECPrivateKey'{publicKey = Point} = Priv,
+    {Priv, Spki} = leaf_key(maps:get(key, Overrides, p256)),
+    Drop = maps:get(drop, Overrides, []),
     Subject =
         {rdnSequence, [
-            [#'AttributeTypeAndValue'{type = ?'id-at-countryName', value = "SE"}],
-            [
-                #'AttributeTypeAndValue'{
-                    type = ?'id-at-organizationName', value = {utf8String, <<"Livery">>}
-                }
-            ],
-            [
-                #'AttributeTypeAndValue'{
-                    type = ?'id-at-organizationalUnitName',
-                    value = {utf8String, maps:get(ou, Overrides, <<"Authenticator Attestation">>)}
-                }
-            ],
-            [
-                #'AttributeTypeAndValue'{
-                    type = ?'id-at-commonName', value = {utf8String, <<"Test Authenticator">>}
-                }
-            ]
+            [A]
+         || [#'AttributeTypeAndValue'{type = T} = A] <- subject(Overrides),
+            not lists:member(T, Drop)
         ]},
     Now = calendar:universal_time(),
     {D, _} = Now,
@@ -179,16 +173,20 @@ leaf(Overrides) ->
             {utcTime, utc(calendar:gregorian_days_to_date(calendar:date_to_gregorian_days(D) + 30))}
     },
     Exts = [
-        #'Extension'{
-            extnID = ?'id-ce-basicConstraints',
-            critical = true,
-            extnValue = #'BasicConstraints'{cA = maps:get(ca, Overrides, false)}
-        },
-        #'Extension'{
-            extnID = {1, 3, 6, 1, 4, 1, 45724, 1, 1, 4},
-            critical = false,
-            extnValue = <<4, 16, (maps:get(aaguid, Overrides, ?AAGUID))/binary>>
-        }
+        E
+     || E <- [
+            #'Extension'{
+                extnID = ?'id-ce-basicConstraints',
+                critical = true,
+                extnValue = #'BasicConstraints'{cA = maps:get(ca, Overrides, false)}
+            },
+            #'Extension'{
+                extnID = {1, 3, 6, 1, 4, 1, 45724, 1, 1, 4},
+                critical = maps:get(aaguid_critical, Overrides, false),
+                extnValue = <<4, 16, (maps:get(aaguid, Overrides, ?AAGUID))/binary>>
+            }
+        ],
+        not lists:member(E#'Extension'.extnID, Drop)
     ],
     Tbs = #'OTPTBSCertificate'{
         version = v3,
@@ -197,15 +195,55 @@ leaf(Overrides) ->
         issuer = Issuer,
         validity = Validity,
         subject = Subject,
-        subjectPublicKeyInfo = #'OTPSubjectPublicKeyInfo'{
-            algorithm = #'PublicKeyAlgorithm'{
-                algorithm = ?'id-ecPublicKey', parameters = {namedCurve, ?'secp256r1'}
-            },
-            subjectPublicKey = #'ECPoint'{point = Point}
-        },
+        subjectPublicKeyInfo = Spki,
         extensions = Exts
     },
     {public_key:pkix_sign(Tbs, RootKey), Priv, []}.
+
+leaf_key(p256) ->
+    Priv = public_key:generate_key({namedCurve, secp256r1}),
+    #'ECPrivateKey'{publicKey = Point} = Priv,
+    {Priv, #'OTPSubjectPublicKeyInfo'{
+        algorithm = #'PublicKeyAlgorithm'{
+            algorithm = ?'id-ecPublicKey', parameters = {namedCurve, ?'secp256r1'}
+        },
+        subjectPublicKey = #'ECPoint'{point = Point}
+    }};
+leaf_key(rsa) ->
+    Priv = public_key:generate_key({rsa, 2048, 65537}),
+    #'RSAPrivateKey'{modulus = N, publicExponent = E} = Priv,
+    {Priv, #'OTPSubjectPublicKeyInfo'{
+        algorithm = #'PublicKeyAlgorithm'{algorithm = ?'rsaEncryption', parameters = 'NULL'},
+        subjectPublicKey = #'RSAPublicKey'{modulus = N, publicExponent = E}
+    }};
+leaf_key(ed25519) ->
+    Priv = public_key:generate_key({namedCurve, ed25519}),
+    #'ECPrivateKey'{publicKey = X} = Priv,
+    {Priv, #'OTPSubjectPublicKeyInfo'{
+        algorithm = #'PublicKeyAlgorithm'{algorithm = ?'id-Ed25519', parameters = asn1_NOVALUE},
+        subjectPublicKey = #'ECPoint'{point = X}
+    }}.
+
+subject(Overrides) ->
+    [
+        [#'AttributeTypeAndValue'{type = ?'id-at-countryName', value = "SE"}],
+        [
+            #'AttributeTypeAndValue'{
+                type = ?'id-at-organizationName', value = {utf8String, <<"Livery">>}
+            }
+        ],
+        [
+            #'AttributeTypeAndValue'{
+                type = ?'id-at-organizationalUnitName',
+                value = {utf8String, maps:get(ou, Overrides, <<"Authenticator Attestation">>)}
+            }
+        ],
+        [
+            #'AttributeTypeAndValue'{
+                type = ?'id-at-commonName', value = {utf8String, <<"Test Authenticator">>}
+            }
+        ]
+    ].
 
 utc({Y, M, D}) ->
     lists:flatten(io_lib:format("~2..0B~2..0B~2..0B000000Z", [Y rem 100, M, D])).
@@ -249,12 +287,18 @@ client_data(Type, Opts) ->
         <<"challenge">> => b64(maps:get(challenge, Opts)),
         <<"origin">> => maps:get(origin, Opts, ?ORIGIN)
     },
-    CD =
-        case maps:find(cross_origin, Opts) of
-            {ok, C} -> Base#{<<"crossOrigin">> => C};
-            error -> Base
-        end,
-    iolist_to_binary(json:encode(CD)).
+    CD = maps:merge(
+        Base,
+        maps:from_list(
+            [{<<"crossOrigin">>, C} || {ok, C} <- [maps:find(cross_origin, Opts)]] ++
+                [{<<"topOrigin">>, T} || {ok, T} <- [maps:find(top_origin, Opts)]]
+        )
+    ),
+    Json = iolist_to_binary(json:encode(CD)),
+    case maps:get(bom, Opts, false) of
+        true -> <<16#EF, 16#BB, 16#BF, Json/binary>>;
+        false -> Json
+    end.
 
 rp_hash(Opts) -> crypto:hash(sha256, maps:get(rp_id, Opts, ?RP_ID)).
 

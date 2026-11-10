@@ -5,6 +5,13 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(A, livery_webauthn_authenticator).
+-define(BASIC_CONSTRAINTS, {2, 5, 29, 19}).
+-define(COUNTRY, {2, 5, 4, 6}).
+-define(ORG, {2, 5, 4, 10}).
+-define(CN, {2, 5, 4, 3}).
+
+x5c_without(Attr, Roots) ->
+    #{attestation => x5c, x5c_leaf => ?A:leaf(#{drop => [Attr]}), expect => Roots}.
 
 expected(Challenge) ->
     expected(Challenge, #{}).
@@ -67,7 +74,7 @@ every_algorithm_registers_test_() ->
             integer_to_list(Alg),
             ?_assertMatch({ok, #{attestation := none}}, reg(?A:new(Alg), #{}))
         }
-     || Alg <- [-7, -35, -36, -8, -19, -257, -37]
+     || Alg <- livery_auth_cose:algorithms()
     ].
 
 credential_fields_test() ->
@@ -129,9 +136,70 @@ registration_refusals_test_() ->
             {invalid_attestation, basic_constraints}},
         {"x5c with another AAGUID",
             #{attestation => x5c, x5c_leaf => ?A:leaf(#{aaguid => <<0:128>>}), expect => Roots},
-            {invalid_attestation, aaguid}}
+            {invalid_attestation, aaguid}},
+        {"x5c with a critical AAGUID extension",
+            #{attestation => x5c, x5c_leaf => ?A:leaf(#{aaguid_critical => true}), expect => Roots},
+            {invalid_attestation, aaguid}},
+        {"x5c without basic constraints",
+            #{
+                attestation => x5c,
+                x5c_leaf => ?A:leaf(#{drop => [?BASIC_CONSTRAINTS]}),
+                expect => Roots
+            },
+            {invalid_attestation, basic_constraints}},
+        {"x5c without a country", x5c_without(?COUNTRY, Roots), {invalid_attestation, subject_c}},
+        {"x5c without an organization", x5c_without(?ORG, Roots), {invalid_attestation, subject_o}},
+        {"x5c without a common name", x5c_without(?CN, Roots), {invalid_attestation, subject_cn}},
+        {"x5c alg that does not fit the key",
+            #{attestation => x5c, x5c_alg => -35, expect => Roots}, {invalid_attestation, alg}},
+        {"none with roots", #{expect => Roots}, {untrusted_attestation, none}},
+        {"self with roots", #{attestation => self, expect => Roots}, {untrusted_attestation, self}},
+        {"top origin, cross-origin not allowed", #{top_origin => <<"https://shop.example">>},
+            top_origin_mismatch}
     ],
     [{Name, ?_assertEqual({error, Why}, reg(?A:new(-7), Opts))} || {Name, Opts, Why} <- Cases].
+
+full_attestation_key_types_test_() ->
+    {Root, _} = ?A:attestation_ca(),
+    [
+        {atom_to_list(Key), fun() ->
+            ?assertMatch(
+                {ok, #{attestation := {x5c, _}}},
+                reg(?A:new(-7), #{
+                    attestation => x5c,
+                    x5c_leaf => ?A:leaf(#{key => Key}),
+                    x5c_alg => Alg,
+                    expect => #{attestation_roots => [Root]}
+                })
+            )
+        end}
+     || {Key, Alg} <- [{p256, -9}, {rsa, -257}, {rsa, -37}, {ed25519, -8}]
+    ].
+
+unattested_with_roots_when_allowed_test() ->
+    {Root, _} = ?A:attestation_ca(),
+    ?assertMatch(
+        {ok, #{attestation := none}},
+        reg(?A:new(-7), #{expect => #{attestation_roots => [Root], allow_unattested => true}})
+    ).
+
+client_data_with_bom_test() ->
+    ?assertMatch({ok, _}, reg(?A:new(-7), #{bom => true})).
+
+framed_by_an_expected_page_test() ->
+    ?assertMatch(
+        {ok, _},
+        reg(?A:new(-7), #{
+            cross_origin => true,
+            top_origin => <<"https://shop.example">>,
+            expect => #{allow_cross_origin => true, top_origins => [<<"https://shop.example">>]}
+        })
+    ).
+
+eddsa_is_ed25519_only_test() ->
+    #{cose := Cose} = ?A:new(-53),
+    {ok, Key, <<>>} = livery_cbor:decode(Cose),
+    ?assertEqual({error, {unsupported_key, -8, 7}}, livery_auth_cose:public_key(Key#{3 => -8})).
 
 wrong_challenge_test() ->
     Cred = ?A:new(-7),
@@ -166,8 +234,15 @@ stored(Cred, Extra) ->
     {ok, S} = reg(Cred, #{}),
     maps:merge(S#{user_handle => <<"user-1">>}, Extra).
 
-authenticate(Cred, Stored, Count, Opts) ->
+%% Sends the stored user handle unless the case says otherwise
+%% (`user_handle => none' sends none).
+authenticate(Cred, Stored, Count, Opts0) ->
     C = challenge(),
+    Opts =
+        case maps:get(user_handle, Opts0, <<"user-1">>) of
+            none -> maps:remove(user_handle, Opts0);
+            H -> Opts0#{user_handle => H}
+        end,
     livery_auth_webauthn:verify_authentication(
         ?A:assert(Cred, Count, Opts#{challenge => C}),
         Stored,
@@ -180,7 +255,7 @@ authentication_test_() ->
             Cred = ?A:new(Alg),
             ?assertMatch({ok, #{sign_count := 1}}, authenticate(Cred, stored(Cred, #{}), 1, #{}))
         end}
-     || Alg <- [-7, -35, -36, -8, -19, -257, -37]
+     || Alg <- livery_auth_cose:algorithms()
     ].
 
 synced_passkey_counter_zero_test() ->
@@ -201,6 +276,17 @@ authentication_refusals_test_() ->
             #{flags => 16#01, expect => #{user_verification => required}}, user_not_verified},
         {"backup eligibility changed", Stored, 6, #{flags => 16#0d}, backup_eligible},
         {"another user", Stored, 6, #{user_handle => <<"user-2">>}, user_handle_mismatch},
+        {"no user handle, user not identified", Stored, 6, #{user_handle => none},
+            user_handle_missing},
+        {"framed by an unexpected page", Stored, 6,
+            #{
+                cross_origin => true,
+                top_origin => <<"https://evil.example">>,
+                expect => #{allow_cross_origin => true, top_origins => [<<"https://shop.example">>]}
+            },
+            top_origin_mismatch},
+        {"top origin without cross-origin allowed", Stored, 6,
+            #{top_origin => <<"https://shop.example">>}, top_origin_mismatch},
         {"signed by another key", Stored, 6, #{signature => crypto:strong_rand_bytes(70)},
             bad_signature}
     ],
@@ -227,11 +313,14 @@ b64d(B) ->
     {ok, Bin} = livery_auth_jose:b64url(B),
     Bin.
 
+%% These sign-ins named their credential (no user handle in the
+%% response), so the user was identified before the ceremony.
 localhost(Challenge) ->
     #{
         challenge => b64d(Challenge),
         rp_id => <<"localhost">>,
-        origins => [<<"http://localhost:5000">>]
+        origins => [<<"http://localhost:5000">>],
+        user_identified => true
     }.
 
 recorded_none_registration_test() ->

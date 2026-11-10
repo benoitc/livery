@@ -22,8 +22,12 @@ Livery stores nothing; the application does, through these callbacks:
   at most 64 bytes, not an email), `name` and optionally `display_name`.
 - `credentials_for_user => fun((User) -> [CredentialId])`: passkeys the
   user already has, so the browser does not make a second one.
-- `store_credential => fun((User, Credential) -> ok | {error, term()})`:
+- `store_credential => fun((User, Credential) -> ok | {error, exists} | {error, term()})`:
   keep a new passkey. Store the whole map; it holds `user_handle`.
+  Insert only when no passkey has this `id` yet, in one step (an
+  insert-if-absent), and return `{error, exists}` otherwise: the routes
+  also look the id up first, but only the store can close the race
+  between two registrations.
 - `find_credential => fun((CredentialId) -> {ok, User, Credential} | not_found)`.
 - `update_credential => fun((CredentialId, Updates) -> ok)`: save the new
   `sign_count` and `backup_state` after each sign-in.
@@ -33,7 +37,8 @@ Livery stores nothing; the application does, through these callbacks:
 Other options: `rp_id`, `rp_name`, `origins` and `session` (the
 `livery_auth_session` options, with `secret`) required;
 `user_verification` and `resident_key` (`preferred` by default),
-`attestation_roots`, `allow_unattested`, `challenge_replay`, `prefix`.
+`attestation_roots`, `allow_unattested`, `allow_cross_origin`,
+`top_origins`, `challenge_replay`, `prefix`.
 """.
 
 -export([routes/1]).
@@ -75,13 +80,25 @@ register_finish(Req, Opts) ->
         {ok, Body} ?= body(Req),
         {ok, Cred0} ?= livery_auth_webauthn:verify_registration(Body, expected(Challenge, Opts)),
         ok ?= once(Challenge, Opts),
+        ok ?= new_credential(maps:get(id, Cred0), Opts),
         Cred = Cred0#{user_handle => UserId},
-        ok ?= call(store_credential, [User, Cred], Opts),
+        ok ?= stored(call(store_credential, [User, Cred], Opts)),
         json(201, #{<<"id">> => b64(maps:get(id, Cred))}, [], Opts)
     else
         undefined -> json(401, #{<<"error">> => <<"sign_in_first">>}, [], Opts);
         Other -> refused(Other, Opts)
     end.
+
+%% L3 7.1 step 26: a credential id registered to anyone already is
+%% refused; otherwise a second registration would take the first over.
+new_credential(CredId, Opts) ->
+    case call(find_credential, [CredId], Opts) of
+        not_found -> ok;
+        _ -> {error, credential_exists}
+    end.
+
+stored({error, exists}) -> {error, credential_exists};
+stored(Other) -> Other.
 
 attestation(#{attestation_roots := [_ | _]}) -> direct;
 attestation(_Opts) -> none.
@@ -192,6 +209,7 @@ expected(Challenge, Opts) ->
         attestation_roots,
         allow_unattested,
         allow_cross_origin,
+        top_origins,
         algorithms
     ],
     (maps:with(Keys, Opts))#{challenge => Challenge}.
@@ -234,8 +252,12 @@ decode_id(_) ->
     {error, bad_body}.
 
 %% A refusal gives a short code for the page to act on, nothing more.
-refused({error, Reason}, Opts) -> json(400, #{<<"error">> => reason(Reason)}, [], Opts);
-refused(_Other, Opts) -> json(400, #{<<"error">> => <<"invalid">>}, [], Opts).
+refused({error, credential_exists}, Opts) ->
+    json(409, #{<<"error">> => <<"credential_exists">>}, [], Opts);
+refused({error, Reason}, Opts) ->
+    json(400, #{<<"error">> => reason(Reason)}, [], Opts);
+refused(_Other, Opts) ->
+    json(400, #{<<"error">> => <<"invalid">>}, [], Opts).
 
 reason(Reason) when is_atom(Reason) -> atom_to_binary(Reason);
 reason({Reason, _}) when is_atom(Reason) -> atom_to_binary(Reason);

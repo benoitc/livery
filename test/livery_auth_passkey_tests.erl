@@ -20,7 +20,10 @@ passkey_test_() ->
             {"registration needs a signed-in user", fun register_needs_user/0},
             {"unknown passkey", fun unknown_credential/0},
             {"a challenge is tied to its ceremony", fun ceremony_mismatch/0},
-            {"no challenge cookie", fun no_challenge/0}
+            {"no challenge cookie", fun no_challenge/0},
+            {"a credential id is registered once", fun duplicate_refused/0},
+            {"a store's own refusal of a duplicate", fun store_refuses_duplicate/0},
+            {"sign-in needs the user handle", fun user_handle_required/0}
         ]}.
 
 %%====================================================================
@@ -38,8 +41,10 @@ opts(Tab, User) ->
             [C || {C, Owner, _} <- ets:tab2list(Tab), Owner =:= Id]
         end,
         store_credential => fun(#{id := Id}, #{id := CredId} = Cred) ->
-            true = ets:insert(Tab, {CredId, Id, Cred}),
-            ok
+            case ets:insert_new(Tab, {CredId, Id, Cred}) of
+                true -> ok;
+                false -> {error, exists}
+            end
         end,
         find_credential => fun(CredId) ->
             case ets:lookup(Tab, CredId) of
@@ -137,7 +142,9 @@ challenge_used_once() ->
     Opts = opts(Tab, undefined),
     {200, Options, Set} = post(Opts, <<"login/options">>, [], #{}),
     Cookie = cookie(<<"session_passkey">>, Set),
-    Assertion = ?A:assert(Cred, 0, #{challenge => challenge(Options)}),
+    Assertion = ?A:assert(Cred, 0, #{
+        challenge => challenge(Options), user_handle => <<"user-alice">>
+    }),
     {200, _, _} = post(Opts, <<"login">>, [Cookie], Assertion),
     ?assertMatch(
         {400, #{<<"error">> := <<"challenge_reused">>}, _},
@@ -178,4 +185,43 @@ no_challenge() ->
     ?assertMatch(
         {400, #{<<"error">> := <<"no_challenge">>}, _},
         post(opts(Tab, undefined), <<"login">>, [], Assertion)
+    ).
+
+%% Registering a credential id that is already stored, for anyone, is
+%% refused (WebAuthn L3 7.1 step 26).
+duplicate_refused() ->
+    Tab = ets:new(creds, [public]),
+    {Opts, Cred} = registered(Tab),
+    {200, Options, Set} = post(Opts, <<"register/options">>, [], #{}),
+    Again = ?A:register(Cred, #{challenge => challenge(Options)}),
+    ?assertMatch(
+        {409, #{<<"error">> := <<"credential_exists">>}, _},
+        post(Opts, <<"register">>, [cookie(<<"session_passkey">>, Set)], Again)
+    ),
+    ?assertEqual(1, ets:info(Tab, size)).
+
+%% Two registrations racing past the lookup: the store has the last word.
+store_refuses_duplicate() ->
+    Tab = ets:new(creds, [public]),
+    Opts0 = opts(Tab, ?ALICE),
+    Opts = Opts0#{
+        find_credential => fun(_) -> not_found end,
+        store_credential => fun(_User, _Cred) -> {error, exists} end
+    },
+    {200, Options, Set} = post(Opts, <<"register/options">>, [], #{}),
+    Resp = ?A:register(?A:new(-7), #{challenge => challenge(Options)}),
+    ?assertMatch(
+        {409, #{<<"error">> := <<"credential_exists">>}, _},
+        post(Opts, <<"register">>, [cookie(<<"session_passkey">>, Set)], Resp)
+    ).
+
+user_handle_required() ->
+    Tab = ets:new(creds, [public]),
+    {_, Cred} = registered(Tab),
+    Opts = opts(Tab, undefined),
+    {200, Options, Set} = post(Opts, <<"login/options">>, [], #{}),
+    Assertion = ?A:assert(Cred, 1, #{challenge => challenge(Options)}),
+    ?assertMatch(
+        {400, #{<<"error">> := <<"user_handle_missing">>}, _},
+        post(Opts, <<"login">>, [cookie(<<"session_passkey">>, Set)], Assertion)
     ).

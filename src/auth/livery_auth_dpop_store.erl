@@ -1,6 +1,7 @@
 -module(livery_auth_dpop_store).
 -moduledoc """
-Replay store for DPoP proofs (RFC 9449 section 11.1).
+Single-use store for DPoP proofs (RFC 9449 section 11.1) and passkey
+challenges (`livery_auth_passkey`).
 
 A supervised gen_server that owns one public named ETS table of proof
 identifiers and drops them once they are too old to be accepted

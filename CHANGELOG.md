@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Passkeys (WebAuthn Level 3). `livery_auth_passkey` gives the routes to
+  register a passkey and to sign in with one, without a username,
+  ending in a session cookie; your application keeps the credentials
+  through callbacks. `livery_auth_webauthn` has the checks on their own:
+  origin, RP ID, challenge (used once), user presence and verification,
+  backup flags, signature and counter, and `none` or `packed`
+  attestation. Passkeys resist phishing, which one-time codes do not.
+
 ## [0.11.0] - 2026-11-10
 
 Auth release: Livery becomes a complete OAuth resource server, OAuth

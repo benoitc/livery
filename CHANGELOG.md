@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
+Auth release: Livery becomes a complete OAuth resource server, OAuth
+client and OpenID Connect relying party (bound tokens, step-up, PAR,
+TOTP), and fixes a review's worth of spec and limit bugs. Before
+upgrading, check: refused requests now carry RFC 6750 error codes and a
+missing scope is `403`; key sets with mislabelled keys or short RSA keys
+are no longer used; a `verify_peer` listener with conflicting
+`ssl_opts` no longer starts; `livery_body_limit` and the client's q-values
+in `Accept-Encoding` now take effect.
+
 ### Added
 
 - `livery_auth_totp` checks the one-time codes of authenticator apps

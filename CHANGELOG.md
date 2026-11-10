@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-10
+
+Security release (GHSA-r4pj-gcrj-m4fv), with passkeys and DPoP for the
+OAuth client. Before upgrading, check: the Prometheus names of the HTTP
+server metrics change with instrument 2.0, and a sign-in in progress
+during the upgrade has to start again.
+
 ### Security
 
 - The cookie that carries an OpenID Connect sign-in in progress was

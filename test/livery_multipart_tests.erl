@@ -273,3 +273,86 @@ read_until_end(MP) ->
 
 drop_reader({ok, Body, _MP}) -> {ok, Body};
 drop_reader(Other) -> Other.
+
+%%====================================================================
+%% RFC 2046 5.1.1
+%%====================================================================
+
+req_with_ct(ContentType, Bin) ->
+    livery_req:new(#{headers => [{<<"content-type">>, ContentType}], body => {buffered, Bin}}).
+
+boundary_grammar_test_() ->
+    B70 = binary:copy(<<"a">>, 70),
+    B71 = binary:copy(<<"a">>, 71),
+    Read = fun(B) ->
+        livery_multipart:read_all(
+            req_with_ct(
+                <<"multipart/form-data; boundary=\"", B/binary, "\"">>,
+                build(B, [{[cd(<<"x">>)], <<"v">>}])
+            )
+        )
+    end,
+    [
+        {"70 characters", ?_assertMatch({ok, [_]}, Read(B70))},
+        {"71 characters", ?_assertEqual({error, invalid_boundary}, Read(B71))},
+        {"allowed punctuation", ?_assertMatch({ok, [_]}, Read(<<"a'()+_,-./:=? b">>))},
+        {"disallowed character", ?_assertEqual({error, invalid_boundary}, Read(<<"a*b">>))},
+        {"trailing space", ?_assertEqual({error, invalid_boundary}, Read(<<"ab ">>))}
+    ].
+
+%% A quoted value keeps `;' and escaped quotes.
+quoted_params_test() ->
+    B = <<"X">>,
+    Hs = [{<<"Content-Disposition">>, <<"form-data; name=\"f\"; filename=\"a;b \\\"c\\\".txt\"">>}],
+    {ok, [P]} = livery_multipart:read_all(buffered_req(B, build(B, [{Hs, <<"d">>}]))),
+    ?assertEqual(<<"f">>, maps:get(name, P)),
+    ?assertEqual(<<"a;b \"c\".txt">>, maps:get(filename, P)).
+
+quoted_boundary_then_another_param_test() ->
+    B = <<"a b=c">>,
+    Ct = <<"multipart/form-data; boundary=\"a b=c\"; charset=utf-8">>,
+    ?assertMatch(
+        {ok, [_]}, livery_multipart:read_all(req_with_ct(Ct, build(B, [{[cd(<<"x">>)], <<"v">>}])))
+    ).
+
+%% The first delimiter starts a line; `--X' inside the preamble does not.
+preamble_mid_line_ignored_test() ->
+    B = <<"X">>,
+    Bin = <<"note --X here\r\n", (build(B, [{[cd(<<"k">>)], <<"v">>}]))/binary>>,
+    {ok, [P]} = livery_multipart:read_all(buffered_req(B, Bin)),
+    ?assertEqual(<<"v">>, maps:get(body, P)).
+
+%% `CRLF--boundaryY' is content, not a delimiter.
+boundary_prefix_in_content_test() ->
+    B = <<"X">>,
+    Body = <<"line one\r\n--XY not a delimiter\r\n--X-also not">>,
+    {ok, [P]} = livery_multipart:read_all(buffered_req(B, build(B, [{[cd(<<"k">>)], Body}]))),
+    ?assertEqual(Body, maps:get(body, P)).
+
+transport_padding_test() ->
+    B = <<"X">>,
+    Bin =
+        <<"--X \t\r\nContent-Disposition: form-data; name=\"k\"\r\n\r\nv\r\n--X  \r\n",
+            "Content-Disposition: form-data; name=\"j\"\r\n\r\nw\r\n--X--\r\n">>,
+    {ok, [P1, P2]} = livery_multipart:read_all(buffered_req(B, Bin)),
+    ?assertEqual({<<"v">>, <<"w">>}, {maps:get(body, P1), maps:get(body, P2)}).
+
+%% A delimiter and its end split across reads are still recognised.
+split_delimiter_test() ->
+    B = <<"BOUNDARY">>,
+    Bin = build(B, [{[cd(<<"k">>)], <<"value">>}, {[cd(<<"j">>)], <<"other">>}]),
+    Chunks = [binary:part(Bin, I, 1) || I <- lists:seq(0, byte_size(Bin) - 1)],
+    {ok, [P1, P2]} = livery_multipart:read_all(stream_req(B, Chunks)),
+    ?assertEqual({<<"value">>, <<"other">>}, {maps:get(body, P1), maps:get(body, P2)}).
+
+%% A body limited by livery_body_limit surfaces as the multipart limit.
+limited_reader_test() ->
+    B = <<"X">>,
+    {stream, Reader} = livery_req:body(
+        stream_req(B, [build(B, [{[cd(<<"k">>)], binary:copy(<<"z">>, 100)}])])
+    ),
+    Req = livery_req:new(#{
+        headers => [{<<"content-type">>, <<"multipart/form-data; boundary=X">>}],
+        body => {stream, livery_body:limit(Reader, 10)}
+    }),
+    ?assertEqual({error, {limit, max_body}}, livery_multipart:read_all(Req)).

@@ -171,14 +171,16 @@ run(Stack, Handler, Spec, Opts) ->
     try
         Stream = new_stream(Tab),
         Req = build_req(Spec, Stream, Opts),
-        Resp =
-            try
-                livery:dispatch(Stack, Handler, Req)
-            catch
-                _Class:_Reason:_St ->
-                    livery_resp:text(500, <<"internal server error">>)
-            end,
-        _ = livery:emit(?MODULE, Stream, Resp),
+        livery_middleware:with_emit_hooks(fun() ->
+            Resp =
+                try
+                    livery:dispatch(Stack, Handler, Req)
+                catch
+                    _Class:_Reason:_St ->
+                        livery_resp:text(500, <<"internal server error">>)
+                end,
+            livery:emit(?MODULE, Stream, Resp)
+        end),
         capture(Stream)
     after
         stop(Tab)

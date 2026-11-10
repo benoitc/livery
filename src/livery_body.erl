@@ -36,7 +36,8 @@ signaling lands with the H1 adapter; this module exposes
     discard/1,
     discard/2,
     signal_demand/2,
-    account/3
+    account/3,
+    limit/2
 ]).
 
 %% Default ceiling for read_all/1,2 (16 MiB); read_all/3 overrides it.
@@ -49,7 +50,9 @@ signaling lands with the H1 adapter; this module exposes
     source :: pid() | undefined,
     ended = false :: boolean(),
     trailers :: undefined | [{binary(), binary()}],
-    error :: undefined | error_reason()
+    error :: undefined | error_reason(),
+    max = infinity :: non_neg_integer() | infinity,
+    seen = 0 :: non_neg_integer()
 }).
 
 -opaque reader() :: #reader{}.
@@ -104,6 +107,15 @@ trailers(#reader{trailers = T}) -> T.
 %% Reading
 %%====================================================================
 
+-doc """
+The reader with a byte limit: once more than `Max` bytes have been read
+through it, `read/2` returns `{error, body_too_large, _}`, and keeps
+returning it. A limit already set is only ever lowered.
+""".
+-spec limit(reader(), non_neg_integer()) -> reader().
+limit(#reader{max = Current} = R, Max) when is_integer(Max), Max >= 0 ->
+    R#reader{max = min(Current, Max)}.
+
 -doc "Read one chunk from the body, blocking up to `Timeout`.".
 -spec read(reader(), timeout()) -> read_result().
 read(#reader{ended = true} = R, _Timeout) ->
@@ -113,7 +125,7 @@ read(#reader{error = E} = R, _Timeout) when E =/= undefined ->
 read(#reader{ref = Ref} = R, Timeout) ->
     receive
         {livery_body, Ref, {data, Chunk}} ->
-            {ok, Chunk, R};
+            counted(Chunk, R);
         {livery_body, Ref, eof} ->
             {done, R#reader{ended = true}};
         {livery_body, Ref, {trailers, Hs}} ->
@@ -125,6 +137,14 @@ read(#reader{ref = Ref} = R, Timeout) ->
             {error, Reason, R#reader{error = Reason}}
     after Timeout ->
         {error, timeout, R}
+    end.
+
+counted(Chunk, #reader{max = Max, seen = Seen} = R) ->
+    case Seen + iolist_size(Chunk) of
+        Total when is_integer(Max), Total > Max ->
+            {error, body_too_large, R#reader{seen = Total, error = body_too_large}};
+        Total ->
+            {ok, Chunk, R#reader{seen = Total}}
     end.
 
 -doc """

@@ -4,8 +4,9 @@ Concurrency-limit / load-shedding middleware (admission control).
 
 Caps the number of in-flight requests. Over the limit it sheds load
 immediately with `503 Service Unavailable` and never calls the handler;
-at or under the limit the request proceeds and the slot is released when
-the handler returns.
+at or under the limit the request proceeds, and its slot is released
+once the response has been sent, streamed bodies (SSE, chunked, files)
+included, or the request has failed.
 
 Build the stack entry with the `limiter/1,2` factory, which creates the
 shared counter once:
@@ -21,10 +22,10 @@ The counter is a lock-free `atomics` cell shared across the request
 processes (no extra process). A global limiter is one factory call in
 the service stack; per-route limiters are independent factory calls.
 
-Scope: a slot is held from admission until the handler RETURNS its
-response. Body streaming happens after that (outside the middleware
-stack), so the slot does not cover the duration of a streamed/SSE body.
-The limit is approximate under a burst (a request that increments past
+Scope: a slot is held from admission until the response is fully
+emitted (`livery_middleware:after_emit/1`). Outside a Livery request
+worker, where that hook is not available, it is released when the
+handler returns instead. The limit is approximate under a burst (a request that increments past
 the limit decrements again), which is acceptable for load-shedding.
 """.
 -behaviour(livery_middleware).
@@ -72,10 +73,16 @@ call(Req, Next, #{ref := Ref, limit := Limit} = State) ->
             atomics:sub(Ref, 1, 1),
             overloaded(State);
         _Count ->
-            try
-                Next(Req)
-            after
-                atomics:sub(Ref, 1, 1)
+            Release = fun() -> atomics:sub(Ref, 1, 1) end,
+            case livery_middleware:after_emit(Release) of
+                ok ->
+                    Next(Req);
+                unsupported ->
+                    try
+                        Next(Req)
+                    after
+                        Release()
+                    end
             end
     end.
 

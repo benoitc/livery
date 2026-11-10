@@ -64,6 +64,17 @@ dispatch(#{
 }) ->
     Req = ensure_started_at(Req0),
     ok = livery_disconnect:set_notifier(Req#livery_req.notifier_pid, Req#livery_req.disc_ref),
+    Run = fun() -> run_request(Adapter, Stream, Req, Stack, Handler) end,
+    livery_middleware:with_emit_hooks(Run).
+
+-spec run_request(
+    module(),
+    livery_adapter:stream(),
+    livery_req:req(),
+    livery_middleware:stack(),
+    livery_middleware:handler()
+) -> ok.
+run_request(Adapter, Stream, Req, Stack, Handler) ->
     try
         Resp = livery:dispatch(Stack, Handler, Req),
         case livery:emit(Adapter, Stream, Resp) of

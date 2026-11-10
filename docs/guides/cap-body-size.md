@@ -14,24 +14,20 @@ Stack = [
 ].
 ```
 
-A buffered body whose size exceeds `max` short-circuits with
-`livery_resp:text(413, <<"payload too large">>)`. The handler is not
-invoked.
-
-## Count streaming bodies yourself
-
-`livery_body_limit` inspects `{buffered, IoData}` bodies and uses
-`iolist_size/1`. Streaming bodies (`{stream, _}`) pass through
-unchecked, so count bytes in the handler as you drain the reader:
+A request whose `Content-Length` is above `max` gets
+`413 Payload Too Large` before the handler runs. A body that arrives
+without a length (chunked, or HTTP/2 and HTTP/3 data frames) reaches the
+handler through a reader limited to `max` bytes: reading past it returns
+`{error, body_too_large, _}`, and the body helpers report it too:
 
 ```erlang
-consume(R, Acc) when Acc > Max -> too_large();
-consume(R, Acc) ->
-    case livery_body:read(R, 5_000) of
-        {ok, Chunk, R1} -> consume(R1, Acc + iolist_size(Chunk));
-        {done, _}       -> ok
-    end.
+case livery_body:read_all(Reader) of
+    {ok, Body, _} -> handle(Body);
+    {error, body_too_large, _} -> livery_resp:text(413, <<"payload too large">>)
+end.
 ```
+
+A handler that never reads the body is not affected.
 
 ## Set different limits per route
 

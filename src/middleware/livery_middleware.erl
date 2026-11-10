@@ -28,8 +28,12 @@ transform the response after, or both.
     run/3,
     before/1,
     after_response/1,
-    wrap/1
+    wrap/1,
+    after_emit/1,
+    with_emit_hooks/1
 ]).
+
+-define(EMIT_HOOKS, '$livery_after_emit').
 
 -export_type([stack/0, entry/0, next/0, handler/0]).
 
@@ -107,3 +111,47 @@ call_handler({Mod, Fun}, Req) when is_atom(Mod), is_atom(Fun) ->
     Mod:Fun(Req);
 call_handler(Fun, Req) when is_function(Fun, 1) ->
     Fun(Req).
+
+-doc """
+Run `Fun` once the response to the current request has been sent, or
+the attempt has ended (peer gone, handler crash). Middleware that holds
+a resource for the whole request, response streaming included, releases
+it here. Returns `unsupported` when the stack is not running inside a
+Livery request worker (for example `livery:dispatch/3` called
+directly); nothing is registered then, and the caller should release on
+its own.
+""".
+-spec after_emit(fun(() -> term())) -> ok | unsupported.
+after_emit(Fun) when is_function(Fun, 0) ->
+    case get(?EMIT_HOOKS) of
+        undefined ->
+            unsupported;
+        Hooks ->
+            put(?EMIT_HOOKS, [Fun | Hooks]),
+            ok
+    end.
+
+-doc false.
+%% Used by the request worker and the test adapter around dispatch and
+%% emit: hooks registered with `after_emit/1' run when `Fun' returns or
+%% raises, latest first.
+-spec with_emit_hooks(fun(() -> R)) -> R.
+with_emit_hooks(Fun) ->
+    Outer = put(?EMIT_HOOKS, []),
+    try
+        Fun()
+    after
+        Hooks = get(?EMIT_HOOKS),
+        restore(Outer),
+        [
+            try
+                H()
+            catch
+                _:_ -> ok
+            end
+         || H <- Hooks
+        ]
+    end.
+
+restore(undefined) -> erase(?EMIT_HOOKS);
+restore(Outer) -> put(?EMIT_HOOKS, Outer).

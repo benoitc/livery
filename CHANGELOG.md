@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backup flags, signature and counter, and `none` or `packed`
   attestation. Passkeys resist phishing, which one-time codes do not.
 
+### Changed
+
+- The Prometheus names of the HTTP server metrics changed with
+  instrument 2.0: the request attributes (method, status, protocol,
+  scheme) are now labels of one metric, `http_server_request_duration`
+  and `http_server_active_requests`, instead of being folded into the
+  metric name. Update dashboards and alerts that use the old names. A
+  metric now appears after its first request rather than as a zero.
+- Dependencies: h2 0.15.1 (a closed connection is noticed at once
+  instead of after five seconds), hackney 4.10.2 (pooled connections no
+  longer hang on close or leak per-host slots), webtransport 0.5.5 and
+  instrument 2.0.0.
+
 ## [0.11.0] - 2026-11-10
 
 Auth release: Livery becomes a complete OAuth resource server, OAuth

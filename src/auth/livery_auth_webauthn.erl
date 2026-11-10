@@ -18,9 +18,12 @@ gives, decoded. Both use unpadded base64url for binary fields.
 
 The checks follow sections 7.1 and 7.2: the client data type, the
 challenge, the origin (one of `origins`), cross-origin calls (refused
-unless `allow_cross_origin => true`), the RP ID hash, the user-present
+unless `allow_cross_origin => true`, and then the framing page,
+`topOrigin`, must be one of `top_origins`), the RP ID hash, the user-present
 flag, the user-verified flag when `user_verification => required`, the
-backup flags, the algorithm, the attestation (`livery_auth_webauthn_attest`),
+backup flags, the user handle on sign-in (required, unless
+`user_identified => true` says you picked the user before the
+ceremony, as for a second factor), the algorithm, the attestation (`livery_auth_webauthn_attest`),
 the signature, and the signature counter.
 
 Each challenge must be used once. `livery_auth_passkey` does that for
@@ -116,7 +119,8 @@ descriptors(Ids) ->
 -doc """
 Verify a registration response against `Expected`: `challenge` (raw),
 `rp_id`, `origins`, and optionally `user_verification`, `algorithms`,
-`allow_cross_origin`, `attestation_roots`, `allow_unattested`.
+`allow_cross_origin`, `top_origins`, `attestation_roots`,
+`allow_unattested`.
 """.
 -spec verify_registration(map(), map()) -> {ok, credential()} | {error, term()}.
 verify_registration(
@@ -188,7 +192,8 @@ credential(#{cred_id := CredId, cose_key := CoseBin} = Auth, Resp, Attestation) 
 Verify a sign-in response with the stored `Credential` (`id`,
 `public_key`, `sign_count`, `backup_eligible`, and `user_handle` when
 known) against `Expected` (`challenge`, `rp_id`, `origins`, optionally
-`user_verification`, `allow_cross_origin`). Returns what to update:
+`user_verification`, `allow_cross_origin`, `top_origins`,
+`user_identified`). Returns what to update:
 `sign_count`, `backup_state`, `user_verified`.
 """.
 -spec verify_authentication(map(), map(), map()) -> {ok, map()} | {error, term()}.
@@ -199,7 +204,7 @@ verify_authentication(
 ) ->
     maybe
         ok ?= same(b64_decode(RawId), {ok, maps:get(id, Credential)}, credential_id),
-        ok ?= user_handle(maps:get(<<"userHandle">>, Resp, null), Credential),
+        ok ?= user_handle(maps:get(<<"userHandle">>, Resp, null), Credential, Expected),
         {ok, ClientDataJSON} ?= field(<<"clientDataJSON">>, Resp),
         {ok, AuthData} ?= field(<<"authenticatorData">>, Resp),
         {ok, Sig} ?= field(<<"signature">>, Resp),
@@ -226,18 +231,25 @@ verify_authentication(_Response, _Credential, _Expected) ->
 %% Checks
 %%====================================================================
 
+%% L3 7.1 step 5: UTF-8 decode, which drops a byte order mark.
+client_data(<<16#EF, 16#BB, 16#BF, Json/binary>>, Type, Expected) ->
+    client_data(Json, Type, Expected);
 client_data(Json, Type, #{challenge := Challenge} = Expected) ->
     Want = b64(Challenge),
     try json:decode(Json) of
         #{<<"type">> := Type, <<"challenge">> := Want, <<"origin">> := Origin} = CD when
             is_binary(Origin)
         ->
-            origin(
-                Origin,
-                maps:get(origins, Expected),
-                maps:get(<<"crossOrigin">>, CD, false),
-                Expected
-            );
+            maybe
+                ok ?=
+                    origin(
+                        Origin,
+                        maps:get(origins, Expected),
+                        maps:get(<<"crossOrigin">>, CD, false),
+                        Expected
+                    ),
+                top_origin(maps:get(<<"topOrigin">>, CD, undefined), Expected)
+            end;
         #{<<"type">> := Type, <<"challenge">> := _} ->
             {error, challenge_mismatch};
         #{<<"type">> := _} ->
@@ -261,6 +273,18 @@ origin(Origin, Origins, Cross, Expected) ->
             ok
     end.
 
+%% L3 7.1 step 11, 7.2 step 15: a `topOrigin' is the page that framed
+%% the ceremony; it must be one the application expects to frame it.
+top_origin(undefined, _Expected) ->
+    ok;
+top_origin(Top, #{allow_cross_origin := true} = Expected) ->
+    case lists:member(Top, maps:get(top_origins, Expected, [])) of
+        true -> ok;
+        false -> {error, top_origin_mismatch}
+    end;
+top_origin(_Top, _Expected) ->
+    {error, top_origin_mismatch}.
+
 flags(#{rp_id_hash := Hash} = Auth, #{rp_id := RpId} = Expected, Ceremony) ->
     Required = maps:get(user_verification, Expected, preferred) =:= required,
     Checks = [
@@ -281,12 +305,17 @@ allowed_alg(Alg, Expected) ->
         false -> {error, {algorithm_not_allowed, Alg}}
     end.
 
-user_handle(null, _Credential) ->
-    ok;
-user_handle(B64, #{user_handle := Handle}) ->
+%% L3 7.2 step 6: when the user was not identified before the ceremony
+%% (a sign-in without a username), the response must name its user, and
+%% it must be the credential's.
+user_handle(B64, #{user_handle := Handle}, _Expected) when is_binary(B64) ->
     same(b64_decode(B64), {ok, Handle}, user_handle_mismatch);
-user_handle(_B64, _Credential) ->
-    ok.
+user_handle(_B64, _Credential, #{user_identified := true}) ->
+    ok;
+user_handle(null, _Credential, _Expected) ->
+    {error, user_handle_missing};
+user_handle(_B64, _Credential, _Expected) ->
+    {error, user_handle_mismatch}.
 
 stored_signature(CoseBin, Data, Sig) ->
     maybe

@@ -29,8 +29,10 @@ Passkeys = #{
         [CredId || {CredId, Owner, _} <- ets:tab2list(passkeys), Owner =:= Id]
     end,
     store_credential => fun(#{id := Id}, #{id := CredId} = Cred) ->
-        true = ets:insert(passkeys, {CredId, Id, Cred}),
-        ok
+        case ets:insert_new(passkeys, {CredId, Id, Cred}) of
+            true -> ok;
+            false -> {error, exists}
+        end
     end,
     find_credential => fun(CredId) ->
         case ets:lookup(passkeys, CredId) of
@@ -53,7 +55,9 @@ This adds four POST routes under `/passkeys`: `register/options` and
 `login` to sign in with one. The user `id` is a stable opaque handle (a
 database id, not an email), at most 64 bytes. Store the whole credential
 map you are given; it holds the public key and counter Livery needs
-later.
+later. `store_credential` must refuse an `id` that is already stored,
+for any user, in the same step as the insert, and return
+`{error, exists}`: a passkey belongs to one account only.
 
 ## Call them from the page
 
@@ -106,7 +110,10 @@ your site. A successful sign-in sets the session cookie, which
   which refuses a cloned security key.
 - On registration, the attestation: `none` (what synced passkeys send)
   or `packed`. Set `attestation_roots` to the CA certificates of the
-  security keys you accept to require a verified `packed` chain.
+  security keys you accept to require a verified `packed` chain; any
+  other passkey is then refused, unless you also set
+  `allow_unattested => true`.
+- That a credential id is registered once, to one user.
 
 ## Notes
 
@@ -122,7 +129,9 @@ your site. A successful sign-in sets the session cookie, which
   whoever owns the passkey. After the first sign-in, call
   `livery_auth_webauthn:request_options/1` with `allow` set to that
   user's credential ids, and `verify_authentication/3` with the stored
-  credential; refuse any other passkey.
+  credential and `user_identified => true`; refuse any other passkey.
+- A page on another site that frames yours needs
+  `allow_cross_origin => true` and its origin in `top_origins`.
 - To check passkeys yourself, without the routes, use
   `livery_auth_webauthn:creation_options/2`, `verify_registration/2`,
   `request_options/1` and `verify_authentication/3`.

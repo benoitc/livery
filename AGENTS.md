@@ -202,6 +202,7 @@ treated as a new bug.
 | WebAuthn L3 sections 8.3 to 8.8, FIDO Metadata Service | only `none` and `packed` attestation are verified; other formats are refused, or unattested with `allow_unattested`; authenticators are not looked up in the Metadata Service | synced passkeys send `none`, packed covers most security keys, and MDS is a separate trust service the application can add | `livery_auth_webauthn_attest` |
 | WebAuthn L3 section 13.4.3 | passkey challenges are single-use per node unless `challenge_replay` is set | Livery has no shared store of its own | `livery_auth_passkey` |
 | RFC 8949 | the CBOR decoder refuses indefinite lengths, tags, floats and other simple values | WebAuthn data never uses them, and refusing keeps the parser small | `livery_cbor` |
+| WebAuthn L3 section 6.5.1.1 (CTAP2 canonical CBOR) | a credential public key not in canonical form is accepted | canonical form is the authenticator's duty and no relying party step checks it; the key is decoded strictly and stored as the bytes received | `livery_cbor`, `livery_auth_webauthn` |
 | RFC 6265 section 5.3 step 5 | no public suffix list; refuses single-label domains instead | no dependency ships the list | `livery_client_cookie` |
 | RFC 6265bis `SameSite` | parsed but not enforced by the client jar | the jar has no notion of the site a request comes from | `livery_client_cookie` |
 | JSON Schema 2020-12 | OpenAPI request validation covers a subset of keywords | a full validator is out of scope | `livery_openapi_validate` |

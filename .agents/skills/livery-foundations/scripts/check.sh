@@ -66,11 +66,11 @@ report R3 "branches on the protocol above the adapter boundary" \
     < <(scan 'protocol\([^)]*\) *(=:=|==|=/=)|(=:=|==|=/=) *h[123]([^0-9a-z_]|$)' \
         $(erl_list | grep -v -E "$adapters"))
 
-# R4: the wire libraries own flow control. A request stream registered
-# without manual flow control never returns credit, so a slow handler
-# cannot hold the client back.
+# R4: the wire libraries own flow control. An adapter that registers its
+# request streams but never returns credit with consume/3 leaves them in
+# automatic flow control, so a slow handler cannot hold the client back.
 for f in $(erl_list | grep -E 'src/livery_h(2|3)\.erl$'); do
-    if grep -q 'set_stream_handler' "$f" && ! grep -q 'flow_control *=> *manual' "$f"; then
+    if grep -q 'set_stream_handler' "$f" && ! grep -q ':consume(' "$f"; then
         report R4 "request stream registered with auto flow control; return credit with consume/3" \
             < <(grep -n 'set_stream_handler(' "$f" | sed "s|^|$f:|" | head -1)
     fi

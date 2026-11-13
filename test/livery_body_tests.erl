@@ -3,6 +3,9 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+%% The deprecated signal_demand/2 is still tested until it is removed.
+-compile({nowarn_deprecated_function, [{livery_body, signal_demand, 2}]}).
+
 new_has_ref_test() ->
     R = livery_body:new(),
     ?assert(is_reference(livery_body:ref(R))),
@@ -167,3 +170,39 @@ large_chunked_body_test() ->
     self() ! {livery_body, Ref, eof},
     {ok, Body, _} = livery_body:read_all(R, 500),
     ?assertEqual(4096 * 16, byte_size(Body)).
+
+%% Every chunk read/2 hands out gives its size back to the source, so
+%% the adapter can return the same credit to the wire library.
+read_gives_credit_to_source_test() ->
+    Ref = make_ref(),
+    R = livery_body:new(Ref, self()),
+    self() ! {livery_body, Ref, {data, <<"hello">>}},
+    self() ! {livery_body, Ref, {data, [<<"a">>, <<"bc">>]}},
+    {ok, <<"hello">>, R1} = livery_body:read(R, 100),
+    {ok, _, _} = livery_body:read(R1, 100),
+    ?assertEqual(
+        5,
+        receive
+            {livery_body_demand, Ref, N1} -> N1
+        after 100 -> none
+        end
+    ),
+    ?assertEqual(
+        3,
+        receive
+            {livery_body_demand, Ref, N2} -> N2
+        after 100 -> none
+        end
+    ).
+
+read_without_source_gives_no_credit_test() ->
+    Ref = make_ref(),
+    self() ! {livery_body, Ref, {data, <<"hello">>}},
+    {ok, <<"hello">>, _} = livery_body:read(livery_body:new(Ref), 100),
+    ?assertEqual(
+        none,
+        receive
+            {livery_body_demand, Ref, _} -> got
+        after 50 -> none
+        end
+    ).

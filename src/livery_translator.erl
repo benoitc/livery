@@ -27,15 +27,23 @@ calls `serve/2` with:
 - `classify`: turns `Event` into `{data, Chunk, Fin}`,
   `{trailers, Headers}`, `{reset, Reason}` or `ignore`;
 - `conn`: the connection process, watched for a disconnect;
-- `on_abandoned`: what to do if the worker finishes while the client is
-  still sending a body over `max_body`, or `none`.
+- `credit`: optional, called with the number of body bytes the handler
+  has just read (`livery_body:read/2` reports them), so the adapter can
+  return that credit to its wire library's flow control. Without it the
+  library's own window management applies;
+- `on_abandoned`: what to tell the client when the worker finishes while
+  the body is still coming (unread, or over `max_body`), or `none`.
+
+An adapter that hands the stream to another process (a WebSocket or
+WebTransport session) calls `release/1` first, so the translator lets
+the stream go instead of telling the client to stop.
 
 You do not call it directly.
 """.
 
 -include("livery.hrl").
 
--export([serve/2, translate/2, split_query/1]).
+-export([serve/2, translate/2, release/1, split_query/1]).
 
 -export_type([event/0, opts/0, wire/0]).
 
@@ -50,6 +58,7 @@ You do not call it directly.
     key := term(),
     classify := fun((term()) -> event()),
     conn := pid(),
+    credit => none | fun((non_neg_integer()) -> term()),
     on_abandoned := none | fun(() -> term())
 }.
 
@@ -66,9 +75,10 @@ You do not call it directly.
     atom() => term()
 }.
 
-%% `body': under the limit, the bytes forwarded so far; `dropping' once
-%% the limit is crossed while the client is still sending; `dropped' once
-%% the client has finished too.
+%% `body': under the limit and still coming, the bytes forwarded so far;
+%% `finished' once it has ended (or reset, or the stream was handed off);
+%% `dropping' once the limit is crossed while the client is still
+%% sending; `dropped' once the client has finished too.
 -record(t, {
     worker :: pid(),
     wmref :: reference(),
@@ -76,7 +86,8 @@ You do not call it directly.
     body_ref :: reference(),
     disc_ref :: reference(),
     max :: non_neg_integer() | infinity,
-    body = {accepting, 0} :: {accepting, non_neg_integer()} | dropping | dropped,
+    body = {accepting, 0} ::
+        {accepting, non_neg_integer()} | finished | dropping | dropped,
     callbacks = [] :: [fun(() -> term())],
     fired = false :: boolean(),
     wire :: wire()
@@ -93,7 +104,7 @@ serve(Req, #{adapter := Adapter, stream := Stream, wire := Wire} = Opts) ->
     BodyRef = make_ref(),
     DiscRef = make_ref(),
     Req1 = Req#livery_req{
-        body = {stream, livery_body:new(BodyRef)},
+        body = {stream, livery_body:new(BodyRef, self())},
         raw_query = maps:get(raw_query, Opts),
         notifier_pid = self(),
         disc_ref = DiscRef,
@@ -139,6 +150,19 @@ translate(Worker, #{body_ref := BodyRef, disc_ref := DiscRef, max_body := Max, w
         wire = Wire
     }).
 
+-doc """
+Called from the request worker by an adapter about to hand the stream
+to another process (`accept_ws/4`, `accept_wt/4`): the translator stops
+treating the body as unfinished, so it does not tell the client to stop
+when the worker exits.
+""".
+-spec release(livery_req:req()) -> ok.
+release(#livery_req{notifier_pid = Pid, disc_ref = DiscRef}) when is_pid(Pid) ->
+    Pid ! {livery_released, DiscRef},
+    ok;
+release(#livery_req{}) ->
+    ok.
+
 -doc "Split a request target into its path and its query string.".
 -spec split_query(binary()) -> {binary(), binary()}.
 split_query(Path) ->
@@ -157,6 +181,7 @@ loop(
         worker = Worker,
         wmref = WMRef,
         cmref = CMRef,
+        body_ref = BodyRef,
         disc_ref = DiscRef,
         wire = #{tag := Tag, key := Key, classify := Classify, conn := Conn}
     } = T
@@ -174,6 +199,10 @@ loop(
             loop(T#t{fired = true});
         {livery_on_disconnect, DiscRef, Fun} ->
             loop(T#t{callbacks = livery_disconnect:register(T#t.fired, Fun, T#t.callbacks)});
+        {livery_body_demand, BodyRef, Bytes} ->
+            loop(credit(T, Bytes));
+        {livery_released, DiscRef} ->
+            loop(T#t{body = finished});
         {'DOWN', WMRef, process, Worker, _Reason} ->
             abandoned(T)
     end.
@@ -181,16 +210,19 @@ loop(
 -spec event(event(), state()) -> state().
 event({data, _Chunk, Fin}, #t{body = dropping} = T) ->
     T#t{body = dropped_after(Fin)};
-event({data, _Chunk, _Fin}, #t{body = dropped} = T) ->
+event({data, _Chunk, _Fin}, #t{body = Done} = T) when Done =:= dropped; Done =:= finished ->
     T;
 event({data, <<>>, true}, T) ->
     send(T, eof),
-    T;
+    T#t{body = finished};
 event({data, Chunk, Fin}, #t{body = {accepting, Bytes}, max = Max} = T) ->
     case livery_body:account(Bytes, Chunk, Max) of
+        {ok, _Bytes1} when Fin ->
+            send(T, {data, Chunk}),
+            send(T, eof),
+            T#t{body = finished};
         {ok, Bytes1} ->
             send(T, {data, Chunk}),
-            Fin andalso send(T, eof),
             T#t{body = {accepting, Bytes1}};
         over ->
             %% The stream is not reset here, so the handler's 413 reaches
@@ -200,10 +232,10 @@ event({data, Chunk, Fin}, #t{body = {accepting, Bytes}, max = Max} = T) ->
     end;
 event({trailers, Headers}, T) ->
     send(T, {trailers, Headers}),
-    T;
+    T#t{body = finished};
 event({reset, Reason}, T) ->
     send(T, {reset, Reason}),
-    fire(T, Reason);
+    fire(T#t{body = finished}, Reason);
 event(ignore, T) ->
     T.
 
@@ -220,15 +252,33 @@ send(#t{worker = Worker, body_ref = BodyRef}, Msg) ->
 fire(#t{fired = Fired, worker = Worker, disc_ref = DiscRef, callbacks = Cbs} = T, Reason) ->
     T#t{fired = livery_disconnect:fire_once(Fired, Worker, DiscRef, Reason, Cbs)}.
 
-%% The worker is done. If the client is still sending a body over the
-%% limit, the adapter tells it to stop.
--spec abandoned(state()) -> ok.
-abandoned(#t{body = dropping, wire = #{on_abandoned := OnAbandoned}}) when
-    is_function(OnAbandoned, 0)
+%% The handler read `Bytes' of body: return that credit to the wire
+%% library. Over the limit, no more credit: the client stops after one
+%% window while the handler's 413 goes out.
+-spec credit(state(), non_neg_integer()) -> state().
+credit(#t{body = {accepting, _}, wire = #{credit := Credit}} = T, Bytes) when
+    is_function(Credit, 1)
 ->
+    _ = Credit(Bytes),
+    T;
+credit(T, _Bytes) ->
+    T.
+
+%% The worker is done while the body is still coming (unread, or over
+%% the limit): the adapter tells the client to stop sending it.
+-spec abandoned(state()) -> ok.
+abandoned(#t{body = {accepting, _}} = T) ->
+    stop_client(T);
+abandoned(#t{body = dropping} = T) ->
+    stop_client(T);
+abandoned(#t{}) ->
+    ok.
+
+-spec stop_client(state()) -> ok.
+stop_client(#t{wire = #{on_abandoned := OnAbandoned}}) when is_function(OnAbandoned, 0) ->
     _ = OnAbandoned(),
     ok;
-abandoned(_T) ->
+stop_client(#t{}) ->
     ok.
 
 %% No worker slot available (the request limit is reached).

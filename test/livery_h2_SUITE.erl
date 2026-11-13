@@ -8,6 +8,8 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% 8 MiB: far more than either stream window.
+-define(SLOW_BODY, 8388608).
 -define(REQUEST_TIMEOUT, 5000).
 
 -export([
@@ -31,6 +33,7 @@
     response_with_trailers/1,
     cancel_on_connection_close/1,
     cancelled_requests_leave_no_worker/1,
+    slow_reader_holds_client_back/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     early_hints_interim/1,
@@ -56,6 +59,7 @@ all() ->
         response_with_trailers,
         cancel_on_connection_close,
         cancelled_requests_leave_no_worker,
+        slow_reader_holds_client_back,
         send_to_gone_client_is_closed,
         peer_on_request,
         early_hints_interim,
@@ -213,6 +217,19 @@ handler_for(peer_on_request) ->
             end,
         livery_resp:text(200, Body)
     end;
+handler_for(slow_reader_holds_client_back) ->
+    fun(R) ->
+        %% Let the client push as much as the server lets it, then count
+        %% what reached this mailbox before anything was read.
+        timer:sleep(500),
+        {messages, Msgs} = process_info(self(), messages),
+        Queued = lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]),
+        {stream, Reader} = livery_req:body(R),
+        {ok, Bytes, _} = livery_body:read_all(Reader, 20000),
+        livery_resp:text(
+            200, [integer_to_binary(Queued), <<" ">>, integer_to_binary(byte_size(Bytes))]
+        )
+    end;
 handler_for(cancelled_requests_leave_no_worker) ->
     fun(R) ->
         {stream, Reader} = livery_req:body(R),
@@ -328,6 +345,38 @@ cancel_on_connection_close(Config) ->
         cancelled -> ok
     after 5000 -> ct:fail(cancel_callback_not_run)
     end.
+
+%% A handler that does not read yet holds the client back to the stream
+%% window, then still gets the whole body once it reads.
+slow_reader_holds_client_back(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, StreamId} = h2:request(Conn, post_headers(), #{end_stream => false}),
+    Piece = binary:copy(<<"x">>, 65536),
+    Pieces = ?SLOW_BODY div 65536,
+    _ = spawn_link(fun() ->
+        [
+            ok = h2:send_data(Conn, StreamId, Piece, N =:= Pieces, #{block => 30000})
+         || N <- lists:seq(1, Pieces)
+        ]
+    end),
+    {Status, _, Body, _} = collect_response(Conn, StreamId, undefined, [], [], undefined),
+    ?assertEqual(200, Status),
+    [Queued, Read] = [binary_to_integer(B) || B <- binary:split(Body, <<" ">>)],
+    ?assertEqual(?SLOW_BODY, Read),
+    %% The stream window (64 KiB on h2, 512 KiB on quic) bounds what the
+    %% server accepts before the handler reads; without flow control the
+    %% whole body is already queued.
+    ?assert(Queued < 1048576),
+    h2:close(Conn).
+
+post_headers() ->
+    [
+        {<<":method">>, <<"POST">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"http">>},
+        {<<":authority">>, <<"127.0.0.1">>}
+    ].
 
 %% Streams the client cancels right after their HEADERS must not leave
 %% a request worker behind, whether the cancel lands before or after

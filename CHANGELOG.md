@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `livery_resp:upgrade/2`. No adapter ever acted on the response it
   builds; use `livery_ws:upgrade/3` or `livery_wt:upgrade/3`.
+- `livery_body:signal_demand/2`. Reading the body with
+  `livery_body:read/2` now gives flow-control credit back by itself.
 
 ### Fixed
 
@@ -44,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (RFC 9110 section 8.8.1). Caches and clients that compare ETags
   strictly could mix them up. `livery_compress` now makes that ETag weak
   (`W/"v1"`); revalidation with `If-None-Match` keeps working.
+- A handler that read its request body slowly, or not at all, let the
+  whole body pile up in memory, up to `max_body`, although the docs
+  promised flow control. On HTTP/2 and HTTP/3 the client can now send
+  only one flow window ahead of what the handler has read; a body the
+  handler does not read to the end is stopped once the response is sent
+  (RFC 9113 section 8.1, RFC 9114 section 4.1.1). HTTP/1.1 still relies
+  on TCP buffers alone, until `erlang_h1` offers receive flow control.
 - An HTTP/3 request cancelled by the client right after its headers
   still started its handler, which then waited for a body that would
   never come and held its place in the request limit until it gave up.

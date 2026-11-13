@@ -12,6 +12,10 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% 768 KiB: larger than the h2 (64 KiB) and quic (512 KiB) stream
+%% windows, and under h2's 1 MiB per-stream send buffer for the echo.
+-define(LARGE_MESSAGE, 786432).
+
 -export([
     suite/0,
     all/0,
@@ -29,9 +33,11 @@
     h1_surfaces_peer/1,
     h1_idle_timeout_closes/1,
     h2_echo_text_frame/1,
+    h2_large_message_after_upgrade/1,
     h2_rejects_plain_get/1,
     h2_surfaces_peer/1,
     h3_echo_text_frame/1,
+    h3_large_message_after_upgrade/1,
     h3_surfaces_peer/1,
     h1_echo_text_frame_ipv6/1,
     h1_compressed_echo/1,
@@ -59,9 +65,11 @@ all() ->
         h1_surfaces_peer,
         h1_idle_timeout_closes,
         h2_echo_text_frame,
+        h2_large_message_after_upgrade,
         h2_rejects_plain_get,
         h2_surfaces_peer,
         h3_echo_text_frame,
+        h3_large_message_after_upgrade,
         h3_surfaces_peer,
         h1_compressed_echo,
         h1_max_frame_size_closes,
@@ -89,6 +97,7 @@ end_per_suite(_Config) ->
 
 init_per_testcase(TC, Config) when
     TC =:= h2_echo_text_frame;
+    TC =:= h2_large_message_after_upgrade;
     TC =:= h2_rejects_plain_get
 ->
     {ok, Listener} = livery_h2:start(#{
@@ -152,7 +161,10 @@ init_per_testcase(h1_echo_text_frame_ipv6, Config) ->
                 | Config
             ]
     end;
-init_per_testcase(h3_echo_text_frame, Config) ->
+init_per_testcase(TC, Config) when
+    TC =:= h3_echo_text_frame;
+    TC =:= h3_large_message_after_upgrade
+->
     {ok, Listener} = livery_h3:start(#{
         port => 0,
         cert => ?config(cert, Config),
@@ -589,6 +601,37 @@ h2_echo_text_frame(Config) ->
         h2:close(Conn)
     end.
 
+%% The request stream runs under manual flow control until the upgrade;
+%% the session must then get its bytes without anyone calling consume/3.
+%% A message larger than the stream window proves the stream went back
+%% to automatic flow control.
+h2_large_message_after_upgrade(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    try
+        {ok, StreamId} = h2:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":scheme">>, <<"http">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{protocol => <<"websocket">>}
+        ),
+        200 = wait_h2_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {{text, <<"ready">>}, Parser1} = recv_ws_frame(Conn, StreamId, Parser0),
+        Big = binary:copy(<<"w">>, ?LARGE_MESSAGE),
+        Frame = iolist_to_binary(ws_frame:encode({binary, Big}, client)),
+        ok = h2:send_data(Conn, StreamId, Frame, false, #{block => 10000}),
+        {Echo, _} = recv_ws_frame(Conn, StreamId, Parser1),
+        ?assertEqual({binary, Big}, Echo)
+    after
+        h2:close(Conn)
+    end.
+
 h2_rejects_plain_get(Config) ->
     Port = ?config(port, Config),
     {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
@@ -668,6 +711,43 @@ h3_echo_text_frame(Config) ->
         ok = quic_h3:send_data(Conn, StreamId, Frame, false),
         {Echo, _Parser2} = recv_ws_frame_h3(Conn, StreamId, Parser1),
         ?assertEqual({text, <<"over-h3">>}, Echo)
+    after
+        catch quic_h3:close(Conn)
+    end.
+
+%% As h2_large_message_after_upgrade, over HTTP/3.
+h3_large_message_after_upgrade(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>,
+        Port,
+        #{
+            verify => verify_none,
+            sync => true,
+            settings => #{enable_connect_protocol => 1}
+        }
+    ),
+    try
+        {ok, StreamId} = quic_h3:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":protocol">>, <<"websocket">>},
+                {<<":scheme">>, <<"https">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{end_stream => false}
+        ),
+        200 = wait_h3_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {{text, <<"ready">>}, Parser1} = recv_ws_frame_h3(Conn, StreamId, Parser0),
+        Big = binary:copy(<<"w">>, ?LARGE_MESSAGE),
+        Frame = iolist_to_binary(ws_frame:encode({binary, Big}, client)),
+        ok = quic_h3:send_data(Conn, StreamId, Frame, false),
+        {Echo, _} = recv_ws_frame_h3(Conn, StreamId, Parser1),
+        ?assertEqual({binary, Big}, Echo)
     after
         catch quic_h3:close(Conn)
     end.

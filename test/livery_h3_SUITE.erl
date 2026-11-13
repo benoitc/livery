@@ -7,6 +7,9 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
+%% 8 MiB: far more than either stream window.
+-define(SLOW_BODY, 8388608).
+
 -define(BIG_CHUNK, 1048576).
 -define(BIG_CHUNKS, 48).
 
@@ -31,6 +34,7 @@
     response_with_trailers/1,
     cancel_on_connection_close/1,
     cancelled_requests_leave_no_worker/1,
+    slow_reader_holds_client_back/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     scheme_and_authority_on_request/1,
@@ -60,6 +64,7 @@ all() ->
         response_with_trailers,
         cancel_on_connection_close,
         cancelled_requests_leave_no_worker,
+        slow_reader_holds_client_back,
         send_to_gone_client_is_closed,
         peer_on_request,
         scheme_and_authority_on_request,
@@ -147,6 +152,44 @@ inform_unsupported(Config) ->
     {Status, _Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"unsupported">>, Body).
+
+%% A handler that does not read yet holds the client back to the stream
+%% window, then still gets the whole body once it reads.
+slow_reader_holds_client_back(Config) ->
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>, ?config(port, Config), #{verify => verify_none, sync => true}
+    ),
+    Headers = [
+        {<<":method">>, <<"POST">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"https">>},
+        {<<":authority">>, <<"localhost">>}
+    ],
+    {ok, StreamId} = quic_h3:request(Conn, Headers, #{end_stream => false}),
+    Piece = binary:copy(<<"x">>, 65536),
+    Pieces = ?SLOW_BODY div 65536,
+    _ = spawn_link(fun() ->
+        [send_piece(Conn, StreamId, Piece, N =:= Pieces) || N <- lists:seq(1, Pieces)]
+    end),
+    {Status, _, Body, _} = collect_response(Conn, StreamId, undefined, [], [], undefined),
+    ?assertEqual(200, Status),
+    [Queued, Read] = [binary_to_integer(B) || B <- binary:split(Body, <<" ">>)],
+    ?assertEqual(?SLOW_BODY, Read),
+    %% The stream window (64 KiB on h2, 512 KiB on quic) bounds what the
+    %% server accepts before the handler reads; without flow control the
+    %% whole body is already queued.
+    ?assert(Queued < 1048576),
+    catch quic_h3:close(Conn).
+
+%% quic refuses a write while its send queue is full; try again shortly.
+send_piece(Conn, StreamId, Piece, Fin) ->
+    case quic_h3:send_data(Conn, StreamId, Piece, Fin) of
+        ok ->
+            ok;
+        {error, send_queue_full} ->
+            timer:sleep(5),
+            send_piece(Conn, StreamId, Piece, Fin)
+    end.
 
 %% Streams the client cancels right after their HEADERS must not leave
 %% a request worker behind, whether the cancel lands before or after
@@ -326,6 +369,19 @@ handler_for(peer_on_request) ->
                     iolist_to_binary(io_lib:format("~p", [Other]))
             end,
         livery_resp:text(200, Body)
+    end;
+handler_for(slow_reader_holds_client_back) ->
+    fun(R) ->
+        %% Let the client push as much as the server lets it, then count
+        %% what reached this mailbox before anything was read.
+        timer:sleep(500),
+        {messages, Msgs} = process_info(self(), messages),
+        Queued = lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]),
+        {stream, Reader} = livery_req:body(R),
+        {ok, Bytes, _} = livery_body:read_all(Reader, 20000),
+        livery_resp:text(
+            200, [integer_to_binary(Queued), <<" ">>, integer_to_binary(byte_size(Bytes))]
+        )
     end;
 handler_for(cancelled_requests_leave_no_worker) ->
     fun(R) ->

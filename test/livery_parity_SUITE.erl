@@ -34,6 +34,7 @@
     query_with_body/1,
     streaming_chunked_response/1,
     sse_response/1,
+    sse_comment/1,
     ndjson_response/1,
     file_response/1,
     response_with_trailers/1,
@@ -71,6 +72,7 @@ groups() ->
         query_with_body,
         streaming_chunked_response,
         sse_response,
+        sse_comment,
         ndjson_response,
         file_response,
         handler_crash_returns_500,
@@ -293,6 +295,20 @@ sse_response(Config) ->
     ),
     ?assertEqual(
         <<"event: tick\ndata: 1\n\nevent: tick\ndata: 2\n\n">>,
+        body(Resp)
+    ).
+
+%% A comment line starts with a colon; clients ignore it, so it keeps an
+%% idle connection open without sending an event (HTML, section 9.2.6).
+sse_comment(Config) ->
+    Producer = fun(Emit) ->
+        ok = Emit({comment, <<"keep\nalive">>}),
+        Emit(#{event => <<"tick">>, data => <<"1">>}),
+        ok
+    end,
+    Resp = drive(Config, [], fun(_R) -> livery_resp:sse(200, Producer) end, #{}),
+    ?assertEqual(
+        <<": keep\n: alive\nevent: tick\ndata: 1\n\n">>,
         body(Resp)
     ).
 

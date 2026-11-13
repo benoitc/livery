@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A Server-Sent Events producer can send a comment with
+  `Emit({comment, Text})`, to keep an idle connection open without
+  sending an event. The guide already showed a heartbeat, but the text
+  went out as an event.
 - `livery_a2a:router/2` takes `max_body_bytes` and `body_timeout_ms`, the
   same request body limits `livery_mcp` already has.
 - Token introspection can authenticate to the authorization server with

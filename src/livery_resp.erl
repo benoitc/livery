@@ -417,7 +417,14 @@ merge_under(Lower, Higher) ->
     ],
     Higher ++ Extra.
 
--doc "Server-Sent Events response.".
+-doc """
+Server-Sent Events response.
+
+`Producer` gets an `Emit` fun. `Emit(#{data => Data})` sends one event,
+with the optional `event`, `id` and `retry` fields; `Emit(IoData)` sends
+an event with that data only; `Emit({comment, Text})` sends a comment
+line, which clients ignore, to keep an idle connection open.
+""".
 -spec sse(100..599, fun((term()) -> ok | {error, term()})) -> resp().
 sse(Status, Producer) -> sse(Status, [], Producer).
 

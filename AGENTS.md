@@ -261,7 +261,7 @@ supervisor) to start a `livery_req_proc` worker with `proc_lib:spawn`,
 then becomes the request's translator: it turns the library's
 `{h1_stream,_}` / `{h2,_}` / `{quic_h3,_}` events into
 `{livery_body, Ref, _}` messages, enforces `max_body`, returns
-flow-control credit as the handler reads (H2, H3), and fires the
+flow-control credit as the handler reads, and fires the
 disconnect notice, until the worker exits. Middleware and the handler
 run in the worker, which may block/`receive` (the `cowboy_loop`
 analogue). The reasons are in `docs/concepts/architecture.md`,

@@ -29,6 +29,7 @@
     body_ceiling_rejects_oversize/1,
     oversize_upload_delivers_413/1,
     early_response_no_read_delivers_413/1,
+    slow_reader_holds_client_back/1,
     error_500_on_crash/1,
     cancel_on_client_disconnect/1,
     send_to_gone_client_is_closed/1,
@@ -61,6 +62,7 @@ all() ->
         body_ceiling_rejects_oversize,
         oversize_upload_delivers_413,
         early_response_no_read_delivers_413,
+        slow_reader_holds_client_back,
         error_500_on_crash,
         cancel_on_client_disconnect,
         send_to_gone_client_is_closed,
@@ -190,6 +192,18 @@ early_response_no_read_delivers_413(Config) ->
         end,
         lists:seq(1, 25)
     ).
+
+%% A handler that does not read yet holds the client back: h1 stops
+%% reading the socket once its receive window is full, so TCP pushes
+%% back. The whole body still arrives once the handler reads.
+slow_reader_holds_client_back(Config) ->
+    Body = binary:copy(<<"x">>, 8 * 1024 * 1024),
+    {ok, 200, _, Reply} = post_no_pool(Config, <<"/">>, Body),
+    [Queued, Read] = [binary_to_integer(B) || B <- binary:split(Reply, <<" ">>)],
+    ?assertEqual(byte_size(Body), Read),
+    %% h1's receive window is 64 KiB; without flow control the body is
+    %% read off the socket as fast as it comes.
+    ?assert(Queued < 1048576).
 
 error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
@@ -394,6 +408,19 @@ handler_for(Case) when Case =:= scheme_and_authority_tcp; Case =:= scheme_and_au
     fun(R) -> livery_resp:text(200, [livery_req:scheme(R), <<" ">>, livery_req:authority(R)]) end;
 handler_for(peer_on_request_tls) ->
     fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
+handler_for(slow_reader_holds_client_back) ->
+    fun(R) ->
+        %% Let the client push as much as the server lets it, then count
+        %% what reached this mailbox before anything was read.
+        timer:sleep(500),
+        {messages, Msgs} = process_info(self(), messages),
+        Queued = lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]),
+        {stream, Reader} = livery_req:body(R),
+        {ok, Bytes, _} = livery_body:read_all(Reader, 20000),
+        livery_resp:text(
+            200, [integer_to_binary(Queued), <<" ">>, integer_to_binary(byte_size(Bytes))]
+        )
+    end;
 handler_for(early_hints_before_response) ->
     fun(R) ->
         ok = livery_req:inform(

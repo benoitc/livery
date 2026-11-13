@@ -117,7 +117,7 @@ library's events into the `{livery_body, Ref, _}` messages the body
 reader understands, so neither your handler nor `livery_body` ever sees
 a protocol-specific message (rule 3). It enforces `max_body` before the
 bytes reach the worker's mailbox, gives flow-control credit back to the
-library as the handler reads (HTTP/2 and HTTP/3; rule 4), and notices a
+library as the handler reads (rule 4), and notices a
 disconnect while the handler is busy in your code. Keeping all of that
 out of the worker also means a handler free to `receive` cannot swallow
 a wire message by accident. `livery_translator` is shared by the three

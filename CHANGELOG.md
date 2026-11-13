@@ -79,11 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`W/"v1"`); revalidation with `If-None-Match` keeps working.
 - A handler that read its request body slowly, or not at all, let the
   whole body pile up in memory, up to `max_body`, although the docs
-  promised flow control. On HTTP/2 and HTTP/3 the client can now send
-  only one flow window ahead of what the handler has read; a body the
-  handler does not read to the end is stopped once the response is sent
-  (RFC 9113 section 8.1, RFC 9114 section 4.1.1). HTTP/1.1 still relies
-  on TCP buffers alone, until `erlang_h1` offers receive flow control.
+  promised flow control. The client can now send only one flow window
+  ahead of what the handler has read, on HTTP/1.1 (with h1 0.11.0),
+  HTTP/2 and HTTP/3. On HTTP/2 and HTTP/3, a body the handler does not
+  read to the end is stopped once the response is sent (RFC 9113
+  section 8.1, RFC 9114 section 4.1.1).
 - Over HTTP/2, a WebSocket message larger than about 1 MiB could not be
   sent while the client's flow window was small, and never reached the
   client. The server now waits for the window, up to 30 seconds, as it

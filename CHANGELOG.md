@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Token introspection can authenticate to the authorization server with
   `client_secret_post` or `private_key_jwt`, like the token client, set
   with the new `client_auth` option. HTTP Basic stays the default.
+- Early Hints work over HTTP/3. `livery_req:inform/3` used to return
+  `{error, unsupported}` there; it now sends the 103 ahead of the final
+  response, as it already did over HTTP/1.1 and HTTP/2.
 
 ### Changed
 

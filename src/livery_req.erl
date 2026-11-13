@@ -313,9 +313,9 @@ May be called several times per request, any time before the handler
 returns its `#livery_resp{}`. The final response is unaffected. `101`
 is reserved for the upgrade machinery and rejected by the adapters.
 
-Support depends on the wire protocol: HTTP/1.1 and HTTP/2 send it
-(HTTP/1.1 skips it for HTTP/1.0 clients, per RFC 9110 §15.2); HTTP/3
-returns `{error, unsupported}` for now. Check
+HTTP/1.1, HTTP/2 and HTTP/3 send it; HTTP/1.1 skips it for HTTP/1.0
+clients (RFC 9110 section 15.2) and returns `{error, http_1_0}`. An
+adapter without support returns `{error, unsupported}`; check
 `Adapter:capabilities/1` for `informational => true`, or just ignore
 the return value, since hints are best-effort by nature.
 

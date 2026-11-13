@@ -62,10 +62,8 @@ Modern web/AI framework gaps, in priority order. All 10 items are done.
 2. Interim (1xx) responses. DONE: `livery_req:inform/3` (primarily
    `103 Early Hints`), backed by the optional adapter callback
    `send_informational/3` and advertised via the `informational`
-   capability. H1 (h1 0.8.0) and H2 send it; H3 returns
-   `{error, unsupported}` until the QUIC stack surfaces interim
-   HEADERS. See `docs/guides/early-hints.md`. Follow-up: implement in
-   `erlang_quic`'s h3 and flip the capability.
+   capability. H1 (h1 0.8.0) and H2 send it; H3 sends it since
+   quic 2.7.0. See `docs/guides/early-hints.md`.
 3. Connection teardown on stop. DONE: h1 0.8.0 tracks accepted
    connections; `h1:stop_server/1` is synchronous and closes them, so
    `livery:stop_service/1` really cuts off kept-alive clients.

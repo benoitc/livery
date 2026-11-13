@@ -414,11 +414,15 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
     #{transport := Transport, alpn := Alpn} = Ctx,
     {RawPath, RawQuery} = livery_translator:split_query(Path),
     Stream = {Conn, StreamId, Alpn},
-    Req = build_req(Stream, Method, RawPath, Headers, Transport),
+    %% Register before anything else: until then h2 grants the client
+    %% credit on its own, so the shorter that stretch, the tighter the
+    %% flow control. Building the request asks the connection for the
+    %% peer and TLS details, so it comes after.
     case set_stream_handler(Conn, StreamId, self(), manual) of
         {error, _} ->
             ok;
         _Registered ->
+            Req = build_req(Stream, Method, RawPath, Headers, Transport),
             livery_translator:serve(Req, Ctx#{
                 adapter => ?MODULE,
                 stream => Stream,

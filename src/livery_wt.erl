@@ -18,8 +18,8 @@ my_wt_route(Req) ->
 `my_wt_handler` implements the `webtransport_handler` behaviour
 (from `erlang-webtransport`).
 
-WebTransport runs only over H2 (extended CONNECT, RFC 9220-style)
-and H3. Calling `upgrade/3` on an adapter that does not implement
+WebTransport runs only over H2 (extended CONNECT, RFC 8441) and H3
+(RFC 9220). Calling `upgrade/3` on an adapter that does not implement
 `accept_wt/4` (H1) returns `501 Not Implemented`.
 
 The listener must advertise the WebTransport settings. Merge

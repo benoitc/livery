@@ -94,7 +94,9 @@ here.
 
 -type reset_reason() :: term().
 
--type send_result() :: ok | {error, closed | flow | term()}.
+%% `send_buffer_full' (H2) and `send_timeout' (H3) mean the peer's flow
+%% window stayed full; retry the same chunk or give up.
+-type send_result() :: ok | {error, closed | send_buffer_full | send_timeout | term()}.
 
 -callback start(Name :: atom(), listen_spec(), opts()) ->
     {ok, listener()} | {error, term()}.

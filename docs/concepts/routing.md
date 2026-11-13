@@ -1,18 +1,19 @@
 # Routing
 
 This page explains how Livery turns a method and a path into a handler,
-and the few rules that govern matching. Read it when your service grows
+and the few rules it follows to match. Read it when your service grows
 past a handful of endpoints. A router maps a method and a path to a
-handler: you give Livery a flat list of routes, it compiles them into a
-radix trie once, and from then on each request is matched to its handler
-in time proportional to the path depth, not the number of routes.
+handler: you give Livery a flat list of routes, it compiles them once
+into a tree with one level per path segment, and from then on the time
+to match a request grows with the number of segments in its path, not
+with the number of routes.
 
 ## When you want a router
 
 **Use a router when** you have more than a couple of endpoints, path
 parameters (`/things/:id`), or different methods on the same path. **Skip
 it when** the service is a single catch-all (a health probe, a webhook
-sink, a proxy); there you can give `start_service/1` a plain `handler`
+receiver, a proxy); there you can give `start_service/1` a plain `handler`
 function instead of a `router`. Most services want the router.
 
 ## Shape
@@ -65,7 +66,7 @@ Handler = livery:router_handler(Router).
 %% Handler :: fun((livery_req:req()) -> livery_resp:resp())
 ```
 
-Give the router straight to the service and it wires that for you:
+Give the router straight to the service and it does that for you:
 
 ```erlang
 livery:start_service(#{
@@ -84,7 +85,7 @@ funs to override the default `404`/`405`.
 |---|---|---|
 | `/users` | exactly `users` | none |
 | `/users/:id` | one segment, captured | `#{<<"id">> => Seg}` |
-| `/files/*rest` | one or more trailing segments | `#{<<"rest">> => Joined}` |
+| `/files/*rest` | all trailing segments, or none (then `Joined` is `<<>>`) | `#{<<"rest">> => Joined}` |
 
 Static segments match first, then `:param`, then `*wildcard`.
 
@@ -93,7 +94,8 @@ Static segments match first, then `:param`, then `*wildcard`.
 a prefix, or mounting a sub-application. For example
 `{<<"GET">>, <<"/assets/*path">>, {my_static, serve}}` hands the joined
 remainder to a handler that reads `livery_req:binding(<<"path">>, Req)`
-and serves a confined file (see [Serve static files](../guides/serve-static-files.md)).
+and serves the file after checking it stays inside its directory (see
+[Serve static files](../guides/serve-static-files.md)).
 
 ## Per-route middleware and metadata
 
@@ -111,25 +113,25 @@ service-level stack:
 ## Composing routers
 
 A router is a value, so you can build it in pieces and join them. This is
-how you keep a self-contained feature's routes together and stitch them
-in, the way Axum's `nest`/`merge` work:
+how you keep the routes of one feature together and add them in one
+go, the way Axum's `nest`/`merge` work:
 
 - `livery_router:merge/2` puts two routers side by side (the later one
   wins on a clash).
 - `livery_router:nest/3` mounts a sub-router under a prefix, so
   `livery_mcp:router()` (at `/mcp`) can land at `/ai/mcp`.
-- `livery_router:layer/2` wraps a whole router in a middleware stack, the
-  easy way to guard a mounted subtree.
-- `livery_router:routes/1` reconstructs the flat route list from any
+- `livery_router:layer/2` wraps a whole router in a middleware stack, an
+  easy way to protect every route mounted under a prefix.
+- `livery_router:routes/1` rebuilds the flat route list from any
   router, composed or not (the inverse of `compile/1`).
 
 See [Mount a router on a service](../guides/mount-a-router.md).
 
 ## Performance
 
-The trie allocates nothing on a lookup besides the bindings map, and
-empty bindings reuse one shared `#{}`. Matching an N-segment path is O(N)
-regardless of route count, so the router is not a hot path in benchmarks.
+A lookup allocates nothing but the bindings map, and empty bindings
+reuse one shared `#{}`. Matching an N-segment path is O(N) whatever the
+number of routes, so the router does not show up as a cost in benchmarks.
 
 ## See also
 

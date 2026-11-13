@@ -55,8 +55,8 @@ sent them.
 ## Choose what goes in the session
 
 `on_login` receives the validated ID token claims and the token
-response, and returns the session map. Keep it small, it travels in a
-cookie:
+response, and returns the session map. Keep it small, since it travels
+in a cookie:
 
 ```erlang
 Login#{on_login => fun(Claims, _Token) ->
@@ -77,7 +77,8 @@ Login#{step_up_acr_values => [<<"urn:example:mfa">>]}
 ```
 
 Only the levels listed in `step_up_acr_values` are taken from the link,
-so nobody can craft a login with a level of their choosing. Set
+so nobody can make a login link that asks for a level of their own
+choosing. Set
 `acr_values` or `max_age` in the options to ask for them on every login.
 The callback refuses an ID token whose `acr` is not one requested, or
 whose `auth_time` is older than `max_age`, and the session keeps `acr`
@@ -89,10 +90,11 @@ When the provider supports pushed authorization requests (RFC 9126, it
 then lists `pushed_authorization_request_endpoint` in its metadata),
 Livery sends the login parameters to the provider directly first, and
 the browser only carries a short reference. Nothing to configure:
-`par => auto` is the default. Set `par => false` to keep the classic
-redirect, unless the provider requires PAR, in which case Livery always
-uses it. With PAR, PKCE, `private_key_jwt` and DPoP-bound tokens, your
-app follows the FAPI 2.0 security profile.
+`par => auto` is the default. Set `par => false` to put the parameters
+in the redirect URL as before, unless the provider requires PAR, in
+which case Livery always uses it. With PAR, PKCE, `private_key_jwt` and
+DPoP-bound tokens, your app follows the FAPI 2.0 security profile (the
+OpenID Foundation's rules for high-security APIs).
 
 ## What is checked for you
 

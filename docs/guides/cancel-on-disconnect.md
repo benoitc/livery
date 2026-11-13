@@ -1,17 +1,17 @@
 # How to cancel work when the client disconnects
 
-A request sometimes triggers expensive work (an LLM inference, a long
-query). You need this when the client disconnects mid-request: instead
-of finishing the work for nobody, you want to stop it. Livery signals
-the request handler when the client resets the stream or closes the
-connection, across HTTP/1.1, HTTP/2, and HTTP/3. There are two ways to
-react, depending on how your handler is shaped.
+Some requests start expensive work (an LLM inference, a long query).
+You need this when the client disconnects halfway: rather than finish
+the work for nobody, you want to stop it. Livery tells the request
+handler when the client resets the stream or closes the connection,
+on HTTP/1.1, HTTP/2 and HTTP/3. You can react in two ways, depending
+on how your handler is written.
 
 ## React in a streaming receive loop
 
-A producer that streams tokens already loops on its data source. It
-also matches the disconnect message, and stops when `Emit` reports a
-failed send:
+A producer that streams tokens already loops over its data source.
+Have it also match the disconnect message, and stop when `Emit`
+reports that a send failed:
 
 ```erlang
 chat(Req) ->
@@ -32,16 +32,18 @@ stream(Emit, InferRef) ->
     end.
 ```
 
-`{livery_disconnect, _, _}` is delivered to the handler's process; the
-`Emit` error return is a second backstop. Chunked, SSE, and NDJSON
-producers all propagate the send error now, so returning `{error, _}`
-from the producer also stops the terminal write.
+`{livery_disconnect, _, _}` arrives in the handler's process; the
+error returned by `Emit` is a second safety net. Chunked, SSE and
+NDJSON producers all pass the send error back, so returning
+`{error, _}` from the producer also skips the last write that would
+end the stream.
 
 ## React from a blocking handler
 
 A handler that blocks in a NIF cannot loop. Register a cancel
-callback; Livery runs it in a separate process the moment the client
-disconnects, so the NIF is signalled even though the handler is busy:
+callback instead: Livery runs it in a separate process as soon as the
+client disconnects, so the NIF gets the signal even while the handler
+is busy:
 
 ```erlang
 complete(Req) ->
@@ -52,19 +54,19 @@ complete(Req) ->
 
 `on_disconnect/2` returns immediately. The callback runs **at most
 once**, **only on a real disconnect** (never on normal completion),
-and on the test adapter it is a no-op (handler unit tests are
-unaffected).
+and does nothing on the test adapter (your handler unit tests are
+not affected).
 
 ## Notes
 
-- Default is signal-only: Livery does not kill your handler. It runs
-  any cleanup it likes, then returns. A handler that ignores the
-  signal keeps running.
-- HTTP/1.1 is half-duplex. A disconnect is detected when the
-  connection closes (via the connection monitor) or when a send
-  fails; a paused streaming response that never sends again may not
-  notice until the connection drops. H2 and H3 multiplex, so a
-  reset/close is detected promptly.
+- By default Livery only signals: it does not kill your handler. The
+  handler runs whatever cleanup it needs, then returns. A handler that
+  ignores the signal keeps running.
+- HTTP/1.1 is half-duplex. Livery sees a disconnect when the
+  connection closes (through the connection monitor) or when a send
+  fails; a streaming response that pauses and never sends again may
+  not notice until the connection drops. H2 and H3 multiplex streams
+  over one connection, so a reset or close is seen right away.
 - `livery_req:disconnect_tag/0` returns the message tag
   (`livery_disconnect`) for guard-style matching.
 

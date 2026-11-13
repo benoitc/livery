@@ -5,32 +5,35 @@ sibling library that owns the change.
 
 ## Framework-gap backlog (from the audit)
 
-Modern web/AI framework gaps, in priority order. All 10 items are done.
+Things web and AI frameworks usually offer and Livery lacked, in
+priority order. All 10 items are done.
 
 1. Cancel on client disconnect. DONE: `livery_req:on_disconnect/2`
    plus the `{livery_disconnect, _, _}` message, delivered across
    H1/H2/H3 by the per-stream translator (which monitors the
    connection). See `docs/guides/cancel-on-disconnect.md`.
-2. CORS middleware. DONE: `livery_cors` (preflight short-circuit,
-   origin allowlist/predicate, credentials, expose, max-age, and
-   cache-correct `Vary`). See `docs/guides/enable-cors.md`.
+2. CORS middleware. DONE: `livery_cors` (answers preflight requests
+   itself; allowed origins as a list or a function; credentials,
+   expose, max-age, and a `Vary` header that keeps caches correct). See `docs/guides/enable-cors.md`.
 3. Response compression with Accept-Encoding. DONE (gzip + deflate):
    `livery_compress` negotiates over the `livery_codec` registry and
    compresses full + chunked bodies; `livery_codec_gzip` and
    `livery_codec_deflate` are built in over OTP `zlib`. See
-   `docs/guides/compress-responses.md`. Follow-up codec apps (separate
-   PRs, link system libs): `livery_brotli` (NIF, `br`) and
-   `livery_zstd` (cmake NIF, `zstd`) implement the same behaviour and
-   self-register via `livery_codec:register/1`.
+   `docs/guides/compress-responses.md`. More codecs come as separate
+   applications (separate PRs, linked against system libraries):
+   `livery_brotli` (NIF, `br`) and `livery_zstd` (cmake NIF, `zstd`)
+   implement the same behaviour and register themselves with
+   `livery_codec:register/1`.
 4. Multipart / form-data body parsing (uploads, multimodal). DONE:
-   `livery_multipart` (streaming pull parser + `read_all`, bounded
-   buffering, filename returned verbatim) and `livery_ext:read_form/1,2`
-   (streaming urlencoded). See `docs/guides/handle-file-uploads.md` and
+   `livery_multipart` (a streaming parser you pull parts from, plus
+   `read_all`; it buffers only a bounded amount and returns the filename
+   exactly as sent) and `livery_ext:read_form/1,2` (reads urlencoded
+   forms as a stream). See `docs/guides/handle-file-uploads.md` and
    `docs/guides/parse-form-bodies.md`.
 5. Concurrency limit / load-shedding middleware (admission control).
-   DONE: `livery_concurrency` (`limiter/1,2` factory over a lock-free
-   `atomics` counter; over the limit sheds `503` immediately, optional
-   Retry-After). See `docs/guides/limit-concurrency.md`.
+   DONE: `livery_concurrency` (`limiter/1,2` builds one over a
+   lock-free `atomics` counter; above the limit it answers `503` at
+   once, with an optional Retry-After). See `docs/guides/limit-concurrency.md`.
 6. Security-headers middleware (HSTS/CSP/etc). DONE:
    `livery_security_headers` (nosniff, frame options, referrer policy,
    HSTS on TLS, opt-in CSP). See `docs/guides/set-security-headers.md`.
@@ -40,13 +43,13 @@ Modern web/AI framework gaps, in priority order. All 10 items are done.
    `livery_ratelimit_store` ETS table. See
    `docs/guides/rate-limit-requests.md`.
 8. HTTP caching primitives (ETag, conditional GET, Cache-Control).
-   DONE: `livery_etag` (auto strong/weak ETag, `If-None-Match` -> 304,
-   handler override) plus `livery_resp:with_etag/2` and
+   DONE: `livery_etag` (computes a strong or weak ETag, answers
+   `If-None-Match` with 304, and lets the handler set its own) plus `livery_resp:with_etag/2` and
    `with_cache_control/2`. See `docs/guides/http-caching.md`.
 9. Static-directory serving with ETag/MIME. DONE: `livery_static`
    (`handler/1,2` mounted on a `*path` wildcard route; MIME by extension,
-   weak ETag + conditional GET, Range, directory index, strict path
-   confinement). See `docs/guides/serve-static-files.md`.
+   weak ETag + conditional GET, Range, directory index, and never a
+   file outside its root). See `docs/guides/serve-static-files.md`.
 10. Health/readiness endpoints + Prometheus `/metrics`. DONE:
     `livery_health` (`live/0`, `ready/1` with named checks) and
     `livery_metrics` (`handler/0` rendering the `instrument` registry via
@@ -77,20 +80,20 @@ WebSocket extras shipped alongside (ws 0.4.0): `max_frame_size` /
 
 ## Benchmarking: H3 needs an external client
 
-The in-VM bench harness understates H3. Findings (loopback, 14
-schedulers):
+The bench harness runs inside the VM and makes H3 look slower than it
+is. What we found (loopback, 14 schedulers):
 
-- H3 throughput saturates at ~18k req/s by 16 connections and stays
-  flat to 200 connections; only latency grows (throughput =
-  concurrency / latency). H1 scales to ~74k.
-- It is not CPU-bound: aggregate scheduler busy is ~32% (about 10 of
-  14 cores idle) during the H3 run.
-- It is not the server UDP-listener pool: `pool_size` 1 through 8
+- H3 throughput tops out at ~18k req/s by 16 connections and stays
+  flat up to 200 connections; only latency grows (throughput =
+  concurrency / latency). H1 goes up to ~74k.
+- CPU is not the limit: the schedulers are busy ~32% of the time
+  overall (about 10 of 14 cores idle) during the H3 run.
+- Nor is the server's pool of UDP listeners: `pool_size` 1 through 8
   makes no difference to the in-VM number.
 
-The ceiling is the in-VM QUIC round trip, since the harness runs the
-QUIC client and server in the same BEAM VM and the client stack is
-on the critical path. To measure H3 server throughput, drive Livery
+The limit is the QUIC round trip inside the VM: the harness runs the
+QUIC client and server in the same BEAM VM, so the client's own work
+adds to every request. To measure H3 server throughput, drive Livery
 from an external native QUIC client (quiche-client, h2load with
 HTTP/3, or curl --http3) on a separate process or host. Profiling
 already showed Livery's H3 adapter is not the bottleneck.
@@ -103,16 +106,16 @@ but helps real external traffic spread across cores.
 ## Upstream: optimize HTTP/3 header validation in `erlang_quic`
 
 Profiling an H3 request/response loop (`livery_bench:profile(h3, 100)`,
-fprof, all processes) shows header validation as a top own-time hot
-path, comparable to the AEAD crypto and well above anything in
-Livery's adapter:
+fprof, all processes) puts header validation among the functions with
+the most own time (time spent in the function itself), about as much
+as the AEAD crypto and far more than anything in Livery's adapter:
 
 - `quic_h3_connection:validate_field_name_chars/2` (~6,800 calls per
   100 requests, ~13% own time)
 - `quic_h3_connection:validate_field_value_chars/2` (~5,500 calls,
   ~13% own time)
 
-The cost is structural: every header (pseudo-headers and constant
+The cost comes from how the check is written: every header (pseudo-headers and constant
 headers included) is validated byte by byte, and each byte makes a
 separate function call to a guard-based predicate
 (`is_tchar_lowercase/1`, `is_field_value_char/1`). That is two
@@ -146,26 +149,27 @@ Acceptance criteria:
    plus cases for an invalid name char, an invalid value char, an
    empty name, and a bare `:`.
 2. A profile of the same request loop shows `validate_field_*`
-   materially reduced, ideally out of the top hot path.
+   clearly reduced, ideally no longer among the top entries.
 3. No new dependencies; malformed headers still reject with
    `throw({header_error, ...})`.
 
 When done, cut a tagged hex release and bump `quic` in `rebar.config`.
 
 Context: Livery's H3 adapter and dispatch are not the bottleneck. The
-remaining H3 cost is inherent to userspace QUIC (AEAD, the connection
-state machine, per-packet processing, UDP syscalls). The benchmark
-also runs the QUIC client and server in one VM, so the H3 figure is
-pessimistic versus an external client.
+remaining H3 cost comes with running QUIC in user space (AEAD, the
+connection state machine, per-packet processing, UDP syscalls). The
+benchmark also runs the QUIC client and server in one VM, so the H3
+figure is lower than an external client would measure.
 
 ## Deferred response status: decide stream-vs-error at the first byte
 
 DONE: `livery_resp:stream_deferred/1`. `stream/3` / `sse/3` / `ndjson/3`
 fix the status and headers at construction, so `livery:emit_body/6` writes
-them before the producer runs. That blocks the async-admission pattern
-"admit, then stream; if admission fails before the first byte, reply with
-an error status": a saturated request could only emit `200 OK` + an in-band
-error frame, never `429` + a JSON envelope.
+them before the producer runs. That rules out a common pattern with
+asynchronous admission: "admit, then stream; if admission fails before
+the first byte, reply with an error status". A request turned away for
+lack of capacity could only send `200 OK` with an error inside the
+stream, never a `429` with a JSON error body.
 
 `stream_deferred(Resolver)` stores a `{deferred, Resolver}` body variant.
 `Resolver` runs once in the worker, before any header write, and returns
@@ -181,8 +185,9 @@ existing `stream/3` / `sse/3` / `ndjson/3` / `new/3` constructors (reusing
 the SSE/ndjson default headers and producer wrapping) and re-enters
 `emit/3`, so no adapter contract changes. Headers added by wrapping
 middleware (request id, security headers, CORS) merge under the decision's
-headers via `resolve_deferred/2`; the decision wins on a name conflict. An
-invalid decision crashes before any byte, surfacing as a clean 500. Tests:
+headers via `resolve_deferred/2`; the decision wins when both set the same
+header. An invalid decision crashes before any byte is sent, so the client
+gets a plain 500. Tests:
 `livery_tests:emit_deferred_*`, `livery_resp_tests:resolve_deferred_*`.
 
 The original reproducer is `barrel_inference`'s `chat_busy_returns_429/1`
@@ -191,11 +196,11 @@ reports `429`/`504`).
 
 ## HTTP QUERY method (RFC 10008)
 
-DONE: QUERY is first-class end to end. The core was already
-method-agnostic (router dispatch, the 405 `Allow` header, body
-reading, all three adapters), so the changes are the deliberate
-opt-ins: `livery_client:query/3`, QUERY in the client retry
-idempotent set and in the CORS default allow-methods, and OpenAPI
-3.2 output where a QUERY route emits a `query` operation. Locked by
-the parity SUITE (`query_with_body`) across H1/H2/H3 and by a QUERY
+DONE: QUERY works end to end, like any other method. The core already
+handled any method (router dispatch, the 405 `Allow` header, body
+reading, all three adapters), so the changes are the places where
+QUERY had to be added on purpose: `livery_client:query/3`, QUERY in
+the client's set of idempotent methods it retries and in the CORS
+default allow-methods, and OpenAPI 3.2 output where a QUERY route
+emits a `query` operation. Covered by the parity SUITE (`query_with_body`) across H1/H2/H3 and by a QUERY
 search step in the e2e journey. See `docs/guides/query-method.md`.

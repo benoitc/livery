@@ -90,13 +90,13 @@ call(Req, Next, Allowed) ->
 - A certificate on the request has always been checked: TLS only lets a
   client send one the server asked for, and Livery asks only when it
   checks the chain against `cacerts`.
-- With `verify => verify_peer`, Livery owns client authentication: a
-  listener whose `ssl_opts` (or `quic_opts` on HTTP/3) also sets
-  `verify`, `fail_if_no_peer_cert`, `cacerts`, `cacertfile`,
+- With `verify => verify_peer`, Livery is in charge of client
+  authentication: a listener whose `ssl_opts` (or `quic_opts` on HTTP/3)
+  also sets `verify`, `fail_if_no_peer_cert`, `cacerts`, `cacertfile`,
   `partial_chain`, `verify_fun` or `require_client_cert` refuses to start
-  with `{error, {conflicting_tls_opts, Keys}}`, since those would
-  silently replace the policy. To check revocation, add `crl_check` and
-  `crl_cache` to `ssl_opts`; they only narrow the check.
+  with `{error, {conflicting_tls_opts, Keys}}`, since those would replace
+  Livery's checks without warning. To check revocation, add `crl_check`
+  and `crl_cache` to `ssl_opts`; they can only make the check stricter.
 - The certificate is read once per request from the connection. On
   listeners without `verify_peer` there is none to decode, so the cost
   is a single call.

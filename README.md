@@ -16,11 +16,11 @@
 
 ---
 
-Livery is a BEAM-native web framework that serves the same router and
-middleware over **HTTP/1.1, HTTP/2, and HTTP/3** from a single
-runtime. WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP, A2A,
-and OpenTelemetry-style observability are built-in modules. It is
-written in the spirit of Axum + Tower + Hyper, on Erlang/OTP.
+Livery is a web framework for Erlang/OTP. It serves the same router and
+middleware over **HTTP/1.1, HTTP/2, and HTTP/3** from one runtime.
+WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP, A2A, and
+OpenTelemetry-style observability come as modules in the same package.
+It follows the ideas of Rust's Axum, Tower and Hyper.
 
 ## Install
 
@@ -63,8 +63,9 @@ Router = livery_router:compile([
 
 ## Stack middleware (Tower/Axum style)
 
-Middleware is a continuation over immutable values: `call(Req, Next,
-State)`. Attach it service-wide or per route.
+A middleware is a function `call(Req, Next, State)`: it gets the request
+value and `Next`, the rest of the pipeline, and returns a response
+value. Attach it to the whole service or to one route.
 
 ```erlang
 livery:start_service(#{
@@ -80,8 +81,8 @@ livery:start_service(#{
 
 ## One service, three protocols
 
-The same router and middleware over H1, H2, and H3, advertising H3 via
-`Alt-Svc`:
+The same router and middleware over H1, H2, and H3, with an `Alt-Svc`
+header that tells clients H3 is available:
 
 ```erlang
 livery:start_service(#{
@@ -100,13 +101,14 @@ serves HTTP/2 and HTTP/1.1, chosen per connection:
 https => #{port => 443, cert => Cert, key => Key, alpn => [h2, http1]}
 ```
 
-Need just one protocol? `livery:start_listener(livery_h1, #{port => 8080,
+Need only one protocol? `livery:start_listener(livery_h1, #{port => 8080,
 router => Router})`.
 
 ## Call other services
 
-The client mirrors the middleware model outbound: stack timeouts, retries,
-a circuit breaker, or load balancing around a request.
+The client uses the same middleware model for the requests you send:
+wrap a request in timeouts, retries, a circuit breaker, or load
+balancing.
 
 ```erlang
 Client = livery_client:new(#{
@@ -127,8 +129,8 @@ events(_Req) ->
     end).
 ```
 
-Chunked bodies, NDJSON, file responses with byte ranges, WebSocket and
-WebTransport over H2/H3 work the same way.
+Chunked bodies, NDJSON, file responses with byte ranges, WebSocket (over
+H1, H2 and H3) and WebTransport over H2/H3 work the same way.
 
 ## Early-response semantics
 
@@ -139,16 +141,16 @@ still in flight the close can reach the client before it reads your
 `413`, so the client sees a reset instead.
 
 Livery handles this for you. When you return a full response before the
-body is drained, it reads and discards the rest of the inbound body
-before closing, so the client gets the response:
+whole body has arrived, it reads and throws away the rest of the
+request body before closing, so the client gets the response:
 
 ```erlang
 reject(_Req) ->
     livery_resp:json(413, [], <<"{\"error\":\"too_big\"}">>).
 ```
 
-The drain is bounded by a budget you set per listener (defaults to no
-byte cap and a 30 s deadline):
+You limit how much it reads, and for how long, on each listener (by
+default there is no byte limit and a 30 s deadline):
 
 ```erlang
 {ok, _} = livery:start_listener(livery_h1, #{
@@ -158,39 +160,42 @@ byte cap and a 30 s deadline):
 }).
 ```
 
-Override it for a single response, or disable the drain with `none`:
+Override it for a single response, or turn it off with `none`:
 
 ```erlang
 livery_resp:json(413, [], Body, #{early_response_drain => {16#400000, 5000}}).
 ```
 
-The per-response override applies to full responses. Streaming responses
-(SSE, NDJSON, chunked, files) use the listener budget.
+The per-response override works only on full responses. Streaming
+responses (SSE, NDJSON, chunked, files) use the listener's limit.
 
 ## Features
 
-- **One handler, three wires**: write a handler once; serve it over
-  H1, H2, and H3 with shared routing, middleware, and Alt-Svc upgrade.
-- **Tower-style middleware**: value-based `call(Req, Next, State)`
-  pipelines, composable per service or per route, in both directions
-  (server-inbound and the outbound `livery_client`).
+- **One handler, three protocols**: write a handler once and serve it
+  over H1, H2, and H3, with the same routing and middleware, and
+  Alt-Svc to move clients up to H3.
+- **Tower-style middleware**: `call(Req, Next, State)` pipelines over
+  plain values, for the whole service or for one route, in both
+  directions (requests coming in, and requests going out through
+  `livery_client`).
 - **Streaming**: chunked, SSE, NDJSON, WebSocket and WebTransport
   over H2/H3, and file responses with byte ranges.
 - **OpenAPI**: generate a 3.2 document from routes, serve Redoc or
-  Swagger UI, and validate request bodies against a JSON-Schema subset.
+  Swagger UI, and validate request bodies against a subset of JSON Schema.
 - **MCP**: serve the Model Context Protocol Streamable HTTP transport
   on the main listener.
 - **A2A**: mount an Agent-to-Agent agent (card, JSON-RPC and REST
   bindings, SSE streams) on the main listener.
-- **Observability & auth**: OpenTelemetry-style traces/metrics,
-  trace-correlated logs, JWT/JWKS/OIDC, signed sessions, introspection.
+- **Observability & auth**: OpenTelemetry-style traces and metrics,
+  logs tagged with the trace, JWT/JWKS/OIDC, signed sessions, token
+  introspection.
 
 ## Ecosystem
 
 Companion libraries built on Livery, each in its own repo:
 
 - **[livery_grpc](https://github.com/benoitc/livery_grpc)** - gRPC server and
-  client on Livery's HTTP/2 stack: all four call types, deadlines, gRPC-Web,
+  client on top of Livery's HTTP/2 support: all four call types, deadlines, gRPC-Web,
   server reflection, and the standard health service.
 - **[livery_s3](https://github.com/benoitc/livery_s3)** - S3-compatible object
   storage client on the Livery HTTP client: AWS SigV4 signing, multipart

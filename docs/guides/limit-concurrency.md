@@ -1,7 +1,7 @@
 # How to limit concurrency (load-shedding)
 
 `livery_concurrency` is a middleware that caps the number of in-flight
-requests and sheds the overflow with `503`. You need it when a traffic
+requests and turns the rest away with `503`. You need it when a traffic
 spike can pile up more requests than your workers (or a downstream model)
 can handle, and you would rather drop the excess than let the service
 collapse.
@@ -18,9 +18,9 @@ Stack = [
 ].
 ```
 
-While at or under the limit the request proceeds. Over the limit it is
-shed immediately with `503 Service Unavailable` and the handler is never
-called. The counter is a lock-free `atomics` cell shared across request
+Up to the limit, the request goes through. Past it, the request is
+refused at once with `503 Service Unavailable` and the handler is never
+called. The counter is an `atomics` cell shared by all request
 processes, so there is no extra process and no lock.
 
 ## Change the response
@@ -35,8 +35,8 @@ livery_concurrency:limiter(500, #{
 
 ## Use global and per-route limits
 
-`limiter/1,2` returns a State carrying its own counter, so each call is
-an independent limiter:
+`limiter/1,2` returns a State with its own counter, so each call makes
+a separate limiter:
 
 ```erlang
 %% one global limit in the service stack
@@ -52,9 +52,9 @@ InferStack = [{livery_concurrency, livery_concurrency:limiter(8)} | Common].
   streamed bodies (SSE, chunked, files) included, so a long token stream
   counts for as long as it runs.
 - The slot is always released, including when the handler crashes.
-- The limit is approximate under a burst (a request that increments past
-  the limit decrements again), which is the expected behavior for
-  load-shedding.
+- Under a burst the limit is approximate (a request that pushes the
+  counter past the limit takes it back down), which is what you expect
+  when shedding load.
 
 ## See also
 

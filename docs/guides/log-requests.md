@@ -1,6 +1,6 @@
 # How to log every request
 
-`livery_access_log` is a middleware that emits one structured log entry
+`livery_access_log` is a middleware that writes one structured log entry
 per completed request, with method, path, status, duration, and request
 id. You need it when you want a single audit line for each request that
 reaches your service.
@@ -15,7 +15,7 @@ Stack = [
 ].
 ```
 
-`livery_access_log` emits one entry through `logger:log/2` after the
+`livery_access_log` writes one entry with `logger:log/2` after the
 handler returns. Fields:
 
 | Key | Value |
@@ -45,7 +45,7 @@ logger:set_primary_config(level, info).
 
 ## Read the entries
 
-This is a standard `logger` handler. To send entries to a custom
+The entries go through the standard `logger`. To send them to a custom
 destination, add a handler:
 
 ```erlang
@@ -81,9 +81,8 @@ If you also run the `livery_instrument_trace` middleware, install the
 ok = livery_instrument_trace:install_logger().
 ```
 
-The filter enriches every `logger` event emitted while a span is active
-with the span's `trace_id`, `span_id`, and `trace_flags` in the event
-metadata. Stack the trace middleware *outside* `livery_access_log` and
+The filter adds the span's `trace_id`, `span_id` and `trace_flags` to
+the metadata of every `logger` event sent while a span is active. Stack the trace middleware *outside* `livery_access_log` and
 each access-log line carries the same ids as the request's span:
 
 ```erlang

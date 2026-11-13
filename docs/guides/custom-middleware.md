@@ -1,9 +1,9 @@
 # How to write a custom middleware
 
 A middleware runs before or after every handler in a stack: auth, CORS,
-rate limiting, feature flags, request mutation. You need one when that
-behaviour is cross-cutting and you do not want to repeat it in each
-handler.
+rate limiting, feature flags, changes to the request. You need one when
+the same behaviour applies to many handlers and you do not want to
+repeat it in each one.
 
 ## Implement the behaviour
 
@@ -31,11 +31,12 @@ call(Req, Next, #{origins := Allowed} = State) ->
     end.
 ```
 
-Wire it into a stack as `{my_cors, #{origins => [...]}}`.
+Add it to a stack as `{my_cors, #{origins => [...]}}`.
 
 ## Use the sugar helpers
 
-For simple shapes, use the constructors instead of a full module:
+For simple cases, these helpers build the middleware for you, so you
+do not need a module of your own:
 
 ```erlang
 %% Mutate the request, then continue.
@@ -59,16 +60,16 @@ end).
 
 A middleware takes one of three shapes:
 
-1. **Pass-through.** Transform request or response. Always call
+1. **Pass-through.** Change the request or the response. Always call
    `Next`. Example: `livery_request_id`, `livery_access_log`.
 2. **Short-circuit.** Skip `Next` and return a response directly.
-   Example: auth failures, rate limit hits.
+   Example: failed auth, a rate limit reached.
 3. **Wrapper.** Run `Next` inside `try`/`catch` or a monitor.
    Example: `livery_middleware:wrap`, `livery_timeout`.
 
 ## Store state on the request
 
-Use `livery_req:set_meta/3` to thread values from middleware to
+Use `livery_req:set_meta/3` to pass values from a middleware to the
 handler:
 
 ```erlang

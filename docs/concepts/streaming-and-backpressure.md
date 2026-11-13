@@ -8,7 +8,7 @@ short burst: a handler builds a value and Livery writes it. Streaming is
 for the other kind, where the body arrives, or leaves, in pieces over
 time.
 
-The thing to hold onto: **a request runs in its own process** (the
+The thing to remember: **a request runs in its own process** (the
 per-request worker). So the function that produces a stream is free to
 block, to `receive`, to wait on a database or another process. Nothing
 else shares that process, so there is no callback to register and no
@@ -29,11 +29,11 @@ produced rather than at the end.
 | send a file from disk | `livery_resp:file/2` | as set |
 
 **Use `sse/2` when** the client is a browser `EventSource` or you want
-named events with automatic reconnect semantics: dashboards, progress
-bars, notifications, LLM tokens. **Use `ndjson/2` when** the consumer is
-a CLI or another service reading one JSON object per line. **Use
-`stream/3` when** you only need to push opaque chunks (a CSV report
-generated row by row, a proxied payload). **Prefer `file/2`** over
+named events that the browser reconnects to on its own: dashboards,
+progress bars, notifications, LLM tokens. **Use `ndjson/2` when** the
+reader is a CLI or another service reading one JSON object per line.
+**Use `stream/3` when** you only need to send plain chunks of bytes (a
+CSV report generated row by row, a proxied payload). **Prefer `file/2`** over
 reading a file yourself; adapters that can will use `sendfile`.
 
 ## Outbound: where the producer lives
@@ -70,10 +70,11 @@ tick(Emit, Remaining, Interval) ->
 
 - `ok` - the chunk went out; keep going.
 - `{error, closed}` - the peer is gone. Stop and clean up.
-- `{error, flow}` - temporary backpressure (see below); back off and retry.
+- `{error, send_buffer_full}` - temporary backpressure on HTTP/2 (see
+  below); back off and retry.
 - `{error, _Other}` - an adapter-specific failure; stop.
 
-For `sse/2` you emit a map (`#{event => _, id => _, data => _}` or just
+For `sse/2` you emit a map (`#{event => _, id => _, data => _}` or only
 `data`); for `stream/3` and `ndjson/2` you emit `iodata` (ndjson encodes
 and newline-frames each term for you).
 
@@ -83,8 +84,8 @@ The clock above paces itself with `after`. The more common shape is a
 stream fed by *another* process: an LLM emitting tokens, a pub/sub topic,
 a job reporting progress. The producer `receive`s those messages and
 forwards them, and it also matches the disconnect message so it can stop
-the upstream work when the client leaves. This is Livery's answer to
-Cowboy's `cowboy_loop`.
+the upstream work when the client leaves. It does the job of Cowboy's
+`cowboy_loop`.
 
 ```erlang
 chat(Req) ->
@@ -124,7 +125,7 @@ A large upload arrives the same way, as messages on the worker's mailbox:
 ```
 
 You rarely match those yourself. The request carries a reader, and
-`livery_body` drains it for you. To buffer the whole body (with a size
+`livery_body` reads them for you. To buffer the whole body (with a size
 cap), use `read_all`:
 
 ```erlang
@@ -151,25 +152,29 @@ See [Read a streaming request body](../guides/read-streaming-body.md).
 
 ## Backpressure
 
-Backpressure is the framework refusing to buffer without bound when one
-side stalls, so a slow client cannot make the server run out of memory.
-It is handled per protocol, and you mostly feel it through return values.
+Backpressure means Livery stops buffering when one side falls behind,
+so a slow client cannot make the server run out of memory. Each protocol
+handles it its own way, and you mostly see it in return values.
 
 **Outbound.** When the client's window is full, `send_data` does not
 buffer forever:
 
 - **H1**: the kernel socket buffer fills and the write blocks.
-- **H2**: a full stream window makes `Emit` return `{error, flow}`.
+- **H2**: while the stream window is full, the data waits in the
+  stream's send buffer. When that buffer would grow past 1 MiB, `Emit`
+  returns `{error, send_buffer_full}` and the chunk is not queued.
 - **H3**: `Emit` waits while the connection's send queue is full, the
   way an H1 write blocks. If the queue has not drained after 30 seconds
   the stream is reset and `Emit` returns `{error, send_timeout}`.
 
-So the rule from the producer's side is simple: drive `Emit` and react to
-its result. `ok` means proceed, `{error, flow}` means wait a moment and
-retry, `{error, closed}` or `{error, send_timeout}` means give up.
+So for a producer the rule is: call `Emit` and act on its result. `ok`
+means proceed, `{error, send_buffer_full}` means wait a moment and
+retry the same chunk, `{error, closed}` or `{error, send_timeout}`
+means give up.
 
 **Inbound.** You do nothing: every chunk `livery_body:read/2` hands you
-gives its credit back to the wire library. The client can send one
+gives its flow-control credit back to the wire library, which lets the
+client send that many more bytes. The client can send one
 flow window ahead of what your handler has read (64 KiB on HTTP/1.1 and
 per stream on HTTP/2 by default, 512 KiB on HTTP/3), then waits. A
 handler that reads slowly holds the client back instead of letting the
@@ -179,7 +184,7 @@ response is out (on HTTP/1.1 the connection drains it, then closes).
 
 ## Failure modes
 
-- **Client disconnects mid-stream.** You learn either way: `Emit` returns
+- **Client disconnects mid-stream.** You find out one of two ways: `Emit` returns
   `{error, closed}`, or a `{livery_disconnect, _, _}` message arrives.
   Stop and release upstream resources. The worker then exits.
 - **The producer crashes.** Headers are usually already on the wire, so
@@ -187,13 +192,17 @@ response is out (on HTTP/1.1 the connection drains it, then closes).
   inside the loop (on the error and disconnect branches) rather than
   relying on a wrapper turning it into a response.
 - **The body exceeds the limit.** With `livery_body_limit` in the stack,
-  an over-limit body is rejected with `413` before your handler runs.
+  a body whose `Content-Length` is over the limit is answered `413`
+  before your handler runs; any other body gets
+  `{error, body_too_large, _}` from `livery_body:read/2` once the
+  handler has read past the limit.
 
 ## Hibernation
 
 A stream that is idle for long stretches (slow tokens, infrequent
-updates) should hibernate so it costs almost no memory while it waits.
-The worker is an ordinary BEAM process, so `erlang:hibernate/3` works:
+updates) can hibernate so it costs almost no memory while it waits. On
+OTP 28 and later, call `erlang:hibernate/0`: it returns when the next
+message arrives, and the loop goes on where it was:
 
 ```erlang
 relay(Emit, Source) ->
@@ -202,9 +211,13 @@ relay(Emit, Source) ->
             _ = Emit(#{data => format(Event)}),
             relay(Emit, Source)
     after 30_000 ->
-        erlang:hibernate(?MODULE, relay, [Emit, Source])
+        erlang:hibernate(),
+        relay(Emit, Source)
     end.
 ```
+
+Do not use `erlang:hibernate/3` here. It throws away the call stack, so
+the producer never returns to Livery and the stream is never finished.
 
 ## See also
 

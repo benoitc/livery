@@ -1,9 +1,9 @@
 # Tutorial: Test your handlers
 
-Livery handlers are pure functions over a request value, so most of
-your tests do not need a socket. In this tutorial you learn the four
-test levels and when to reach for each. It is for you once you have
-a handler or two and want to cover them well.
+A Livery handler takes a request value and returns a response value,
+so most of your tests do not need a socket. In this tutorial you learn
+the four test levels and when to use each. It is for you once you have
+a handler or two and want to test them properly.
 
 ## Level 1: handler in isolation
 
@@ -22,14 +22,14 @@ greet_uses_binding_test() ->
     ?assertEqual(<<"hello, alice">>, iolist_to_binary(Body)).
 ```
 
-No adapter, no middleware. The cheapest level. Use it for branching
-logic inside a single handler.
+No adapter, no middleware. The simplest and fastest level. Use it for
+the different paths through a single handler.
 
 ## Level 2: handler plus middleware via run/3
 
 `livery_test_adapter:run/3` drives a request through a middleware
-stack and a handler, captures the emitted response, and returns
-typed accessors.
+stack and a handler, records the response it sends, and gives you
+functions to read it.
 
 ```erlang
 auth_required_test() ->
@@ -42,9 +42,10 @@ auth_required_test() ->
     ?assertEqual(<<"missing token">>, livery_test_adapter:body(Cap)).
 ```
 
-`run/3` runs synchronously in the test process. Use it for
-middleware ordering, short-circuit behavior, and assertions on
-emitted headers/body/trailers.
+`run/3` runs in the test process and returns when the response is
+complete. Use it to check the order of your middleware, a middleware
+that answers without calling the handler, and the headers, body and
+trailers that were sent.
 
 The request spec map accepts any field of `#livery_req{}`:
 `method`, `path`, `raw_query`, `headers`, `bindings`, `body`,
@@ -52,8 +53,8 @@ The request spec map accepts any field of `#livery_req{}`:
 
 ## Level 3: through the per-request process
 
-Sometimes you want the request to run in its own process, to verify
-crash-to-500 mapping, or to read body messages from the adapter's
+Sometimes you want the request to run in its own process, to check
+that a crash becomes a 500, or to read body messages from the adapter's
 mailbox. Use `livery_req_proc:start_link/1`.
 
 ```erlang
@@ -82,24 +83,24 @@ wait_for_exit(Pid) ->
 ```
 
 `livery_req_proc:start_link/1` spawns the same worker process the
-H1/H2/H3 adapters use. Crashes inside the handler are mapped to a
-500 response and the process exits normally.
+H1/H2/H3 adapters use. A crash inside the handler becomes a 500
+response, and the process exits normally.
 
 ## Level 4: the parity SUITE
 
-`test/livery_parity_SUITE.erl` runs a shared handler matrix
-through `livery_test_adapter`, `livery_h1`, `livery_h2`, and
-`livery_h3`, diffing the externally observable behaviour. Add your
-service's cross-protocol invariants there if they belong in the
-framework's regression suite.
+`test/livery_parity_SUITE.erl` runs one set of handlers through
+`livery_test_adapter`, `livery_h1`, `livery_h2`, and `livery_h3`, and
+compares what a client sees from each. If your service relies on a
+behaviour that must be the same on every protocol, and it belongs in
+the framework's own regression tests, add it there.
 
 ## Picking a level
 
 | Goal | Level |
 |---|---|
 | Inside a single handler | 1: call the function |
-| Middleware composition or short-circuit | 2: `run/3` |
-| Crash semantics, body-message routing, multi-request | 3: `req_proc` |
+| Middleware order, or a middleware that answers early | 2: `run/3` |
+| What a crash does, body messages, several requests | 3: `req_proc` |
 | Cross-adapter behaviour | 4: parity SUITE |
 
 In practice 90 % of tests are level 1 or level 2.

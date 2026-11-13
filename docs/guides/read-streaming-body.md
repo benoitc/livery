@@ -1,12 +1,12 @@
 # How to read a streaming request body
 
-`livery_body` lets a handler consume the request body chunk by chunk.
-You need it when the body is too large to buffer, or when you want to
-process bytes as they arrive.
+`livery_body` lets a handler read the request body one chunk at a
+time. You need it when the body is too large to keep in memory, or when
+you want to work on the bytes as they arrive.
 
 ## Drain the stream
 
-When `livery_req:body/1` returns `{stream, Reader}`, drain it via
+When `livery_req:body/1` returns `{stream, Reader}`, read it with
 `livery_body:read/2` or `livery_body:read_all/2`:
 
 ```erlang
@@ -39,8 +39,8 @@ end.
 
 ## Discard the rest
 
-If the handler decides to short-circuit (auth failure, validation),
-drop the remaining body so the adapter does not stall:
+If the handler answers early (a failed auth check, invalid input),
+throw away the rest of the body so the adapter does not get stuck:
 
 ```erlang
 {ok, _R1} = livery_body:discard(R0, 1_000),
@@ -49,8 +49,10 @@ livery_resp:text(401, <<"nope">>).
 
 ## Cap the size
 
-Combine with `livery_body_limit` (buffered only today) or call
-`livery_body:read/2` with a maximum byte count tracked yourself.
+Put `livery_body_limit` in the stack: once the handler has read more
+than its `max`, `livery_body:read/2` returns
+`{error, body_too_large, _}`. You can also count the bytes yourself as
+you call `livery_body:read/2`.
 
 ## Backpressure
 

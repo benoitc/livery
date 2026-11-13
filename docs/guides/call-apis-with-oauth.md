@@ -2,8 +2,8 @@
 
 `livery_client:oauth/1` is a client layer that gets an access token from
 your authorization server and adds it to every outbound request. You
-need it when your service calls another API as itself (no user
-involved), the OAuth client credentials grant: service-to-service calls,
+need it when your service calls another API as itself, with no user
+involved (the OAuth client credentials grant): calls between services,
 batch jobs, webhooks to a partner.
 
 ## Add the layer
@@ -41,8 +41,9 @@ revoked), the layer gets a new one and sends the request once more.
 
 ## Authenticate without a shared secret
 
-A signed assertion keeps the secret off the wire (RFC 7523). Register
-the public key with your authorization server and keep the private key:
+With a signed assertion (RFC 7523), no secret is sent to the
+authorization server. Register the public key with your authorization
+server and keep the private key:
 
 ```erlang
 {ok, Pem} = file:read_file("client-key.pem"),

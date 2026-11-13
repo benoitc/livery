@@ -7,8 +7,8 @@ from the URL query string.
 
 ## Read a query parameter
 
-`livery_ext:query/2` pulls a single decoded parameter from the request
-URI:
+`livery_ext:query/2` returns one parameter from the request URI, already
+decoded:
 
 ```erlang
 search(Req) ->
@@ -18,9 +18,10 @@ search(Req) ->
 
 ## Read a form body (urlencoded)
 
-If the body is already buffered, `livery_ext:form/1` decodes it
-directly. Since adapters stream bodies by default, use `read_form/1,2`,
-which drains the stream (bounded) and decodes:
+If the body is already in memory (buffered), `livery_ext:form/1`
+decodes it. The adapters stream bodies by default, though, so you
+usually call `read_form/1,2`: it reads the whole stream, up to a size
+limit, then decodes it:
 
 ```erlang
 submit(Req) ->
@@ -35,16 +36,16 @@ submit(Req) ->
     end.
 ```
 
-Cap the body with `#{max_size => Bytes}` (default 1 MiB) and the
-per-read wait with `#{timeout => Ms}`.
+Set the size limit with `#{max_size => Bytes}` (default 1 MiB), and how
+long each read may wait with `#{timeout => Ms}`.
 
 ## Notes
 
-- The `Content-Type` check is case-insensitive and tolerates
-  parameters (`Application/X-WWW-Form-Urlencoded; charset=utf-8`).
+- The `Content-Type` check ignores case and accepts parameters
+  (`Application/X-WWW-Form-Urlencoded; charset=utf-8`).
 - Decoding handles `%XX` escapes and `+` as space. A malformed escape
-  (`%ZZ`) is kept verbatim rather than failing the whole body,
-  matching `form/1`.
+  (`%ZZ`) is kept as it is instead of failing the whole body, as
+  `form/1` does.
 
 ## See also
 

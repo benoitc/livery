@@ -2,8 +2,8 @@
 
 `livery_body_limit` is a middleware that rejects oversized request
 bodies with a `413` before they reach the handler. You need it when a
-client could send a body larger than your handler is prepared to
-buffer.
+client could send a body larger than your handler is ready to
+hold in memory.
 
 ## Add it to the stack
 
@@ -31,15 +31,16 @@ A handler that never reads the body is not affected.
 
 ## Set different limits per route
 
-Mount the middleware separately per route group when limits differ:
+When limits differ, mount the middleware separately for each group of
+routes:
 
 ```erlang
 UploadStack  = [{livery_body_limit, #{max => 50_000_000}} | Common],
 JsonApiStack = [{livery_body_limit, #{max => 65_536}}      | Common].
 ```
 
-Each router group runs its own stack. Route-level mounting lives in
-`livery_service` and `livery_router`.
+Each group of routes runs its own stack. You attach a stack to routes
+with `livery_service` and `livery_router`.
 
 ## See also
 

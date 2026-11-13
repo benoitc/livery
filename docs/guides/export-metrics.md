@@ -24,8 +24,8 @@ format with `Content-Type: text/plain; version=0.0.4; charset=utf-8`.
 `livery_instrument_metrics` records the OpenTelemetry HTTP server
 metrics:
 
-- `http.server.active_requests` (gauge): concurrent in-flight
-  requests, exported as `http_server_active_requests`.
+- `http.server.active_requests` (gauge): requests in progress,
+  exported as `http_server_active_requests`.
 - `http.server.request.duration` (histogram, seconds): request
   latency, exported as `http_server_request_duration` with
   `_bucket`/`_sum`/`_count` series.
@@ -36,8 +36,8 @@ The request attributes become labels:
 http_server_request_duration_count{http_request_method="GET",http_response_status_code="200",network_protocol_name="http/1.1",url_scheme="http"} 1
 ```
 
-Any other metric your app registers via the `instrument` library is
-exported too. `livery_metrics:handler()` renders the whole
+Any other metric your app registers through the `instrument` library
+is exported too. `livery_metrics:handler()` renders the whole
 `instrument` registry.
 
 ## Notes

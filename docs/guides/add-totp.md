@@ -45,10 +45,10 @@ check(User, Code) ->
     end.
 ```
 
-A code is accepted for its own 30 seconds and one step either side, for
-phones whose clock drifts. `last_step` makes each code good once: a code
-someone saw over the user's shoulder is useless after the user signed in
-with it.
+A code is accepted during its own 30 seconds and during one step before
+and after, for phones whose clock drifts. `last_step` makes each code
+work only once: a code someone saw over the user's shoulder is useless
+once the user has signed in with it.
 
 ## Limit the attempts
 
@@ -76,7 +76,7 @@ guessed. Rate limit the route per user:
   lock them out; Livery leaves that to your application.
 - One-time codes stop a stolen password, not phishing: a fake sign-in
   page can ask for the code and use it within its 30 seconds. Passkeys
-  (WebAuthn) resist that; Livery does not provide them yet.
+  (WebAuthn) resist that; see [Sign in with passkeys](sign-in-with-passkeys.md).
 
 ## See also
 

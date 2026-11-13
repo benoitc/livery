@@ -12,15 +12,16 @@ ContentType = livery_req:header(<<"content-type">>, Req),
 Accept = livery_req:header(<<"accept">>, Req, <<"*/*">>).
 ```
 
-Header names are matched case-insensitively. Both
-`<<"Content-Type">>` and `<<"content-type">>` work; Livery lowercases
-on ingest so lookups are constant-time after that.
+Header names are matched without regard to case. Both
+`<<"Content-Type">>` and `<<"content-type">>` work: Livery lowercases
+names when the request comes in, so a lookup only lowercases the name
+you pass and compares it as is.
 
 ## Read repeated headers
 
-`livery_req:headers_all/2` returns every value for the header in wire
-order. Useful for `Set-Cookie`, `Vary`, and comma-separated lists like
-`Accept-Encoding`:
+`livery_req:headers_all/2` returns every value for the header, in the
+order they arrived. Use it for `Set-Cookie`, `Vary`, and
+comma-separated lists like `Accept-Encoding`:
 
 ```erlang
 Accepts = livery_req:headers_all(<<"accept">>, Req).
@@ -35,7 +36,7 @@ livery_req:has_header(<<"x-trace">>, Req)
 
 ## Read from a middleware
 
-Headers can also be inspected through extractors:
+You can also read headers with the extractors:
 
 ```erlang
 case livery_ext:header(<<"x-feature-flag">>, Req) of

@@ -3,7 +3,7 @@
 In this tutorial you build a middleware stack that adds a request
 id, logs every request, caps the body size, and catches handler
 crashes. It is for you once you can write a handler and want to see
-how cross-cutting work wraps around it. About 10 minutes.
+how work shared by many routes wraps around it. About 10 minutes.
 
 ## 1. Start from a handler that crashes
 
@@ -35,7 +35,7 @@ Cap = livery_test_adapter:run([Wrap], fun crashy:go/1, #{}),
 ?assertEqual(500, livery_test_adapter:status(Cap)).
 ```
 
-`livery_middleware:wrap/1` is sugar for `try Next(Req) catch ...
+`livery_middleware:wrap/1` is a shorthand for `try Next(Req) catch ...
 end`. It belongs near the top of the stack.
 
 ## 3. Stack: outside-in
@@ -60,7 +60,7 @@ Stack = [
 
 ## 4. Verify ordering with metadata
 
-Want proof that middleware sees the request before the handler?
+To check that middleware sees the request before the handler:
 
 ```erlang
 Stack = [
@@ -74,13 +74,14 @@ Cap = livery_test_adapter:run(Stack, Handler, #{}),
 ?assertEqual(<<"yes">>, livery_test_adapter:body(Cap)).
 ```
 
-`livery_middleware:before/1` lifts a request transformer. There is
-also `after_response/1` for response transformers.
+`livery_middleware:before/1` turns a function that changes the request
+into a stack entry. `after_response/1` does the same for a function
+that changes the response.
 
 ## 5. Short-circuit
 
 A middleware that returns a response without calling `Next` skips
-the rest of the pipeline including the handler.
+the rest of the pipeline, including the handler.
 
 ```erlang
 NotFound = fun(_Req, _Next) -> livery_resp:text(404, <<>>) end,

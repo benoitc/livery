@@ -1,10 +1,10 @@
 # Livery Documentation
 
-Livery is a modern Erlang web framework that serves one handler set
-over HTTP/1.1, HTTP/2, and HTTP/3 from a single service runtime. The
-wire layer (h1, h2, quic, ws) lives in sibling libraries; Livery
-owns the developer surface: router, middleware, handlers, extractors,
-observability.
+Livery is an Erlang web framework that serves one set of handlers
+over HTTP/1.1, HTTP/2, and HTTP/3 from a single service. The
+protocols themselves (h1, h2, quic, ws) live in separate libraries;
+Livery is the part you write code against: router, middleware,
+handlers, extractors, observability.
 
 These docs follow the [Diátaxis](https://diataxis.fr/) split:
 **tutorials** teach, **how-to guides** solve a specific task,
@@ -15,7 +15,7 @@ exact API.
 
 | If you ... | Read |
 |---|---|
-| Need a one-paragraph pitch | [Overview](overview.md) |
+| Want a one-paragraph summary | [Overview](overview.md) |
 | Want a hello-world service in 5 minutes | [Quickstart](quickstart.md) |
 | Want to learn Livery from scratch | [Tutorials](#tutorials) |
 | Have a specific task in mind | [How-to guides](#how-to-guides) |
@@ -24,7 +24,7 @@ exact API.
 
 ## Tutorials
 
-Step-by-step, learning-oriented.
+Step by step, to learn Livery.
 
 - [Your first service](tutorials/your-first-service.md)
 - [Compose a middleware stack](tutorials/middleware-stack.md)
@@ -35,8 +35,7 @@ Step-by-step, learning-oriented.
 
 ## How-to guides
 
-Task-oriented recipes. Each guide is a specific problem and its
-solution.
+Recipes. Each guide takes one task and shows how to do it.
 
 **Reading requests**
 - [Parse a JSON body](guides/parse-json-bodies.md)
@@ -84,8 +83,8 @@ solution.
 
 ## Concepts
 
-Explanation-oriented. Read these to understand why Livery is shaped
-the way it is.
+Explanations. Read these to understand why Livery works the way it
+does.
 
 - [Architecture](concepts/architecture.md)
 - [Request and response model](concepts/request-and-response.md)
@@ -99,9 +98,9 @@ For the long-form architecture write-up, see [design.md](design.md).
 
 ## Reference
 
-Information-oriented. The exact API for each module is generated
-from source by [ex_doc](https://hexdocs.pm/ex_doc); browse the
-sidebar's "Modules" section, grouped as:
+For looking things up. [ex_doc](https://hexdocs.pm/ex_doc) generates
+the exact API of each module from the source; browse the "Modules"
+section of the sidebar, grouped as:
 
 - **Public API:** `livery`
 - **Request and response:** `livery_req`, `livery_resp`, `livery_ext`
@@ -116,7 +115,7 @@ sidebar's "Modules" section, grouped as:
 Companion libraries built on Livery, each in its own repo:
 
 - [livery_grpc](https://github.com/benoitc/livery_grpc): gRPC server and
-  client on Livery's HTTP/2 stack. All four call types, deadlines, gRPC-Web,
+  client on top of Livery's HTTP/2 support. All four call types, deadlines, gRPC-Web,
   server reflection, and the standard health service.
 - [livery_s3](https://github.com/benoitc/livery_s3): S3-compatible object
   storage client on the Livery HTTP client. AWS SigV4 signing, multipart
@@ -127,7 +126,7 @@ Companion libraries built on Livery, each in its own repo:
 
 ## Project state
 
-The developer surface, the H1/H2/H3 wire adapters, and
-`livery:start_service/1` are all in place and exercised end-to-end
-(the parity SUITE diffs the shared handler set across every adapter).
+The API, the H1, H2 and H3 adapters, and `livery:start_service/1`
+are all in place and tested end to end (the parity suite runs the same
+handlers through every adapter and compares what comes back).
 See [design.md](design.md) for the long-form architecture.

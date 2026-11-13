@@ -1,9 +1,9 @@
 # How to mount a router on a service
 
-A router dispatches requests by method and path, binds path parameters
-for you, and handles 404/405 automatically. You need it once your service
-has grown past a single endpoint and you would rather declare routes than
-grow one giant handler with a `case` on the path.
+A router sends each request to a handler by method and path, extracts
+path parameters for you, and answers 404 and 405 on its own. You need it
+once your service has more than one endpoint and you would rather list
+routes than grow one large handler with a `case` on the path.
 
 ## Compile and mount a router
 
@@ -35,8 +35,9 @@ show(Req) ->
 ```
 
 `start_service/1` takes **exactly one** of `router` or `handler`. Use
-`handler` for a single catch-all; use `router` for dispatch. The
-service-level `middleware` stack wraps every route.
+`handler` for one handler that takes every request; use `router` to pick
+a handler per route. The service-level `middleware` stack wraps every
+route.
 
 ## What you get for free
 
@@ -58,15 +59,16 @@ Router = livery_router:compile([
 ]).
 ```
 
-`/private` runs `Auth` before its handler; `/public` does not. Nesting is
-service stack (outermost) -> route match -> route stack -> handler.
+`/private` runs `Auth` before its handler; `/public` does not. The order
+is: service stack (outermost), then route matching, then the route
+stack, then the handler.
 
 ## Compose routers
 
-Once a piece of your app is self-contained, it is nicer to keep its
-routes together and stitch them in, rather than copy them into one big
-list. Three functions let you do that, and they all return a router you
-can keep composing.
+Once a part of your app stands on its own, it is easier to keep its
+routes together and add them as a block than to copy them into one big
+list. Three functions do this, and each returns a router you can combine
+again.
 
 `merge/2` puts two routers side by side. The later one wins if they
 register the same method and path:
@@ -84,15 +86,16 @@ Router = livery_router:nest(<<"/ai">>, livery_mcp:router(), App).
 ```
 
 `layer/2` wraps a whole router in a middleware stack, which is the easy
-way to put one rule, say auth, over an entire mounted subtree:
+way to apply one rule, say auth, to every route under a prefix:
 
 ```erlang
 Admin = livery_router:compile([{<<"GET">>, <<"/admin/stats">>, {my_app, stats}}]),
 Guarded = livery_router:nest(<<"/v1">>, livery_router:layer([Auth], Admin), App).
 ```
 
-Need the flat list back, perhaps to feed `livery_openapi:build/1`?
-`livery_router:routes/1` reconstructs it from any router, composed or not.
+Need the flat list back, for example to pass it to
+`livery_openapi:build/1`? `livery_router:routes/1` rebuilds it from any
+router, combined or not.
 
 ## Customise 404 / 405
 
@@ -110,7 +113,7 @@ livery:start_service(#{http => #{port => 8080}, handler => H}).
 ## Use a router without the service
 
 `livery:router_handler/1` returns a plain handler fun, so you can also
-use it with a single listener or drive it directly in tests:
+use it with a single listener or call it directly in tests:
 
 ```erlang
 H = livery:router_handler(Router),

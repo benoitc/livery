@@ -1,18 +1,18 @@
 # How to serve WebTransport
 
-`livery_wt:upgrade/3` accepts a WebTransport session (bidi/uni
-streams and datagrams) on an extended-CONNECT request and hands the
-stream to the `webtransport` library. You need it when a client
-wants a low-latency bidirectional channel over HTTP/3 (or HTTP/2),
-driven by a handler you implement (`webtransport_handler`
+`livery_wt:upgrade/3` accepts a WebTransport session (bidirectional
+and unidirectional streams, and datagrams) on an extended CONNECT
+request and hands the stream to the `webtransport` library. You need
+it when a client wants a low-latency channel in both directions over
+HTTP/3 (or HTTP/2), run by a handler you write (`webtransport_handler`
 behaviour).
 
 ## Advertise the settings and upgrade
 
-The listener must advertise the WebTransport settings. Merge
-`webtransport:h3_settings/0` (H3) or `webtransport:h2_settings/0`
-(H2) into the listener options; the adapter forwards the SETTINGS,
-datagram support, and stream routing to the wire library:
+The listener must announce the WebTransport settings to clients.
+Merge `webtransport:h3_settings/0` (H3) or `webtransport:h2_settings/0`
+(H2) into the listener options; the adapter passes the SETTINGS,
+datagram support and stream routing on to the wire library:
 
 ```erlang
 Handler = fun(Req) -> livery_wt:upgrade(Req, my_wt_handler, #{}) end,
@@ -22,7 +22,8 @@ Opts = maps:merge(webtransport:h3_settings(), #{
 {ok, _} = livery_h3:start(Opts).
 ```
 
-WebTransport runs over H3 and H2 (RFC 9220 extended CONNECT). On
+WebTransport runs over H3 and H2 (extended CONNECT: RFC 9220 on H3,
+RFC 8441 on H2). On
 H1, `upgrade/3` returns `501`.
 
 ## Implement the session handler
@@ -50,7 +51,7 @@ handle_datagram(Data, State) ->
 
 - On success `upgrade/3` returns the `taken_over` sentinel; the
   session belongs to the `webtransport` process after that, so do
-  not stack response-mutating middleware after it.
+  not stack middleware that changes the response after it.
 - Livery uses `webtransport` 0.5, which speaks draft-17 over H3
   and draft-16 over H2. Chrome and Firefox (draft-02) and Safari 26
   (draft-07) still connect over H3.
@@ -59,8 +60,8 @@ handle_datagram(Data, State) ->
   listener (it is, unless you narrow `versions` in `ssl_opts`).
 - If opening a stream fails because the peer allows no more, your
   handler's `handle_stream_credit/2` is called once it can try again.
-- See `livery_wt_SUITE` for an end-to-end bidi-stream and datagram
-  echo over H3.
+- See `livery_wt_SUITE` for a full echo example over H3, with a
+  bidirectional stream and datagrams.
 
 ## See also
 

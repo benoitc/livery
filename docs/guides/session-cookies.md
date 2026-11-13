@@ -4,7 +4,7 @@
 stores it in a cookie. You need it when you want to keep a small
 amount of per-user state (a user id, a role) across requests
 without a server-side session store. The payload travels with the
-client; the signature stops it being tampered with.
+client; the signature stops anyone from changing it.
 
 ## Add it to the stack
 
@@ -33,12 +33,13 @@ end.
 
 A missing cookie is allowed through by default. Set
 `required => true` to reject anonymous requests with `401`. A
-present but tampered or expired cookie is always rejected.
+cookie that is present but was tampered with or has expired is always
+rejected.
 
 ## Log in: set the cookie
 
-Sign a payload (optionally with `max_age` seconds for expiry) and
-attach the `Set-Cookie` header to your response:
+Sign a payload (add `max_age`, in seconds, if it should expire) and
+add the `Set-Cookie` header to your response:
 
 ```erlang
 login(_Req) ->
@@ -50,7 +51,7 @@ login(_Req) ->
 ```
 
 `set_cookie_header/2` defaults to `Path=/; SameSite=Lax; Secure;
-HttpOnly`. Override with `path`, `domain`, `secure`, `http_only`,
+HttpOnly`. Change them with `path`, `domain`, `secure`, `http_only`,
 and `same_site`.
 
 ## Log out: clear the cookie
@@ -66,8 +67,10 @@ logout(_Req) ->
 
 - Use a long, random `secret` and keep it out of source control.
 - The payload is signed, not encrypted: do not store secrets in it.
-- Rotate the secret by accepting both old and new during a window
-  (verify against each), then drop the old one.
+- The middleware checks a single `secret`. To rotate it, accept both
+  the old and the new one for a while in your own middleware, in place
+  of `livery_auth_session`, calling `livery_auth_session:verify/2` with
+  each, then drop the old one.
 
 ## See also
 

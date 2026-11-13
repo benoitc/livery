@@ -1,14 +1,14 @@
 # Ecosystem
 
 Companion libraries built on Livery. Each is a separate hex/git project
-with its own docs and release cycle; reach for one when you need that
-integration without leaving the Livery stack. They reuse Livery's own
-HTTP client and HTTP/2 engine, so retries, circuit breakers, middleware,
-and streaming work the same way you already know.
+with its own docs and releases; use one when you need that service and
+want to stay with Livery. They use Livery's own HTTP client and HTTP/2
+support, so retries, circuit breakers, middleware, and streaming work
+the way you already know.
 
 ## livery_grpc
 
-gRPC server and client on Livery's HTTP/2 stack. You write plain Erlang;
+gRPC server and client on top of Livery's HTTP/2 support. You write plain Erlang;
 the wire format is generated from your `.proto` files. All four call types
 (unary, server-streaming, client-streaming, bidirectional), deadlines,
 gRPC-Web, server reflection, and the standard health service.

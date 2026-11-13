@@ -18,7 +18,7 @@ search(Req) ->
 
 ## Apply a default value
 
-Wrap with a fallback:
+Match on `undefined` to fall back to a default:
 
 ```erlang
 Page = case livery_ext:query(<<"page">>, Req) of
@@ -29,8 +29,8 @@ end.
 
 ## Convert to an integer
 
-`livery_ext:query/2` always returns a binary. Convert at the call
-site:
+`livery_ext:query/2` always returns a binary. Convert it where you use
+it:
 
 ```erlang
 PageInt = try binary_to_integer(Page) catch _:_ -> 1 end.

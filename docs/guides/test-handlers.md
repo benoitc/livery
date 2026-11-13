@@ -1,9 +1,9 @@
 # How to test handlers without a socket
 
-`livery_test_adapter:run/3` runs a synthetic request through a
-stack and handler and captures the emitted response. You need it
-when you want fast unit tests for a handler or a stack, without
-binding ports, without HTTP clients, without docker.
+`livery_test_adapter:run/3` runs a request you describe in a map
+through a stack and a handler, and records the response they send.
+You need it when you want fast unit tests for a handler or a stack,
+without opening ports, without HTTP clients, without docker.
 
 ## Run a request through a handler
 
@@ -50,9 +50,10 @@ over `h1`.
 
 ## Spawn a worker when run/3 is not enough
 
-Spawn through `livery_req_proc` if you need the per-request worker
-semantics: 500-on-crash, body-message routing via mailbox,
-multi-request concurrency.
+Start a worker with `livery_req_proc` when you need what the real
+per-request worker does: a 500 when the handler crashes, body chunks
+delivered as messages to its mailbox, several requests running at
+once.
 
 ```erlang
 {ok, Pid} = livery_req_proc:start_link(#{
@@ -71,8 +72,8 @@ four test levels and when to use each.
 
 ## Drive body messages
 
-Streaming handlers `receive` body chunks. Feed them through the
-test adapter helper:
+A streaming handler receives its body chunks as messages. Send them
+with the test adapter's helper:
 
 ```erlang
 Stream = livery_test_adapter:new_stream(Tab),

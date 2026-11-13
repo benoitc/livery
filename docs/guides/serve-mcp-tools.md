@@ -1,16 +1,16 @@
 # How to serve MCP tools
 
-`livery_mcp:handler/1` exposes tools, resources, and prompts to MCP
-clients (Claude, IDEs, agents) over the MCP Streamable HTTP
-transport. You need it when you want those clients to reach your
+`livery_mcp:handler/1` gives MCP (Model Context Protocol) clients
+(Claude, IDEs, agents) access to your tools, resources and prompts over
+MCP's Streamable HTTP transport. You need it when you want those clients to reach your
 tools alongside your other routes, on the same Livery service.
 
 ## Mount the handler
 
-The handler bridges Livery to the `barrel_mcp` protocol engine.
-Livery owns the wire (H1/H2/H3, router, middleware); the engine
-handles the MCP protocol (POST requests, GET SSE streams, DELETE
-session termination). Mount it at `/mcp`:
+The handler connects Livery to `barrel_mcp`, the library that
+implements MCP. Livery handles HTTP (H1/H2/H3, router, middleware);
+`barrel_mcp` handles the MCP protocol (POST requests, GET SSE streams,
+DELETE to end a session). Mount it at `/mcp`:
 
 ```erlang
 Mcp = livery_mcp:handler(#{session_enabled => true}),
@@ -70,15 +70,17 @@ release boots:
 | `allow_missing_origin` | `true` | Accept requests with no `Origin` |
 | `resource_metadata` | none | OAuth protected-resource-metadata |
 | `sse_keepalive_ms` | `15000` | How often a quiet SSE stream emits a comment |
-| `max_body_bytes` | 16 MiB | Request body cap, answered `413` past it |
-| `body_timeout_ms` | `60000` | Wait for each body chunk, answered `408` past it |
+| `max_body_bytes` | 16 MiB | Largest request body; `413` past it |
+| `body_timeout_ms` | `60000` | Longest wait for one body chunk; `408` past it |
 
-The keepalive also falls back to the `barrel_mcp` `sse_keepalive_ms`
-application env. Besides keeping proxies from dropping a stream, it is
-what notices a client that went away without closing.
+When `sse_keepalive_ms` is not set here, the keepalive uses the
+`barrel_mcp` `sse_keepalive_ms` application env. Besides keeping
+proxies from dropping a stream, it is how the server notices a client
+that went away without closing.
 
-For public deployments, set `allowed_origins` to your client
-origins to guard against DNS-rebinding.
+On a public server, set `allowed_origins` to the origins of your
+clients, so a hostile web page cannot reach the server through DNS
+rebinding (a domain that resolves to your server's address).
 
 ## Require a bearer token
 
@@ -104,11 +106,11 @@ a `secret`. `audience => any` skips the `aud` check, so since
 `barrel_mcp` 4.0 it is only accepted together with a `verifier` that
 checks the recipient itself.
 
-The provider is initialised once, when you call `handler/1`. If it
-refuses its options, `handler/1` raises
-`{auth_provider, Module, Reason}` (for example
-`audience_any_requires_verifier` or `{missing_option, audience}`), so
-a bad config stops your service at boot and not on the first request.
+The provider is set up once, when you call `handler/1`. If it refuses
+its options, `handler/1` raises `{auth_provider, Module, Reason}` (for
+example `audience_any_requires_verifier` or
+`{missing_option, audience}`), so a bad configuration stops your
+service at boot and not on the first request.
 
 ## Tell clients how to use your server
 
@@ -122,8 +124,8 @@ model:
 
 ## Decide what each caller sees
 
-Your auth provider can filter list responses and subscriptions per
-caller. Export these optional `barrel_mcp_auth` callbacks from your
+Your auth provider can choose, for each caller, what appears in list
+responses and which subscriptions are allowed. Export these optional `barrel_mcp_auth` callbacks from your
 provider module (or the module behind `barrel_mcp_auth_custom`):
 
 ```erlang
@@ -138,15 +140,16 @@ authorize_subscribe(AuthInfo, Uri, _State) ->
     is_owner(AuthInfo, Uri).
 ```
 
-A hidden entry is left out of the list only: calls and reads are still
-checked by your handlers. A refused subscription gets the same error
+Hiding an entry only leaves it out of the list: your handlers still
+have to check calls and reads. A refused subscription gets the same error
 as a missing resource.
 
 ## Keep long tasks across restarts
 
-Tasks live in ETS by default and a restart marks running ones failed.
-To keep them, point `barrel_mcp` at a durable store, or let your
-application own the task and register it as a provider:
+Tasks are kept in ETS by default, and a restart marks the running ones
+as failed. To keep them, point `barrel_mcp` at a store that survives a
+restart, or let your application own the task and register it as a
+provider:
 
 ```erlang
 {barrel_mcp, [{task_store, my_task_store}, {task_store_opts, #{}}]}
@@ -176,15 +179,17 @@ See the `barrel_mcp` durable tasks guide for the
 
 ## Notes
 
-- The handler writes the response straight to the wire and returns
-  the `taken_over` sentinel, so do not stack response-mutating
-  middleware after it.
-- Past one node, or if a restart must not interrupt a multi round-trip
-  call, set `request_state_key` (32+ random bytes) in the `barrel_mcp`
-  application environment. Without it a fresh key is generated at each
-  boot and `barrel_mcp` logs a warning at start.
+- The handler writes the response straight to the connection and
+  returns the `taken_over` sentinel, so do not stack middleware that
+  changes the response after it.
+- When you run more than one node, or when a restart must not break a
+  call that takes several round trips, set `request_state_key` (32 or
+  more random bytes) in the `barrel_mcp` application environment.
+  Without it a new key is generated at each boot and `barrel_mcp` logs
+  a warning at start.
 - The same handler serves all three protocols; mount it once on a
-  multi-protocol service and MCP rides H2/H3 automatically.
+  service that runs several protocols and MCP works over H2 and H3
+  too.
 
 ## See also
 

@@ -8,7 +8,7 @@ Livery that knows there is a socket. Everything above it (the router, the
 middleware, your handlers) works in terms of request and response values,
 and the adapter turns those into the bytes a particular protocol expects.
 
-Because the adapter owns so little, the same handler runs unchanged over
+Because the adapter does so little, the same handler runs unchanged over
 HTTP/1.1, HTTP/2, and HTTP/3, and over an in-memory test harness with no
 socket at all.
 
@@ -17,10 +17,10 @@ socket at all.
 Almost never: the four shipped adapters cover HTTP/1.1, HTTP/2, HTTP/3,
 and in-memory testing. **You write an adapter when** you want Livery's
 handler model over a transport it does not speak yet, for example a
-different HTTP implementation, an RPC over a message bus, or a bespoke
-test harness. If you find yourself reaching for one to add buffering,
-routing, or protocol logic, that work belongs upstream in the wire
-library or downstream in a middleware instead.
+different HTTP implementation, an RPC over a message bus, or a test
+harness of your own. If you want one to add buffering, routing, or
+protocol logic, that work belongs in the wire library below it or in a
+middleware above it instead.
 
 ## The behaviour
 
@@ -46,7 +46,7 @@ An adapter implements the `livery_adapter` behaviour:
 
 `SendOpts` is `#{end_stream => boolean(), flush => boolean()}`.
 `SendResult` is `ok | {error, closed | flow | term()}`. `send_full/5`
-coalesces headers and body into one write, and `livery:emit/3` uses it
+sends headers and body in one write, and `livery:emit/3` uses it
 when present. `send_informational/3` sends a 1xx (`livery_req:inform/3`).
 `accept_ws/4` and `accept_wt/4` hand the stream to a WebSocket or
 WebTransport session (`livery_ws:upgrade/3`, `livery_wt:upgrade/3`).
@@ -77,7 +77,7 @@ that connection negotiated, and `peer_info/1`'s `alpn` is the exact
 value ALPN settled on (`undefined` when the client offered none, or when
 the listener is cleartext).
 
-Reach it with `https => #{..., alpn => [h2, http1]}` on a service, or
+Use it with `https => #{..., alpn => [h2, http1]}` on a service, or
 `livery:start_listener(livery_h1h2, Opts)` directly.
 
 ## What an adapter is not
@@ -104,7 +104,7 @@ Worker ! {livery_body, BodyRef, {data, Chunk}},
 Worker ! {livery_body, BodyRef, eof}.
 ```
 
-The worker runs the middleware and handler, then drives the response back
+The worker runs the middleware and handler, then sends the response back
 out through `livery:emit/3`, which calls your `send_headers/4`,
 `send_data/3`, and `send_trailers/2`. So the adapter is two halves: turn
 inbound wire events into the body protocol, and implement the `send_*`
@@ -119,10 +119,10 @@ trailer and reset events. The translator starts the worker, enforces
 
 `examples/livery_example_adapter.erl` is a complete, readable adapter that
 does exactly this, capturing the response in ETS instead of a socket so
-the wiring is easy to follow. Section 10 of
+you can follow how the pieces connect. Section 10 of
 [Build a complete service](../tutorials/build-a-complete-service.md) walks
-it. To grow it into a real transport, keep the callbacks, replace the ETS
-sink with socket writes, translate your wire's body events into
+through it. To grow it into a real transport, keep the callbacks, replace
+the ETS writes with socket writes, translate your wire's body events into
 `{livery_body, Ref, _}` messages, then add a group to
 `test/livery_parity_SUITE.erl` so it is held to the same behaviour as the
 others.
@@ -143,7 +143,7 @@ end.
 
 Call `capabilities/1` on the concrete adapter module the request arrived
 on (`livery_req:adapter/1`), not on `livery_adapter`. `trailers` and
-`extended_connect` are protocol-specific; `datagrams` and `capsules`
+`extended_connect` depend on the protocol; `datagrams` and `capsules`
 apply to WebTransport on H3.
 
 Some features are optional callbacks instead: `send_full/5`,
@@ -162,12 +162,13 @@ Every adapter takes the same `ip => inet:ip_address()` and
 
 ## The client adapter, its dual
 
-The same idea runs outbound. `livery_client_adapter` is the dual of this
-behaviour: it owns the wire for an outgoing request, while the client's
-layers (timeout, retry, circuit breaker) own the policy above it. The
-default `livery_client_hackney` covers HTTP/1.1, HTTP/2, and HTTP/3. When
-the target is a pool of replicas, a `balance` layer spreads requests
-across them and `livery_client_discover` resolves the endpoint set. See
+The same idea works outbound. `livery_client_adapter` is the mirror image
+of this behaviour: it does the network work for an outgoing request,
+while the client's layers (timeout, retry, circuit breaker) decide the
+policy above it. The default `livery_client_hackney` covers HTTP/1.1,
+HTTP/2, and HTTP/3. When the target is a pool of replicas, a `balance`
+layer spreads requests across them and `livery_client_discover` finds
+the set of endpoints. See
 [Make outbound HTTP requests](../guides/make-http-requests.md) and
 [Load-balance outbound requests](../guides/load-balance-requests.md).
 

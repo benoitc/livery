@@ -219,16 +219,22 @@ handler_for(peer_on_request) ->
     end;
 handler_for(slow_reader_holds_client_back) ->
     fun(R) ->
-        %% Let the client push as much as the server lets it, then count
-        %% what reached this mailbox before anything was read.
-        timer:sleep(500),
-        {messages, Msgs} = process_info(self(), messages),
-        Queued = lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]),
+        %% Count what reached this mailbox twice, without reading. Held
+        %% back by flow control, the client is stuck at its limit, so the
+        %% count stops growing, below the whole body.
+        timer:sleep(600),
+        Early = queued_body_bytes(),
+        timer:sleep(600),
+        Late = queued_body_bytes(),
         {stream, Reader} = livery_req:body(R),
         {ok, Bytes, _} = livery_body:read_all(Reader, 20000),
-        livery_resp:text(
-            200, [integer_to_binary(Queued), <<" ">>, integer_to_binary(byte_size(Bytes))]
-        )
+        livery_resp:text(200, [
+            integer_to_binary(Early),
+            <<" ">>,
+            integer_to_binary(Late),
+            <<" ">>,
+            integer_to_binary(byte_size(Bytes))
+        ])
     end;
 handler_for(cancelled_requests_leave_no_worker) ->
     fun(R) ->
@@ -362,12 +368,13 @@ slow_reader_holds_client_back(Config) ->
     end),
     {Status, _, Body, _} = collect_response(Conn, StreamId, undefined, [], [], undefined),
     ?assertEqual(200, Status),
-    [Queued, Read] = [binary_to_integer(B) || B <- binary:split(Body, <<" ">>)],
+    [Early, Late, Read] = [binary_to_integer(B) || B <- binary:split(Body, <<" ">>, [global])],
     ?assertEqual(?SLOW_BODY, Read),
-    %% The stream window (64 KiB on h2, 512 KiB on quic) bounds what the
-    %% server accepts before the handler reads; without flow control the
-    %% whole body is already queued.
-    ?assert(Queued < 1048576),
+    %% Held back, the client sends nothing more while the handler does not
+    %% read, and never the whole body. Without flow control the count is
+    %% still growing, or the whole body is already in.
+    ?assertEqual(Early, Late),
+    ?assert(Late < ?SLOW_BODY),
     h2:close(Conn).
 
 post_headers() ->
@@ -563,3 +570,8 @@ header(Name, Headers) ->
 
 normalize(Hs) ->
     [{string:lowercase(N), V} || {N, V} <- Hs].
+
+%% Body bytes already in this mailbox, not yet read.
+queued_body_bytes() ->
+    {messages, Msgs} = process_info(self(), messages),
+    lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]).

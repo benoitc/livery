@@ -498,12 +498,16 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
 ) -> ok.
 serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
     {RawPath, RawQuery} = livery_translator:split_query(Path),
-    Req = build_req(Conn, StreamId, Method, RawPath, Headers),
+    %% Register before anything else: until then quic_h3 grants the
+    %% client credit on its own, so the shorter that stretch, the tighter
+    %% the flow control. Building the request asks the connection for the
+    %% peer and TLS details, so it comes after.
     Registered = set_stream_handler(Conn, StreamId, self(), manual),
     case Registered of
         {error, _} ->
             ok;
         _ ->
+            Req = build_req(Conn, StreamId, Method, RawPath, Headers),
             livery_translator:serve(Req, Ctx#{
                 adapter => ?MODULE,
                 stream => {Conn, StreamId},

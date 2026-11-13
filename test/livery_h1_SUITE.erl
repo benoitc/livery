@@ -199,11 +199,13 @@ early_response_no_read_delivers_413(Config) ->
 slow_reader_holds_client_back(Config) ->
     Body = binary:copy(<<"x">>, 8 * 1024 * 1024),
     {ok, 200, _, Reply} = post_no_pool(Config, <<"/">>, Body),
-    [Queued, Read] = [binary_to_integer(B) || B <- binary:split(Reply, <<" ">>)],
+    [Early, Late, Read] = [binary_to_integer(B) || B <- binary:split(Reply, <<" ">>, [global])],
     ?assertEqual(byte_size(Body), Read),
-    %% h1's receive window is 64 KiB; without flow control the body is
-    %% read off the socket as fast as it comes.
-    ?assert(Queued < 1048576).
+    %% Held back, the client sends nothing more while the handler does not
+    %% read, and never the whole body. Without flow control the count is
+    %% still growing, or the whole body is already in.
+    ?assertEqual(Early, Late),
+    ?assert(Late < byte_size(Body)).
 
 error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
@@ -410,16 +412,22 @@ handler_for(peer_on_request_tls) ->
     fun(R) -> livery_resp:text(200, peer_bin(livery_req:peer(R))) end;
 handler_for(slow_reader_holds_client_back) ->
     fun(R) ->
-        %% Let the client push as much as the server lets it, then count
-        %% what reached this mailbox before anything was read.
-        timer:sleep(500),
-        {messages, Msgs} = process_info(self(), messages),
-        Queued = lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]),
+        %% Count what reached this mailbox twice, without reading. Held
+        %% back by flow control, the client is stuck at its limit, so the
+        %% count stops growing, below the whole body.
+        timer:sleep(600),
+        Early = queued_body_bytes(),
+        timer:sleep(600),
+        Late = queued_body_bytes(),
         {stream, Reader} = livery_req:body(R),
         {ok, Bytes, _} = livery_body:read_all(Reader, 20000),
-        livery_resp:text(
-            200, [integer_to_binary(Queued), <<" ">>, integer_to_binary(byte_size(Bytes))]
-        )
+        livery_resp:text(200, [
+            integer_to_binary(Early),
+            <<" ">>,
+            integer_to_binary(Late),
+            <<" ">>,
+            integer_to_binary(byte_size(Bytes))
+        ])
     end;
 handler_for(early_hints_before_response) ->
     fun(R) ->
@@ -621,3 +629,8 @@ ssl_recv_all(Sock, Acc) ->
         {ok, Data} -> ssl_recv_all(Sock, <<Acc/binary, Data/binary>>);
         {error, _} -> Acc
     end.
+
+%% Body bytes already in this mailbox, not yet read.
+queued_body_bytes() ->
+    {messages, Msgs} = process_info(self(), messages),
+    lists:sum([iolist_size(D) || {livery_body, _, {data, D}} <- Msgs]).

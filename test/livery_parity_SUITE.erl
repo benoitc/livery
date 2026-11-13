@@ -30,6 +30,7 @@
     json_response/1,
     empty_response/1,
     echo_buffered_body/1,
+    json_extractor_reads_body/1,
     timeout_reads_request_body/1,
     query_with_body/1,
     streaming_chunked_response/1,
@@ -67,6 +68,7 @@ groups() ->
         json_response,
         empty_response,
         echo_buffered_body,
+        json_extractor_reads_body,
         timeout_reads_request_body,
         query_with_body,
         streaming_chunked_response,
@@ -211,6 +213,25 @@ echo_buffered_body(Config) ->
         }
     ),
     ?assertEqual(<<"echo me">>, body(Resp)).
+
+%% livery_ext:json/1 decodes the body whatever form the adapter hands it
+%% in (a stream on H1, H2 and H3).
+json_extractor_reads_body(Config) ->
+    Handler = fun(R) ->
+        {ok, #{<<"name">> := Name}} = livery_ext:json(R),
+        livery_resp:text(200, Name)
+    end,
+    Resp = drive(
+        Config,
+        [],
+        Handler,
+        #{
+            method => <<"POST">>,
+            headers => [{<<"content-type">>, <<"application/json">>}],
+            body => {buffered, <<"{\"name\":\"saw\"}">>}
+        }
+    ),
+    ?assertEqual(<<"saw">>, body(Resp)).
 
 %% A handler behind livery_timeout runs in another process; the
 %% request body must still reach it.

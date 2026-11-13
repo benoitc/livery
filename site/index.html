@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Livery — one handler, every HTTP</title>
-  <meta name="description" content="A BEAM-native web framework that serves one handler set over HTTP/1.1, HTTP/2, and HTTP/3 from a single runtime. WebSocket, WebTransport, SSE, OpenAPI, and MCP built in.">
+  <title>Livery: one handler set, every version of HTTP</title>
+  <meta name="description" content="A web framework for Erlang/OTP that serves one set of handlers over HTTP/1.1, HTTP/2 and HTTP/3. WebSocket, WebTransport, Server-Sent Events, OpenAPI, MCP and A2A come in the same package.">
   <link rel="icon" type="image/svg+xml" href="assets/livery-mark.svg">
   <link rel="stylesheet" href="assets/styles.css">
   <meta property="og:title" content="Livery">
-  <meta property="og:description" content="One handler set over HTTP/1.1, HTTP/2, and HTTP/3 on the BEAM.">
+  <meta property="og:description" content="One set of handlers over HTTP/1.1, HTTP/2 and HTTP/3, for Erlang/OTP.">
   <meta property="og:type" content="website">
 </head>
 <body>
@@ -18,6 +18,7 @@
       Livery
     </a>
     <div class="nav-links">
+      <a href="api/what-is-livery.html">What is Livery</a>
       <a href="api/index.html">Docs</a>
       <a href="api/livery.html">API</a>
       <a href="#ecosystem">Ecosystem</a>
@@ -30,16 +31,16 @@
     <h1>Livery</h1>
     <p class="tag">One handler set. Every version of HTTP.</p>
     <p class="sub">
-      A BEAM-native web framework that serves the same router and middleware over
-      HTTP/1.1, HTTP/2, and HTTP/3 from a single runtime. Axum + Tower + Hyper
-      ergonomics, on Erlang/OTP.
+      A web framework for Erlang/OTP. You write your routes, middleware and
+      handlers once, and Livery serves them over HTTP/1.1, HTTP/2 and HTTP/3
+      at the same time. It follows the ideas of Rust's Axum, Tower and Hyper.
     </p>
     <div class="cta">
       <a class="btn btn-primary" href="api/index.html">Get started &rarr;</a>
       <a class="btn btn-ghost" href="https://github.com/benoitc/livery">View on GitHub</a>
     </div>
     <div class="install">
-      <code>{livery, {git, "https://github.com/benoitc/livery.git", {branch, "main"}}}</code>
+      <code>{deps, [livery]}.</code>
     </div>
     <div class="protocols">
       <span class="pill"><b>HTTP/1.1</b></span>
@@ -49,15 +50,17 @@
       <span class="pill">WebTransport</span>
       <span class="pill">SSE</span>
       <span class="pill">MCP</span>
+      <span class="pill">A2A</span>
     </div>
   </header>
 
   <section id="example">
     <div class="wrap">
-      <h2 class="section-title">Race three protocols on one host</h2>
+      <h2 class="section-title">Three protocols on one host</h2>
       <p class="section-sub">
-        One <code>start_service/1</code> call brings up H3 on UDP, H2 on TLS, and
-        H1 on TCP, sharing the router and middleware, with Alt-Svc upgrade.
+        One <code>start_service/1</code> call starts HTTP/3 on UDP, HTTP/2 on TLS and
+        HTTP/1.1 on TCP, all with the same router and middleware. An
+        <code>Alt-Svc</code> header tells clients HTTP/3 is there, so they can switch to it.
       </p>
       <div class="code-card">
         <div class="code-head"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
@@ -70,7 +73,7 @@ Router = livery_router:<span class="a">compile</span>([
 ]),
 
 livery:<span class="a">start_service</span>(#{
-    http  =&gt; #{port =&gt; 80, redirect =&gt; https},
+    http  =&gt; #{port =&gt; 80},
     https =&gt; #{port =&gt; 443, cert =&gt; Cert, key =&gt; Key, alpn =&gt; [h2, http1]},
     http3 =&gt; #{port =&gt; 443, cert =&gt; Cert, key =&gt; Key},
     router =&gt; Router,
@@ -83,38 +86,38 @@ livery:<span class="a">start_service</span>(#{
 
   <section id="features">
     <div class="wrap">
-      <h2 class="section-title">Batteries, not a scavenger hunt</h2>
-      <p class="section-sub">The things you would otherwise assemble from a dozen libraries, in one place.</p>
+      <h2 class="section-title">What comes in the package</h2>
+      <p class="section-sub">What you would otherwise put together from a dozen libraries, in one place.</p>
       <div class="grid">
         <div class="card">
           <span class="ic">🛰️</span>
-          <h3>One handler, three wires</h3>
-          <p>Write a handler once; it serves over H1, H2, and H3. The wire layer lives in sibling libraries; adapters stay thin.</p>
+          <h3>One handler, three protocols</h3>
+          <p>Write a handler once and it serves HTTP/1.1, HTTP/2 and HTTP/3. The protocols themselves live in separate libraries; Livery only connects them to your code.</p>
         </div>
         <div class="card">
           <span class="ic">🧩</span>
-          <h3>Tower-style middleware</h3>
-          <p>Value-based <code>call(Req, Next, State)</code> pipelines, composable per service or per route. No mutate-and-next.</p>
+          <h3>Middleware as plain functions</h3>
+          <p>A middleware is <code>call(Req, Next, State)</code>: it gets the request and the rest of the pipeline, and returns a response. Add it to the whole service or to one route.</p>
         </div>
         <div class="card">
           <span class="ic">🌊</span>
           <h3>Streaming everywhere</h3>
-          <p>Chunked responses, Server-Sent Events, NDJSON, WebSocket and WebTransport over H2/H3, plus file streaming with ranges.</p>
+          <p>Chunked responses, Server-Sent Events, NDJSON, WebSocket on every protocol, WebTransport on HTTP/2 and HTTP/3, and files with byte ranges.</p>
         </div>
         <div class="card">
           <span class="ic">📜</span>
           <h3>OpenAPI &amp; validation</h3>
-          <p>Generate an OpenAPI 3.1 doc from your routes, serve Redoc or Swagger UI, and reject bad bodies with a JSON-Schema validator.</p>
+          <p>Generate an OpenAPI 3.2 document from your routes, serve Redoc or Swagger UI, and check request bodies against a subset of JSON Schema.</p>
         </div>
         <div class="card">
           <span class="ic">🤖</span>
-          <h3>MCP built in</h3>
-          <p>Serve the Model Context Protocol Streamable HTTP transport on your main listener with one handler. No sidecar.</p>
+          <h3>Ready for AI agents</h3>
+          <p>Serve MCP (Model Context Protocol) tools and A2A (Agent-to-Agent) agents on your main listener, with the same auth and tracing. No second server.</p>
         </div>
         <div class="card">
           <span class="ic">🔭</span>
           <h3>Observability &amp; auth</h3>
-          <p>OpenTelemetry-style traces and metrics, trace-correlated logs, JWT/JWKS/OIDC, signed sessions, and token introspection.</p>
+          <p>OpenTelemetry-style traces and metrics, logs tagged with the trace, and sign-in with OpenID Connect, passkeys, one-time codes, access tokens and signed sessions.</p>
         </div>
       </div>
     </div>
@@ -123,7 +126,7 @@ livery:<span class="a">start_service</span>(#{
   <section id="ecosystem">
     <div class="wrap">
       <h2 class="section-title">Built on Livery</h2>
-      <p class="section-sub">Companion libraries that reuse the same client and H2 stack, each in its own repo.</p>
+      <p class="section-sub">Companion libraries built on Livery's client and HTTP/2 support, each in its own repository.</p>
       <div class="grid">
         <div class="card">
           <span class="ic">🛰️</span>
@@ -146,11 +149,12 @@ livery:<span class="a">start_service</span>(#{
 
   <footer>
     <div class="wrap foot">
-      <div>Livery · Apache-2.0 · built on the BEAM</div>
+      <div>Livery · Apache-2.0 · for Erlang/OTP · by <a href="https://enki-multimedia.eu">Enki Multimedia</a></div>
       <div class="foot-links">
         <a href="api/index.html">Documentation</a>
         <a href="https://github.com/benoitc/livery">GitHub</a>
-        <a href="https://github.com/benoitc/livery/blob/main/docs/rewrite_plan.md">Design</a>
+        <a href="api/what-is-livery.html">What is Livery</a>
+        <a href="api/design.html">Design</a>
       </div>
     </div>
   </footer>

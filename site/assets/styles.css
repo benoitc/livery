@@ -114,3 +114,7 @@ footer { border-top: 1px solid var(--border); padding: 36px 0; color: var(--mute
 .foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; align-items: center; }
 .foot-links { display: flex; gap: 20px; }
 .foot-links a { color: var(--muted); }
+@media (max-width: 600px) {
+  .nav { flex-wrap: wrap; gap: 8px; }
+  .nav-links { flex-wrap: wrap; gap: 8px 16px; }
+}

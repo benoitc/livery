@@ -57,12 +57,11 @@ client                  adapter                 worker              handler
    normally, so the failure stays contained.
 
 The worker doing the dispatch is `livery_req_proc`; the entry point is
-`run/1`. The whole of it:
+`run/1`. At its heart, inside the error handling and the emit hooks:
 
 ```erlang
-dispatch(Adapter, Stream, Stack, Handler, Req) ->
-    Resp = livery:dispatch(Stack, Handler, Req),
-    livery:emit(Adapter, Stream, Resp).
+Resp = livery:dispatch(Stack, Handler, Req),
+livery:emit(Adapter, Stream, Resp)
 ```
 
 ## Body messages

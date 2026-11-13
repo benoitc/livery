@@ -85,8 +85,9 @@ Reach it with `https => #{..., alpn => [h2, http1]}` on a service, or
 - **Not a state machine.** Framing, header compression, flow control, and
   TLS belong to the wire library.
 - **Not a buffer.** The body reader buffers; the adapter does not.
-- **Not a router.** Routing happens in middleware, after the request
-  reaches the worker.
+- **Not a router.** Routing happens in the worker, after the request
+  reaches it: a compiled router is a handler (`livery:router_handler/1`),
+  behind the middleware stack.
 
 ## How an adapter is wired
 

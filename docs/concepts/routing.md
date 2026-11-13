@@ -98,7 +98,7 @@ and serves a confined file (see [Serve static files](../guides/serve-static-file
 ## Per-route middleware and metadata
 
 The optional fourth element is a `Meta` map: an operation id, summary,
-schemas, tags (which `livery_openapi:build/1` turns into an OpenAPI 3.1
+schemas, tags (which `livery_openapi:build/1` turns into an OpenAPI 3.2
 document), and a `middleware` key. That key is a stack
 `livery:router_handler/1` runs for that route only, nested inside any
 service-level stack:

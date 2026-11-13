@@ -6,7 +6,7 @@ Livery is a modern Erlang web framework. You define routes, handlers,
 and a middleware stack once. Livery serves them over HTTP/1.1,
 HTTP/2, and HTTP/3 on the same host, WebSocket on any of the three,
 WebTransport on H2 and H3, Server-Sent Events on all three, and MCP
-Streamable HTTP at `/mcp`, with OIDC/OAuth2, OpenAPI 3.1, and
+Streamable HTTP at `/mcp`, with OIDC/OAuth2, OpenAPI 3.2, and
 OpenTelemetry-style observability as built-in middleware.
 
 It is written in the spirit of Axum + Tower + Hyper. It does not
@@ -102,8 +102,9 @@ middleware stack.
 ```
 
 Wire is three sibling libraries plus `ws`. Livery is one OTP app
-consuming them. There is one `livery_sup`, one `livery_req_sup`,
-and three listener subtrees (H3, H2, H1) created by
+consuming them. `livery_sup` holds the node-wide state (the
+`livery_req_sup` admission counter and the ETS stores); the listeners
+run under their wire libraries' supervisors, started and stopped by
 `livery_service` as needed.
 
 ## 6. Developer experience
@@ -247,10 +248,11 @@ and is served over H1, H2, and H3 automatically.
    header compression, and flow control. It invokes Livery's
    adapter handler fun with
    `(Conn, StreamId, Method, Path, Headers)`.
-3. The adapter builds a `#livery_req{}`, spawns a `livery_req_proc`
-   under `livery_req_sup` (simple_one_for_one), and redirects body
-   messages to that pid. The engine continues to serve other
-   streams.
+3. The adapter builds a `#livery_req{}` and hands it to
+   `livery_translator`, which has `livery_req_sup` admit the request
+   and start a `livery_req_proc` worker, then forwards the body to it
+   as `{livery_body, Ref, _}` messages. The engine continues to serve
+   other streams.
 4. The request process runs the middleware stack followed by the
    handler. The body reader drains adapter messages lazily with
    bounded buffering.

@@ -245,19 +245,27 @@ rebar3 as bench shell                        # Benchmark harness (livery_bench)
 `livery:start_service/1` brings H3 (UDP), H2 (TLS), and H1 (TCP) up
 together under one `livery_service` gen_server, sharing one router
 and middleware stack, and advertising `Alt-Svc` for H3 on H1/H2
-responses. `livery:start_listener/2` serves a single protocol.
+responses. The listeners belong to the wire libraries; the service
+belongs to the application that starts it, and `livery_sup` holds only
+node-wide state (the admission counter and the ETS stores).
+`livery:start_listener/2` serves a single protocol.
 `livery_drain` gives graceful shutdown (stop accepting, wait for
 in-flight, then stop).
 
 ### Per-request worker model
 
-Each adapter, on a new request, spawns a `livery_req_proc` child of
-the single global `livery_req_sup` (simple_one_for_one) and returns
-immediately. A per-stream "translator" process forwards wire events
-(`{h1_stream,_}` / `{h2,_}` / `{quic_h3,_}`) to the worker as
-`{livery_body, Ref, _}` messages; the translator monitors the
-worker and exits on its `DOWN`. Middleware and the handler run in
-the worker, which may block/`receive` (the `cowboy_loop` analogue).
+Each wire library runs the adapter's handler fun in a process of its
+own for every request. In that process, `livery_translator:serve/2`
+asks `livery_req_sup` (a `gen_server` admission counter, not a
+supervisor) to start a `livery_req_proc` worker with `proc_lib:spawn`,
+then becomes the request's translator: it turns the library's
+`{h1_stream,_}` / `{h2,_}` / `{quic_h3,_}` events into
+`{livery_body, Ref, _}` messages, enforces `max_body`, returns
+flow-control credit as the handler reads (H2, H3), and fires the
+disconnect notice, until the worker exits. Middleware and the handler
+run in the worker, which may block/`receive` (the `cowboy_loop`
+analogue). The reasons are in `docs/concepts/architecture.md`,
+"Design decisions".
 
 ### Middleware (Tower/Axum style)
 
@@ -269,16 +277,18 @@ Routes may carry a per-route stack under the route `Meta`'s
 ### Dispatch and emit
 
 The handler returns a `#livery_resp{}`; `livery:emit/3` walks the
-body variant (`full` / `chunked` / `sse` / `file` / `empty` /
-`upgrade`) and drives `Adapter:send_headers/send_data/send_trailers`.
+body variant (`full` / `chunked` / `sse` / `file` / `empty`) and
+drives `Adapter:send_headers/send_data/send_trailers`.
 The `taken_over` sentinel tells `emit/3` to stop because the stream
-was handed off (WebSocket, WebTransport, MCP).
+was handed off (WebSocket, WebTransport, MCP, A2A).
 
 ### Adapter behaviour
 
 `livery_adapter` defines `start/3`, `stop/1`, `send_headers/4`,
 `send_data/3`, `send_trailers/2`, `reset/2`, `peer_info/1`,
-`capabilities/1`. Implemented by `livery_h1`, `livery_h2`,
+`capabilities/1`, and the optional `send_full/5`,
+`send_informational/3`, `accept_ws/4` and `accept_wt/4`, detected with
+`livery_adapter:implements/3`. Implemented by `livery_h1`, `livery_h2`,
 `livery_h3`, and `livery_test_adapter` (in-memory, used by the
 parity SUITE).
 

@@ -23,9 +23,9 @@ It is written in the spirit of Axum + Tower + Hyper on the BEAM.
 ## When not to use Livery
 
 - You only need a static file server. Cowboy or `httpd` is simpler.
-- You need a battle-tested 1.0 today. Livery is still under heavy
-  rewrite; the H1/H2/H3 wire adapters land in Phases 2 to 4. Until
-  then only the test adapter is wired.
+- You need a 1.0 with a long track record. Livery is young: its API
+  still moves between minor releases, and the CHANGELOG says what
+  changed each time.
 
 ## Design principles
 

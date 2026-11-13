@@ -2,10 +2,14 @@
 -moduledoc """
 Service runtime.
 
-Brings up H3 on UDP, H2 on TLS, and H1 on TCP under one
-supervisor, sharing one router/middleware/handler. Optionally
-advertises Alt-Svc on H1 and H2 responses so clients race up to
-H3.
+Brings up H3 on UDP, H2 on TLS, and H1 on TCP together, sharing one
+router/middleware/handler. Optionally advertises Alt-Svc on H1 and H2
+responses so clients race up to H3.
+
+The service is a `gen_server` linked to the process that starts it, so
+put it in your own supervision tree. It owns the listener references;
+the listeners themselves run under their wire libraries' supervisors
+(`h1`, `h2`, `quic`), not under `livery_sup`.
 
 The `https` listener is h2-only by default; `alpn => [h2, http1]`
 makes it serve HTTP/2 and HTTP/1.1 from the same port, chosen per

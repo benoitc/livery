@@ -6,13 +6,13 @@ Decorates responses with baseline hardening headers. Configure it as a
 stack entry `{livery_security_headers, Config}` where every `Config`
 key is optional and a value of `false` disables that header:
 
-- `content_type_options` — `true` (default) sends
+- `content_type_options`: `true` (default) sends
   `X-Content-Type-Options: nosniff`.
-- `frame_options` — header value, default `<<"DENY">>`.
-- `referrer_policy` — header value, default `<<"no-referrer">>`.
-- `csp` — `Content-Security-Policy` value, default `false` (off): a
+- `frame_options`: header value, default `<<"DENY">>`.
+- `referrer_policy`: header value, default `<<"no-referrer">>`.
+- `csp`: `Content-Security-Policy` value, default `false` (off): a
   wrong policy breaks apps, so it is opt-in.
-- `hsts` — `#{max_age => Secs, include_subdomains => boolean(),
+- `hsts`: `#{max_age => Secs, include_subdomains => boolean(),
   preload => boolean()}` (defaults `31536000`, `true`, `false`), or
   `false`. `Strict-Transport-Security` is only emitted on secure
   (HTTPS / TLS) requests; on plain HTTP it is meaningless and skipped.

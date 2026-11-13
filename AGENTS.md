@@ -45,6 +45,24 @@ Authoritative behaviour is the test suites under `test/` (the
 parity SUITE diffs externally observable behaviour across all four
 adapters) and the module docs.
 
+## Founding rules
+
+Every change keeps Livery's shape, as announced with 0.2.0:
+
+1. **Values, not handles.** `Req` and `Resp` are plain records.
+2. **Middleware is a continuation.** `call(Req, Next, State) -> Resp`;
+   wrapping `Next` is just calling it inside your own code.
+3. **Protocol neutrality.** Handlers never know H1, H2 or H3; differences
+   go through capabilities or optional adapter callbacks.
+4. **Thin adapters.** The wire libraries own the protocols.
+5. **The same model outbound.** Outbound HTTP goes through `livery_client`.
+
+When you plan, implement or review a change under `src/`, follow
+`.agents/skills/livery-foundations/SKILL.md` and run its
+`scripts/check.sh main`. It is an Agent Skill: agents that load skills
+find it under `.agents/skills/`, and Claude Code under `.claude/skills/`,
+which links to the same directory. Edit it in `.agents/skills/` only.
+
 ## Specification issues are bugs, not security issues
 
 A report is a specification issue when the fix is to make Livery do what a

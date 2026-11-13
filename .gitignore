@@ -19,6 +19,9 @@ doc/
 # Local dep overrides (symlinks to sibling projects)
 _checkouts/
 
+# Local Claude Code permissions
+.claude/settings.local.json
+
 # Generated/downloaded compliance test files
 priv/tools/
 priv/test_certs/

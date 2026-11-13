@@ -189,6 +189,11 @@ before it is opened: it follows the specification section it cites, that
 specification is the current one, and it stays safe against a hostile
 client, with every per-client resource bounded.
 
+A change also keeps Livery's five founding rules, listed in
+[AGENTS.md](AGENTS.md#founding-rules).
+`.agents/skills/livery-foundations/scripts/check.sh main` flags the common
+ways a change drifts from them.
+
 Say what the change is for and how it works. Skip the test inventory: CI
 reports that. If the change touches the public API, show it in a short
 code block.

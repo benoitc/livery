@@ -320,10 +320,9 @@ h3_peer(Conn) ->
 Hand an extended-CONNECT stream to the `webtransport` library
 with `transport => h3`.
 """.
--spec accept_wt(h3, livery_req:req(), module(), term()) ->
+-spec accept_wt(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
-accept_wt(h3, Req, HandlerMod, Opts) ->
-    {Conn, StreamId} = livery_req:stream(Req),
+accept_wt({Conn, StreamId}, Req, HandlerMod, Opts) ->
     Headers = connect_pseudo_headers(Req, wt_protocol(Req)),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h3,

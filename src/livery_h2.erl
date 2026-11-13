@@ -293,10 +293,9 @@ Reconstructs the CONNECT pseudo-headers from the request value
 `webtransport:accept/4` expects them inline) and calls
 `webtransport:accept/4` with `transport => h2`.
 """.
--spec accept_wt(h2, livery_req:req(), module(), term()) ->
+-spec accept_wt(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
-accept_wt(h2, Req, HandlerMod, Opts) ->
-    {Conn, StreamId, _Alpn} = livery_req:stream(Req),
+accept_wt({Conn, StreamId, _Alpn}, Req, HandlerMod, Opts) ->
     Headers = connect_pseudo_headers(Req, <<"webtransport">>),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h2,

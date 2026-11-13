@@ -67,6 +67,8 @@ error after the handler returns but before anything is written.
 
 -export_type([resp/0, body/0, deferred_decision/0, cache_directive/0, drain/0, resp_opts/0]).
 
+-deprecated([{upgrade, 2, "use livery_ws:upgrade/3 or livery_wt:upgrade/3"}]).
+
 %% Early-response inbound-drain budget. `default' keeps the listener's
 %% budget, `none' disables the drain (close immediately), and a
 %% `{MaxBytes, MaxMs}' tuple (either component `infinity') bounds it for
@@ -505,7 +507,12 @@ redirect(Status, Location, ExtraHeaders) ->
         empty
     ).
 
--doc "Protocol upgrade response (WebSocket / WebTransport).".
+-doc """
+Deprecated: a response no adapter acts on; `livery:emit/3` resets the
+stream instead. Upgrade with `livery_ws:upgrade/3` or
+`livery_wt:upgrade/3`, which hand the stream over and return the
+`taken_over` response.
+""".
 -spec upgrade(ws | wt, term()) -> resp().
 upgrade(Kind, State) when Kind =:= ws; Kind =:= wt ->
     #livery_resp{

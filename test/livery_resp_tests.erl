@@ -1,6 +1,9 @@
 -module(livery_resp_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+
+%% The deprecated upgrade/2 is still tested until it is removed.
+-compile({nowarn_deprecated_function, [{livery_resp, upgrade, 2}]}).
 -include("livery.hrl").
 
 text_sets_content_type_test() ->

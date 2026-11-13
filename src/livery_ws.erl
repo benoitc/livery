@@ -69,14 +69,14 @@ Returns a `#livery_resp{}` value:
   point.
 - `status = 400` with a textual body when the inbound headers do
   not satisfy RFC 6455.
-- `status = 501` when the adapter does not support WebSocket
-  upgrades (H1, H2, and H3 all do).
+- `status = 501` when the adapter does not implement `accept_ws/4`
+  (H1, H2, and H3 all do; see `livery_adapter`).
 """.
 -spec upgrade(livery_req:req(), handler_module(), handler_opts()) ->
     livery_resp:resp().
 upgrade(Req, HandlerMod, Opts) ->
     Adapter = livery_req:adapter(Req),
-    case adapter_supports_ws(Adapter) of
+    case livery_adapter:implements(Adapter, accept_ws, 4) of
         true ->
             Stream = livery_req:stream(Req),
             case Adapter:accept_ws(Stream, Req, HandlerMod, Opts) of
@@ -177,12 +177,6 @@ deflate_opts(Info, Opts, AcceptOpts) when is_map(Opts) ->
     end;
 deflate_opts(_Info, _Opts, AcceptOpts) ->
     {[], AcceptOpts}.
-
--spec adapter_supports_ws(module()) -> boolean().
-adapter_supports_ws(livery_h1) -> true;
-adapter_supports_ws(livery_h2) -> true;
-adapter_supports_ws(livery_h3) -> true;
-adapter_supports_ws(_) -> false.
 
 -spec format_reason(term()) -> iodata().
 format_reason(B) when is_binary(B) -> B;

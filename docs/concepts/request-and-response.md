@@ -90,7 +90,11 @@ variant into adapter calls:
 | `{chunked, Producer}` | `stream/3` | headers + repeated `send_data` |
 | `{sse, Producer}` | `sse/2,3` | as chunked, with SSE framing |
 | `{file, Path, Range}` | `file/2,3` | `sendfile` where supported |
-| `{upgrade, ws \| wt, _}` | `upgrade/2` | handed to `livery_ws`/`livery_wt` |
+| `taken_over` | `livery_ws:upgrade/3`, `livery_wt:upgrade/3` | nothing: the stream now belongs to the session |
+
+`livery_resp:upgrade/2` is deprecated: no adapter ever acted on the
+`{upgrade, _, _}` body it builds. Upgrade with `livery_ws:upgrade/3` or
+`livery_wt:upgrade/3`.
 
 **Which constructor, when:**
 

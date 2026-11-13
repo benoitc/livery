@@ -317,7 +317,7 @@ Support depends on the wire protocol: HTTP/1.1 and HTTP/2 send it
 (HTTP/1.1 skips it for HTTP/1.0 clients, per RFC 9110 §15.2); HTTP/3
 returns `{error, unsupported}` for now. Check
 `Adapter:capabilities/1` for `informational => true`, or just ignore
-the return value — hints are best-effort by nature.
+the return value, since hints are best-effort by nature.
 
 ```erlang
 handler(Req) ->
@@ -331,10 +331,7 @@ handler(Req) ->
 inform(Status, Headers, #livery_req{adapter = Adapter, stream = Stream}) when
     is_integer(Status), Status >= 100, Status =< 199
 ->
-    case
-        Adapter =/= undefined andalso
-            erlang:function_exported(Adapter, send_informational, 3)
-    of
+    case livery_adapter:implements(Adapter, send_informational, 3) of
         true -> Adapter:send_informational(Stream, Status, Headers);
         false -> {error, unsupported}
     end.

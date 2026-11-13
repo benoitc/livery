@@ -6,17 +6,17 @@ Adds Cross-Origin Resource Sharing headers and answers preflight
 `OPTIONS` requests. Configure it as a stack entry
 `{livery_cors, Config}` where every `Config` key is optional:
 
-- `origins` — `'*'` (default), a list of allowed origin binaries, or
+- `origins`: `'*'` (default), a list of allowed origin binaries, or
   a predicate `fun((binary()) -> boolean())`.
-- `methods` — allowed methods for preflight `Access-Control-Allow-Methods`
+- `methods`: allowed methods for preflight `Access-Control-Allow-Methods`
   (default the common verb set).
-- `headers` — `mirror` (default, echo the request's
+- `headers`: `mirror` (default, echo the request's
   `Access-Control-Request-Headers`) or an explicit list of header names.
-- `expose` — header names for `Access-Control-Expose-Headers` (default `[]`).
-- `credentials` — `true` to send `Access-Control-Allow-Credentials`
+- `expose`: header names for `Access-Control-Expose-Headers` (default `[]`).
+- `credentials`: `true` to send `Access-Control-Allow-Credentials`
   (default `false`). With credentials the wildcard origin is never sent;
   the request `Origin` is echoed instead.
-- `max_age` — seconds for `Access-Control-Max-Age` on preflights.
+- `max_age`: seconds for `Access-Control-Max-Age` on preflights.
 
 `Vary` is set so shared caches stay correct: `Origin` is added on every
 branch whenever the emitted headers depend on the request origin (a

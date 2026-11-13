@@ -10,7 +10,7 @@ stops the service. Returns `ok` once fully drained or
 running (the service is stopped either way).
 
 In-flight requests are counted node-wide via the global
-`livery_req_sup` in-flight counter — every request, on every
+`livery_req_sup` in-flight counter: every request, on every
 protocol, runs in a `livery_req_proc` worker it tracks. A
 single-service node drains exactly its own requests; on a
 multi-service node `drain/2` waits for all of them.

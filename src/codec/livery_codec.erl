@@ -15,14 +15,14 @@ negotiation without any change to livery core.
 
 ## Callbacks
 
-- `name/0` — the `Content-Encoding` token (lowercase binary).
-- `compress/1` — one-shot compression of a whole body (`{full, _}`).
-- `stream_init/0` — open a streaming context.
-- `stream_update/2` — feed a chunk and FLUSH, returning the bytes
+- `name/0`: the `Content-Encoding` token (lowercase binary).
+- `compress/1`: one-shot compression of a whole body (`{full, _}`).
+- `stream_init/0`: open a streaming context.
+- `stream_update/2`: feed a chunk and FLUSH, returning the bytes
   emittable now (so each producer chunk reaches the client promptly).
-- `stream_finish/1` — return the trailing bytes that finalize the
+- `stream_finish/1`: return the trailing bytes that finalize the
   stream. Does not release the context.
-- `stream_close/1` — release the context; always called, including on
+- `stream_close/1`: release the context; always called, including on
   the error path.
 """.
 

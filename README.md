@@ -26,7 +26,7 @@ written in the spirit of Axum + Tower + Hyper, on Erlang/OTP.
 
 ```erlang
 %% rebar.config
-{deps, [{livery, {git, "https://github.com/benoitc/livery.git", {branch, "main"}}}]}.
+{deps, [livery]}.
 ```
 
 ## Hello, world
@@ -169,20 +169,20 @@ The per-response override applies to full responses. Streaming responses
 
 ## Features
 
-- **One handler, three wires** — write a handler once; serve it over
+- **One handler, three wires**: write a handler once; serve it over
   H1, H2, and H3 with shared routing, middleware, and Alt-Svc upgrade.
-- **Tower-style middleware** — value-based `call(Req, Next, State)`
+- **Tower-style middleware**: value-based `call(Req, Next, State)`
   pipelines, composable per service or per route, in both directions
   (server-inbound and the outbound `livery_client`).
-- **Streaming** — chunked, SSE, NDJSON, WebSocket and WebTransport
+- **Streaming**: chunked, SSE, NDJSON, WebSocket and WebTransport
   over H2/H3, and file responses with byte ranges.
-- **OpenAPI** — generate a 3.1 document from routes, serve Redoc or
+- **OpenAPI**: generate a 3.2 document from routes, serve Redoc or
   Swagger UI, and validate request bodies against a JSON-Schema subset.
-- **MCP** — serve the Model Context Protocol Streamable HTTP transport
+- **MCP**: serve the Model Context Protocol Streamable HTTP transport
   on the main listener.
-- **A2A** — mount an Agent-to-Agent agent (card, JSON-RPC and REST
+- **A2A**: mount an Agent-to-Agent agent (card, JSON-RPC and REST
   bindings, SSE streams) on the main listener.
-- **Observability & auth** — OpenTelemetry-style traces/metrics,
+- **Observability & auth**: OpenTelemetry-style traces/metrics,
   trace-correlated logs, JWT/JWKS/OIDC, signed sessions, introspection.
 
 ## Ecosystem

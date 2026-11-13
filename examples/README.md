@@ -15,10 +15,9 @@ Then start one from a shell (`rebar3 as examples shell`):
 ## `livery_example_api`
 
 REST + path params + SSE + NDJSON + an OpenAPI document, served over
-HTTP/1.1 on one port. `livery:start_service/1` takes a single
-handler, so the example drives `livery_router` from inside that
-handler - a useful pattern until route mounting lands in the
-service runtime.
+HTTP/1.1 on one port. The compiled `livery_router` is passed to
+`livery:start_service/1` as `router =>`, so path parameters are bound
+before each handler runs.
 
 ```
 curl http://127.0.0.1:8080/            # hello, world

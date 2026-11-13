@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `livery_ext:bearer_token/1` accepted the `Bearer` scheme only as
+  `Bearer`, `bearer` or `BEARER`, and refused any other mix of cases,
+  although the scheme name is case-insensitive (RFC 9110 section 11.1).
+  It now accepts any case, like the bearer middleware already did, and
+  treats an empty token as no token.
 - Over HTTP/1.1, a response with no body (204, 304, or an answer to
   HEAD) could go out with chunked framing and a stray end-of-body
   marker, which broke the next response on a kept-alive connection;

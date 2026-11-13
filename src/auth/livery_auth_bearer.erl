@@ -79,9 +79,11 @@ verify_with_rotation(VerifyOpts, {_Scheme, Token, State, _Req, _Next} = Ctx) ->
 outcome({ok, Claims}, {Scheme, Token, State, Req, Next}) ->
     case livery_auth_binding:check(Scheme, Token, Claims, Req, State) of
         ok ->
-            case authorized(Claims, State) of
+            case livery_auth:authorized(Claims, State) of
                 ok ->
-                    granted(Scheme, Next(livery_req:set_meta(user, Claims, Req)), State);
+                    livery_auth_challenge:granted(
+                        Scheme, Next(livery_req:set_meta(user, Claims, Req)), State
+                    );
                 {error, Outcome} ->
                     livery_auth_challenge:respond(Outcome, Scheme, State)
             end;
@@ -133,19 +135,3 @@ reason_text({invalid_typ, _}) -> <<"wrong token type">>;
 reason_text({invalid_claim, _}) -> <<"malformed claim">>;
 reason_text({missing_claim, _}) -> <<"missing claim">>;
 reason_text({missing_option, _}) -> <<"verifier misconfigured">>.
-
-%% A DPoP client gets the nonce for its next proof with every answer.
-granted(dpop, Resp, State) -> livery_auth_challenge:with_nonce(Resp, State);
-granted(bearer, Resp, _State) -> Resp.
-
-%% Who signed in, and how (RFC 9470), before what the token may do.
-authorized(Claims, State) ->
-    case livery_auth_stepup:check(Claims, State) of
-        ok ->
-            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
-                [] -> ok;
-                Missing -> {error, {insufficient_scope, Missing}}
-            end;
-        {error, _} = E ->
-            E
-    end.

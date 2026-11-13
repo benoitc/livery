@@ -52,6 +52,7 @@ for servers that still expect it. See AGENTS.md, Known deviations.
 """.
 
 -export([request/3, push_request/3]).
+-export([client_auth/1]).
 
 -export_type([token/0, opts/0, error_reason/0]).
 
@@ -199,6 +200,11 @@ list(V) -> [V].
 pairs(Keys, P) ->
     [{atom_to_binary(K), V} || K <- Keys, V <- [maps:get(K, P, undefined)], V =/= undefined].
 
+-doc false.
+%% Shared with livery_auth_introspect: the headers and form fields that
+%% authenticate the client (RFC 6749 2.3, RFC 7523 as updated by RFC 10070).
+-spec client_auth(opts()) ->
+    {ok, [{binary(), binary()}], [{binary(), binary()}]} | {error, error_reason()}.
 client_auth(#{client_id := Id} = Opts) ->
     case maps:get(client_auth, Opts, client_secret_basic) of
         client_secret_basic ->

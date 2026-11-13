@@ -250,3 +250,67 @@ introspection_step_up_test() ->
         <<"Bearer error=\"insufficient_user_authentication\"", _/binary>>,
         livery_test_adapter:header(<<"www-authenticate">>, Cap)
     ).
+
+%%====================================================================
+%% Client authentication (RFC 7662 2.1), shared with the token client
+%%====================================================================
+
+capture() ->
+    Self = self(),
+    fun(Url, Headers, Body) ->
+        Self ! {req, Url, Headers, Body},
+        {ok, 200, <<"{\"active\":true}">>}
+    end.
+
+captured() ->
+    receive
+        {req, Url, Headers, Body} -> {Url, Headers, uri_string:dissect_query(Body)}
+    after 1000 -> error(no_request)
+    end.
+
+client_secret_post_is_sent_in_form_test() ->
+    {ok, _} = livery_auth_introspect:introspect(<<"abc">>, #{
+        endpoint => ?ENDPOINT,
+        client_id => <<"api">>,
+        client_secret => <<"sec">>,
+        client_auth => client_secret_post,
+        fetch => capture()
+    }),
+    {_Url, Headers, Form} = captured(),
+    ?assertEqual(<<"abc">>, proplists:get_value(<<"token">>, Form)),
+    ?assertEqual(<<"api">>, proplists:get_value(<<"client_id">>, Form)),
+    ?assertEqual(<<"sec">>, proplists:get_value(<<"client_secret">>, Form)),
+    ?assertEqual(undefined, proplists:get_value(<<"authorization">>, Headers)).
+
+%% RFC 7523 as updated by RFC 10070: the assertion's audience is the
+%% authorization server's issuer identifier.
+private_key_jwt_is_sent_test() ->
+    {Key, Jwk} = livery_auth_jwt:keypair(<<"ES256">>, <<"k1">>),
+    Issuer = <<"https://issuer.example">>,
+    {ok, _} = livery_auth_introspect:introspect(<<"abc">>, #{
+        endpoint => ?ENDPOINT,
+        client_id => <<"api">>,
+        client_auth => private_key_jwt,
+        private_key => Key,
+        key_id => <<"k1">>,
+        issuer => Issuer,
+        fetch => capture()
+    }),
+    {_Url, Headers, Form} = captured(),
+    ?assertEqual(
+        <<"urn:ietf:params:oauth:client-assertion-type:jwt-bearer">>,
+        proplists:get_value(<<"client_assertion_type">>, Form)
+    ),
+    {ok, Claims} = livery_auth:verify(proplists:get_value(<<"client_assertion">>, Form), #{
+        keys => [Jwk]
+    }),
+    ?assertMatch(#{<<"iss">> := <<"api">>, <<"sub">> := <<"api">>, <<"aud">> := Issuer}, Claims),
+    ?assertEqual(undefined, proplists:get_value(<<"authorization">>, Headers)).
+
+no_credentials_sends_no_client_auth_test() ->
+    {ok, _} = livery_auth_introspect:introspect(<<"abc">>, #{
+        endpoint => ?ENDPOINT, fetch => capture()
+    }),
+    {_Url, Headers, Form} = captured(),
+    ?assertEqual([{<<"token">>, <<"abc">>}], Form),
+    ?assertEqual(undefined, proplists:get_value(<<"authorization">>, Headers)).

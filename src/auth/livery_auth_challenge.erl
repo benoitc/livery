@@ -30,7 +30,7 @@ With `dpop_nonce` set, every refusal also carries a fresh `DPoP-Nonce`,
 so a client can retry at once.
 """.
 
--export([respond/2, respond/3, header/3, with_nonce/2]).
+-export([respond/2, respond/3, header/3, with_nonce/2, granted/3]).
 
 -type outcome() ::
     missing_token
@@ -65,6 +65,14 @@ with_nonce(Resp, Opts) ->
         true -> livery_resp:with_header(<<"dpop-nonce">>, livery_auth_dpop:nonce(Opts), Resp);
         false -> Resp
     end.
+
+-doc """
+The response to a request that was let through, for its `Scheme`: a
+DPoP client gets the nonce for its next proof with every answer.
+""".
+-spec granted(bearer | dpop, livery_resp:resp(), opts()) -> livery_resp:resp().
+granted(dpop, Resp, Opts) -> with_nonce(Resp, Opts);
+granted(bearer, Resp, _Opts) -> Resp.
 
 -doc "The `WWW-Authenticate` value for the refused request.".
 -spec header(outcome(), bearer | dpop, opts()) -> binary().

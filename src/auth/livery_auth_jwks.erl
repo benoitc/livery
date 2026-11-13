@@ -4,13 +4,13 @@ JWKS fetching, parsing, and caching with key rotation.
 
 `keys/1,2` returns the JWK set for a `jwks_uri`, fetching it over
 HTTP on first use and caching the result in `persistent_term`
-with a TTL. `refresh/1,2` forces a re-fetch — call it on a
+with a TTL. `refresh/1,2` forces a re-fetch: call it on a
 `no_matching_key` verification failure to pick up a rotated key.
 
 The HTTP fetch is pluggable via `fetch => fun((Url) -> {ok, Body}
 | {error, _})` in the options, so deployments (and tests) can
-supply their own client. The default uses `hackney` and verifies the
-server's TLS certificate.
+supply their own client. The default goes through `livery_client`
+(`livery_auth:client/0`) and verifies the server's TLS certificate.
 
 ```erlang
 {ok, Keys} = livery_auth_jwks:keys(<<"https://issuer/.well-known/jwks.json">>),
@@ -120,26 +120,24 @@ decode_jwks(Body) ->
     end.
 
 %%====================================================================
-%% Default HTTP fetcher (hackney)
+%% Default HTTP fetcher
 %%====================================================================
 
--doc "Default JWKS fetcher using `hackney`, verifying the server's TLS cert.".
+-doc """
+Default JWKS fetcher, through `livery_client` (`livery_auth:client/0`),
+verifying the server's certificate. Waits 5 seconds for the answer.
+`livery_auth_oidc` uses it for discovery too.
+""".
 -spec default_fetch(binary()) -> {ok, binary()} | {error, term()}.
 default_fetch(Url) ->
-    {ok, _} = application:ensure_all_started(hackney),
-    Opts = [
-        with_body,
-        {recv_timeout, 5000},
-        {connect_timeout, 5000},
-        {ssl_options, livery_auth:tls_opts()}
-    ],
-    case hackney:request(get, Url, [], <<>>, Opts) of
-        {ok, 200, _Headers, Body} ->
-            {ok, Body};
-        {ok, Code, _Headers, _Body} ->
-            {error, {http_status, Code}};
-        {error, Reason} ->
-            {error, Reason}
+    case livery_client:request(livery_auth:client(), get, Url, #{timeout => 5000}) of
+        {ok, Resp} ->
+            case {livery_client:status(Resp), livery_client:body(Resp)} of
+                {200, {full, Body}} -> {ok, iolist_to_binary(Body)};
+                {Code, _} -> {error, {http_status, Code}}
+            end;
+        {error, _} = Error ->
+            Error
     end.
 
 %%====================================================================

@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `livery_a2a:router/2` takes `max_body_bytes` and `body_timeout_ms`, the
   same request body limits `livery_mcp` already has.
+- Token introspection can authenticate to the authorization server with
+  `client_secret_post` or `private_key_jwt`, like the token client, set
+  with the new `client_auth` option. HTTP Basic stays the default.
 
 ### Changed
 
@@ -20,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callbacks of `livery_adapter`, instead of a fixed list of Livery's own
   adapters. `accept_wt/4` takes the stream as its first argument, like
   `accept_ws/4`.
+- Fetching a key set (JWKS), OpenID or OAuth discovery, and token
+  introspection now go through `livery_client`, like the other calls
+  Livery makes to an authorization server. Certificate verification and
+  timeouts are the same as before.
 - An HTTP/2 or HTTP/3 request now runs in one process fewer: the adapter
   works in the process the wire library already starts for the request,
   as HTTP/1.1 does.

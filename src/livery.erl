@@ -551,7 +551,9 @@ send_file_chunks(Adapter, Stream, Fd, Remaining, Trailers) ->
 %% SSE framing (RFC text/event-stream)
 %%====================================================================
 
--spec sse_frame(map() | iodata()) -> iodata().
+-spec sse_frame(map() | {comment, iodata()} | iodata()) -> iodata().
+sse_frame({comment, Text}) ->
+    [[<<": ">>, L, <<"\n">>] || L <- lines(Text)];
 sse_frame(#{data := Data} = E) ->
     [
         field(<<"event">>, single_line(maps:get(event, E, undefined))),
@@ -569,10 +571,10 @@ field(Name, Value) -> [Name, <<": ">>, Value, <<"\n">>].
 %% Every line of `data' gets its own `data:' field: the client joins them
 %% back with line feeds. CR LF, CR and LF all end a line in the format.
 data_lines(Data) ->
-    Lines = binary:split(iolist_to_binary(to_iodata(Data)), [<<"\r\n">>, <<"\r">>, <<"\n">>], [
-        global
-    ]),
-    [[<<"data: ">>, L, <<"\n">>] || L <- Lines].
+    [[<<"data: ">>, L, <<"\n">>] || L <- lines(Data)].
+
+lines(Data) ->
+    binary:split(iolist_to_binary(to_iodata(Data)), [<<"\r\n">>, <<"\r">>, <<"\n">>], [global]).
 
 %% A line break in `event' or `id' would start another field; drop them.
 single_line(undefined) ->

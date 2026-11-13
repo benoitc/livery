@@ -65,15 +65,16 @@ left out.
 
 ## Keep idle connections alive
 
-To keep idle connections alive through proxies, emit a comment line
-periodically (a line beginning with `:`):
+To keep idle connections alive through proxies, send a comment every
+so often with `Emit({comment, Text})`. It goes out as a line that
+starts with `:`, which the client ignores:
 
 ```erlang
 loop(Emit) ->
     receive
         {event, E} -> Emit(E), loop(Emit)
     after 15_000 ->
-        Emit(<<":heartbeat">>),
+        Emit({comment, <<"heartbeat">>}),
         loop(Emit)
     end.
 ```

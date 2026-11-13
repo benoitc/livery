@@ -18,9 +18,10 @@ Config keys (all optional): `auto` (default `true`), `weak` (default
 `[200]`).
 
 Placement: put `livery_etag` OUTSIDE `livery_compress` (earlier in the
-stack list) so the ETag covers the bytes actually sent; otherwise the
-ETag is of the uncompressed body and you rely on `Vary: Accept-Encoding`
-(which `livery_compress` already sets).
+stack list) so the ETag is strong and covers the bytes actually sent.
+Placed inside, the ETag is computed from the uncompressed body, and
+`livery_compress` makes it weak on every compressed response (RFC 9110
+section 8.8.1).
 """.
 -behaviour(livery_middleware).
 

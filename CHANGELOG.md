@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it ends early. MCP already behaved this way, and both now share the
   same code. A2A now waits up to 60 seconds for each body chunk, as MCP
   does, instead of 30.
+- A compressed response kept the strong `ETag` of the uncompressed one,
+  so the gzip and the plain representation claimed to be the same bytes
+  (RFC 9110 section 8.8.1). Caches and clients that compare ETags
+  strictly could mix them up. `livery_compress` now makes that ETag weak
+  (`W/"v1"`); revalidation with `If-None-Match` keeps working.
 - A `livery_concurrency` slot taken behind `livery_timeout` was never
   given back when the deadline cut the request off, so after enough
   timeouts every request was refused with 503. Even without a timeout,

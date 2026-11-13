@@ -24,6 +24,12 @@ identity. A client that refuses unencoded content (`identity;q=0`, or
 `*;q=0` without `identity`) and accepts none of the codecs you have gets
 `406 Not Acceptable`.
 
+A compressed response with a strong `ETag` gets a weak one instead
+(`"v1"` becomes `W/"v1"`): the gzip bytes are not the bytes the tag was
+made for (RFC 9110 section 8.8.1). Put `livery_etag` before
+`livery_compress` in the stack if you want a strong ETag computed over
+the compressed bytes. See [Add HTTP caching](http-caching.md).
+
 ## Control what gets compressed
 
 Eligible responses are `{full, _}` bodies at least `min_size` bytes and

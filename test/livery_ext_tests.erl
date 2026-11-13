@@ -112,6 +112,17 @@ bearer_token_lowercase_scheme_test() ->
         livery_ext:bearer_token(req_with_auth(<<"BEARER tok">>))
     ).
 
+%% RFC 9110 section 11.1: the scheme name is case-insensitive.
+bearer_token_mixed_case_scheme_test() ->
+    ?assertEqual(
+        <<"tok">>,
+        livery_ext:bearer_token(req_with_auth(<<"bEaReR tok">>))
+    ).
+
+%% RFC 6750 section 2.1: a token has at least one character.
+bearer_token_empty_test() ->
+    ?assertEqual(undefined, livery_ext:bearer_token(req_with_auth(<<"Bearer ">>))).
+
 bearer_token_missing_test() ->
     ?assertEqual(undefined, livery_ext:bearer_token(req())).
 

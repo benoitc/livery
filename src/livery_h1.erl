@@ -3,16 +3,17 @@
 HTTP/1.1 adapter on top of the `h1` library.
 
 Starts an `h1` server bound to a Livery middleware stack and
-handler. For every inbound request the adapter:
+handler. `h1` runs the handler fun in a process of its own for every
+request and delivers that request's body and trailer events to it as
+`{h1_stream, StreamId, _}` messages. In that process the adapter:
 
 1. Builds a `#livery_req{}` from the method, path, and headers
    delivered by `h1`.
-2. Spawns a `livery_req_proc` worker under `livery_req_sup`.
-3. Spawns a small translator that turns `{h1, Conn, _}` body and
-   trailer events into the `{livery_body, Ref, _}` shape the
-   worker reads via `livery_body`.
-4. Registers the translator as the `h1` stream handler so the
-   engine never blocks on the worker.
+2. Starts a `livery_req_proc` worker through `livery_req_sup`.
+3. Turns the `{h1_stream, StreamId, _}` events into the
+   `{livery_body, Ref, _}` messages the worker reads via
+   `livery_body`, until the worker exits. The process is the
+   request's translator.
 
 Response emission goes through `livery:emit/3` and lands on the
 adapter callbacks (`send_headers/4`, `send_full/5`, `send_data/3`,

@@ -3,15 +3,18 @@
 HTTP/2 adapter on top of the `h2` library.
 
 Starts an `h2` server bound to a Livery middleware stack and
-handler. For every inbound request the adapter:
+handler. `h2` runs the handler fun in a process of its own for every
+request. In that process the adapter:
 
 1. Builds a `#livery_req{}` from the method, path, and headers
    delivered by `h2`.
-2. Spawns a `livery_req_proc` worker under `livery_req_sup`.
-3. Spawns a small translator process that turns `{h2, Conn, _}`
-   body and trailer events into the `{livery_body, Ref, _}`
-   shape the worker reads via `livery_body`.
-4. Registers the translator as the `h2` stream handler.
+2. Registers the process as the `h2` stream handler, so the body and
+   trailer events of the stream (and any that arrived earlier) come to
+   it.
+3. Starts a `livery_req_proc` worker through `livery_req_sup`.
+4. Turns the `{h2, Conn, _}` events into the `{livery_body, Ref, _}`
+   messages the worker reads via `livery_body`, until the worker
+   exits. The process is the request's translator.
 
 Response emission goes through `livery:emit/3` and lands on the
 adapter callbacks (`send_headers/4`, `send_data/3`,
@@ -424,56 +427,57 @@ dispatch_request(
     {RawPath, RawQuery} = split_query(Path),
     Stream = {Conn, StreamId, Alpn},
     Req = build_req(Stream, Method, RawPath, Headers, Reader, Transport),
-    %% The translator is the disconnect notifier. It is spawned before
-    %% the worker (so the req can carry its pid) and given the worker
-    %% pid afterwards via {worker, _}, breaking the dependency cycle.
-    Translator = spawn(fun() ->
-        translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody)
-    end),
+    %% This function runs in the process h2 spawned for the request; it
+    %% becomes the request's translator, as on H1.
     Req1 = Req#livery_req{
         raw_query = RawQuery,
-        notifier_pid = Translator,
+        notifier_pid = self(),
         disc_ref = DiscRef,
         config = Config
     },
-    case
-        livery_req_sup:start_request(#{
-            adapter => ?MODULE,
-            stream => Stream,
-            req => Req1,
-            stack => Stack,
-            handler => Handler
-        })
-    of
-        {ok, WorkerPid} ->
-            Translator ! {worker, WorkerPid},
-            case set_stream_handler(Conn, StreamId, Translator) of
-                ok ->
-                    ok;
-                {ok, _Drained} ->
-                    ok;
-                %% The client already went away (unknown stream, or the
-                %% connection process is shutting down); abandon the
-                %% request quietly. The worker's DOWN still balances the
-                %% in-flight count.
-                {error, _} ->
-                    exit(Translator, kill),
-                    exit(WorkerPid, kill),
-                    ok
-            end;
+    %% Register before the worker starts: h2 replays what already arrived
+    %% into this mailbox, in order. A stream that is already gone (the
+    %% client left) gets no worker.
+    case set_stream_handler(Conn, StreamId, self()) of
         {error, _} ->
-            exit(Translator, kill),
-            reject_overload(Stream)
-    end,
-    ok.
+            ok;
+        _Registered ->
+            Started = livery_req_sup:start_request(#{
+                adapter => ?MODULE,
+                stream => Stream,
+                req => Req1,
+                stack => Stack,
+                handler => Handler
+            }),
+            translate(Started, Stream, BodyRef, DiscRef, MaxBody)
+    end.
 
-%% Register the per-stream translator. Like the send callbacks, a
-%% connection that is already shutting down (client gone) exits the
-%% gen_statem:call; map it to `{error, closed}` so the caller abandons
-%% the request instead of crashing (which would error-log per disconnect).
-set_stream_handler(Conn, StreamId, Translator) ->
+-spec translate(
+    {ok, pid()} | {error, term()},
+    stream(),
+    reference(),
+    reference(),
+    non_neg_integer() | infinity
+) -> ok.
+translate({ok, WorkerPid}, {Conn, StreamId, _Alpn}, BodyRef, DiscRef, MaxBody) ->
+    %% Monitor the worker (normal completion or handoff) and the
+    %% connection (client disconnect while the handler is busy).
+    WMRef = erlang:monitor(process, WorkerPid),
+    CMRef = erlang:monitor(process, Conn),
+    translate_loop(
+        Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
+    );
+translate({error, _}, Stream, _BodyRef, _DiscRef, _MaxBody) ->
+    reject_overload(Stream).
+
+%% Register this process as the stream's handler. Like the send
+%% callbacks, a connection that is already shutting down (client gone)
+%% exits the gen_statem:call; map it to `{error, closed}` so the request
+%% is dropped quietly instead of crashing (which would error-log per
+%% disconnect).
+set_stream_handler(Conn, StreamId, Pid) ->
     closed_guard(fun() ->
-        h2:set_stream_handler(Conn, StreamId, Translator, #{drain_buffer => false})
+        h2:set_stream_handler(Conn, StreamId, Pid, #{drain_buffer => false})
     end).
 
 %% No worker slot available (concurrency cap reached): answer 503.
@@ -567,26 +571,6 @@ connect_pseudo_headers(Req, Protocol) ->
 %%====================================================================
 %% Translator: h2 messages -> livery_body protocol
 %%====================================================================
-
-%% Two-phase init: receive the worker pid, then monitor both the worker
-%% (for normal completion / handoff) and the connection (for client
-%% disconnect, which h2 does not fan out to stream handlers).
--spec translator_init(
-    h2:connection(),
-    h2:stream_id(),
-    reference(),
-    reference(),
-    non_neg_integer() | infinity
-) -> ok.
-translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody) ->
-    receive
-        {worker, WorkerPid} ->
-            WMRef = erlang:monitor(process, WorkerPid),
-            CMRef = erlang:monitor(process, Conn),
-            translate_loop(
-                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-            )
-    end.
 
 -spec translate_loop(
     h2:connection(),

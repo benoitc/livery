@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callbacks of `livery_adapter`, instead of a fixed list of Livery's own
   adapters. `accept_wt/4` takes the stream as its first argument, like
   `accept_ws/4`.
+- An HTTP/2 or HTTP/3 request now runs in one process fewer: the adapter
+  works in the process the wire library already starts for the request,
+  as HTTP/1.1 does.
 
 ### Deprecated
 
@@ -41,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (RFC 9110 section 8.8.1). Caches and clients that compare ETags
   strictly could mix them up. `livery_compress` now makes that ETag weak
   (`W/"v1"`); revalidation with `If-None-Match` keeps working.
+- An HTTP/3 request cancelled by the client right after its headers
+  still started its handler, which then waited for a body that would
+  never come and held its place in the request limit until it gave up.
+  Such a request is now dropped before the handler starts.
 - A `livery_concurrency` slot taken behind `livery_timeout` was never
   given back when the deadline cut the request off, so after enough
   timeouts every request was refused with 503. Even without a timeout,

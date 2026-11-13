@@ -3,18 +3,20 @@
 HTTP/3 adapter on top of the `quic` library's `quic_h3` subsystem.
 
 Starts a `quic_h3` server bound to a Livery middleware stack and
-handler. For every inbound request the adapter mirrors `livery_h2`'s
-pattern:
+handler. `quic_h3` runs the handler fun in a process of its own for
+every request. In that process the adapter, as `livery_h1` and
+`livery_h2` do:
 
 1. Builds a `#livery_req{}` from the method, path, and headers
    delivered by `quic_h3`.
-2. Spawns a `livery_req_proc` worker under `livery_req_sup`.
-3. Spawns a translator process that turns
-   `{quic_h3, Conn, _}` body and trailer events into the
-   `{livery_body, Ref, _}` shape the worker reads via
-   `livery_body`.
-4. Registers the translator as the stream handler via
-   `quic_h3:set_stream_handler/3`.
+2. Registers the process as the stream handler
+   (`quic_h3:set_stream_handler/4`), so the stream's body and trailer
+   events, and any that arrived earlier, come to it. A stream already
+   gone gets no worker.
+3. Starts a `livery_req_proc` worker through `livery_req_sup`.
+4. Turns the `{quic_h3, Conn, _}` events into the
+   `{livery_body, Ref, _}` messages the worker reads via
+   `livery_body`, until the worker exits.
 
 Response emission goes through `livery:emit/3` and lands on the
 adapter callbacks, which call into `quic_h3:send_response/4`,
@@ -490,38 +492,32 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
     Reader = livery_body:new(BodyRef),
     {RawPath, RawQuery} = split_query(Path),
     Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
-    %% Translator is the disconnect notifier; spawned before the worker
-    %% so the req carries its pid, and given the worker pid afterwards.
-    Translator = spawn(fun() ->
-        translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody)
-    end),
+    %% This function runs in the process quic_h3 spawned for the
+    %% request; it becomes the request's translator, as on H1 and H2.
     Req1 = Req#livery_req{
         raw_query = RawQuery,
-        notifier_pid = Translator,
+        notifier_pid = self(),
         disc_ref = DiscRef,
         config = Config
     },
-    case
-        livery_req_sup:start_request(#{
-            adapter => ?MODULE,
-            stream => {Conn, StreamId},
-            req => Req1,
-            stack => Stack,
-            handler => Handler
-        })
-    of
-        {ok, WorkerPid} ->
-            Translator ! {worker, WorkerPid},
-            _ = quic_h3:set_stream_handler(
-                Conn,
-                StreamId,
-                Translator,
-                #{drain_buffer => false}
-            ),
-            ok;
+    %% Register before the worker starts: quic_h3 replays what already
+    %% arrived into this mailbox, in order. A stream that is already gone
+    %% (the client left) gets no worker.
+    Registered = closed_guard(fun() ->
+        quic_h3:set_stream_handler(Conn, StreamId, self(), #{drain_buffer => false})
+    end),
+    case Registered of
         {error, _} ->
-            exit(Translator, kill),
-            reject_overload({Conn, StreamId})
+            ok;
+        _ ->
+            Started = livery_req_sup:start_request(#{
+                adapter => ?MODULE,
+                stream => {Conn, StreamId},
+                req => Req1,
+                stack => Stack,
+                handler => Handler
+            }),
+            translate(Started, {Conn, StreamId}, BodyRef, DiscRef, MaxBody)
     end.
 
 %% No worker slot available (concurrency cap reached): answer 503.
@@ -572,27 +568,26 @@ split_query(Path) ->
 %% Translator: quic_h3 messages -> livery_body protocol
 %%====================================================================
 
-%% Two-phase init: receive the worker pid, then monitor the worker and
-%% the connection. quic_h3 routes a single-stream reset to the
-%% connection owner (not the stream handler), so the reliable client
-%% disconnect signal here is the connection 'DOWN'. A single-stream RST
-%% without a connection close is not observable in the current quic_h3.
--spec translator_init(
-    pid(),
-    non_neg_integer(),
+%% Monitor the worker and the connection. quic_h3 routes a single-stream
+%% reset to the connection owner (not the stream handler), so the
+%% reliable client disconnect signal here is the connection 'DOWN'. A
+%% single-stream RST without a connection close is not observable in the
+%% current quic_h3.
+-spec translate(
+    {ok, pid()} | {error, term()},
+    stream(),
     reference(),
     reference(),
     non_neg_integer() | infinity
 ) -> ok.
-translator_init(Conn, StreamId, BodyRef, DiscRef, MaxBody) ->
-    receive
-        {worker, WorkerPid} ->
-            WMRef = erlang:monitor(process, WorkerPid),
-            CMRef = erlang:monitor(process, Conn),
-            translate_loop(
-                Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-            )
-    end.
+translate({ok, WorkerPid}, {Conn, StreamId}, BodyRef, DiscRef, MaxBody) ->
+    WMRef = erlang:monitor(process, WorkerPid),
+    CMRef = erlang:monitor(process, Conn),
+    translate_loop(
+        Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
+    );
+translate({error, _}, Stream, _BodyRef, _DiscRef, _MaxBody) ->
+    reject_overload(Stream).
 
 -spec translate_loop(
     pid(),

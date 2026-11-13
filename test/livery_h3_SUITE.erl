@@ -30,6 +30,7 @@
     error_500_on_crash/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
+    cancelled_requests_leave_no_worker/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     scheme_and_authority_on_request/1,
@@ -58,6 +59,7 @@ all() ->
         error_500_on_crash,
         response_with_trailers,
         cancel_on_connection_close,
+        cancelled_requests_leave_no_worker,
         send_to_gone_client_is_closed,
         peer_on_request,
         scheme_and_authority_on_request,
@@ -145,6 +147,42 @@ inform_unsupported(Config) ->
     {Status, _Headers, Body, _} = get(Config, <<"/">>),
     ?assertEqual(200, Status),
     ?assertEqual(<<"unsupported">>, Body).
+
+%% Streams the client cancels right after their HEADERS must not leave
+%% a request worker behind, whether the cancel lands before or after
+%% the stream is registered.
+cancelled_requests_leave_no_worker(Config) ->
+    Before = livery_req_sup:in_flight(),
+    {ok, Conn} = quic_h3:connect(
+        <<"localhost">>, ?config(port, Config), #{verify => verify_none, sync => true}
+    ),
+    Headers = [
+        {<<":method">>, <<"POST">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"https">>},
+        {<<":authority">>, <<"localhost">>}
+    ],
+    [
+        begin
+            {ok, StreamId} = quic_h3:request(Conn, Headers, #{end_stream => false}),
+            _ = quic_h3:cancel(Conn, StreamId)
+        end
+     || _ <- lists:seq(1, 50)
+    ],
+    await_in_flight(Before, 2000),
+    catch quic_h3:close(Conn).
+
+%% Wait until no request worker is left, or fail after Ms.
+await_in_flight(Expected, Ms) when Ms =< 0 ->
+    ?assertEqual(Expected, livery_req_sup:in_flight());
+await_in_flight(Expected, Ms) ->
+    case livery_req_sup:in_flight() of
+        Expected ->
+            ok;
+        _ ->
+            timer:sleep(20),
+            await_in_flight(Expected, Ms - 20)
+    end.
 
 text_response(Config) ->
     {Status, Headers, Body, _} = get(Config, <<"/">>),
@@ -288,6 +326,12 @@ handler_for(peer_on_request) ->
                     iolist_to_binary(io_lib:format("~p", [Other]))
             end,
         livery_resp:text(200, Body)
+    end;
+handler_for(cancelled_requests_leave_no_worker) ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        _ = livery_body:read_all(Reader, 5000),
+        livery_resp:text(200, <<"read">>)
     end;
 handler_for(inform_unsupported) ->
     fun(R) ->

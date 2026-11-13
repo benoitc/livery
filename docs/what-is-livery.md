@@ -73,7 +73,7 @@ Livery puts that layer in one package.
 
 - **Open source** under the Apache 2.0 license, which allows commercial
   use. It is published on hex.pm, Erlang's package registry.
-- **Young.** The current version is 0.12. The design is settled and
+- **Young.** The current version is 0.13. The design is settled and
   tested on every protocol, but the programming interface can still
   change between versions; each change is listed in the CHANGELOG.
 - **Tested against itself.** One test suite runs the same checks over

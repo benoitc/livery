@@ -6,8 +6,8 @@ Security fixes go into the latest minor release on the `main` branch.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.12.x  | yes       |
-| < 0.12  | no        |
+| 0.13.x  | yes       |
+| < 0.13  | no        |
 
 ## What is a security issue
 

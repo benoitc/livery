@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-13
+
+Brings the runtime back in line with Livery's founding rules, which
+fixed a set of bugs on the way: a slow reader now holds its client
+back on every protocol, `livery_timeout` keeps the request's context
+and no longer leaks concurrency slots, compressed responses get a weak
+ETag, and `livery_ext:json/1` works over a real connection. It moves to
+h1 0.11.0, h2 0.17.0, quic 2.7.0, webtransport 0.5.8 and hackney 4.11.1,
+and the docs are rewritten in plain English. Before upgrading, check:
+`livery_ext:json/1` no longer returns `not_buffered`, and an adapter's
+`accept_wt/4` now takes the stream as its first argument.
+
 ### Added
 
 - A Server-Sent Events producer can send a comment with

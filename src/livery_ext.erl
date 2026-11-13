@@ -4,17 +4,16 @@ Request extractors.
 
 Axum-style helpers that pull typed values out of a request. Each
 extractor either returns the value directly or a
-`{ok, _} | {error, _}` result. Extractors are pure functions over
-`#livery_req{}`; they never block on the wire. Body-shaped
-extractors require the body to have been read into a buffer first
-(the per-request process does that before invoking the handler
-when the route is configured for buffered intake).
+`{ok, _} | {error, _}` result. `json/1,2` and `read_form/1,2` read a
+streamed body to the end (bounded in size and time) before decoding it;
+`form/1` decodes only a body that is already buffered.
 """.
 
 -include("livery.hrl").
 
 -export([
     json/1,
+    json/2,
     form/1,
     read_form/1,
     read_form/2,
@@ -30,16 +29,12 @@ when the route is configured for buffered intake).
     session/2
 ]).
 
--export_type([json_error/0, form_error/0, read_form_error/0]).
+-export_type([json_error/0, form_error/0, read_form_error/0, read_error/0]).
 
--type json_error() :: no_body | invalid_json | not_buffered.
+-type json_error() :: no_body | invalid_json | read_error().
 -type form_error() :: no_body | not_buffered.
--type read_form_error() ::
-    not_form
-    | no_body
-    | {limit, max_size}
-    | {client_reset, term()}
-    | timeout.
+-type read_form_error() :: not_form | no_body | read_error().
+-type read_error() :: {limit, max_size} | {client_reset, term()} | timeout.
 
 %%====================================================================
 %% Body extractors
@@ -48,21 +43,33 @@ when the route is configured for buffered intake).
 -doc """
 Decode the request body as JSON using the OTP `json` module.
 
-The body must have been buffered. Streaming bodies must be drained
-via `livery_body:read_all/1` before calling this.
+A streamed body, which is what the H1, H2 and H3 adapters hand over, is
+read to the end first: at most `max_size` bytes (default 1 MiB), waiting
+at most `timeout` ms (default 5000) for each chunk. Use `json/2` to
+change either.
 """.
 -spec json(livery_req:req()) -> {ok, term()} | {error, json_error()}.
-json(#livery_req{body = empty}) ->
-    {error, no_body};
-json(#livery_req{body = {buffered, IoData}}) ->
-    Bin = iolist_to_binary(IoData),
+json(Req) ->
+    json(Req, #{}).
+
+-doc "`json/1` with `#{max_size => Bytes, timeout => Ms}` options.".
+-spec json(livery_req:req(), map()) -> {ok, term()} | {error, json_error()}.
+json(Req, Opts) ->
+    MaxSize = maps:get(max_size, Opts, 1048576),
+    Timeout = maps:get(timeout, Opts, 5000),
+    case read_body(livery_req:body(Req), MaxSize, Timeout) of
+        {ok, <<>>} -> {error, no_body};
+        {ok, Bin} -> decode_json(Bin);
+        {error, Reason} -> {error, Reason}
+    end.
+
+-spec decode_json(binary()) -> {ok, term()} | {error, invalid_json}.
+decode_json(Bin) ->
     try
         {ok, json:decode(Bin)}
     catch
         _:_ -> {error, invalid_json}
-    end;
-json(#livery_req{body = {stream, _}}) ->
-    {error, not_buffered}.
+    end.
 
 -doc """
 Decode an `application/x-www-form-urlencoded` body into a list of
@@ -111,17 +118,28 @@ read_form(Req, Opts) ->
 ) -> {ok, [{binary(), binary()}]} | {error, read_form_error()}.
 read_form_body(empty, _MaxSize, _Timeout) ->
     {error, no_body};
-read_form_body({buffered, IoData}, MaxSize, _Timeout) ->
-    Bin = iolist_to_binary(IoData),
-    case byte_size(Bin) > MaxSize of
-        true -> {error, {limit, max_size}};
-        false -> {ok, decode_form(Bin)}
-    end;
-read_form_body({stream, Reader}, MaxSize, Timeout) ->
-    case drain(Reader, Timeout, MaxSize, []) of
+read_form_body(Body, MaxSize, Timeout) ->
+    case read_body(Body, MaxSize, Timeout) of
         {ok, Bin} -> {ok, decode_form(Bin)};
         {error, Reason} -> {error, Reason}
     end.
+
+%% The whole body as one binary, within `MaxSize' bytes.
+-spec read_body(
+    empty | {buffered, iodata()} | {stream, term()},
+    pos_integer(),
+    timeout()
+) -> {ok, binary()} | {error, read_error()}.
+read_body(empty, _MaxSize, _Timeout) ->
+    {ok, <<>>};
+read_body({buffered, IoData}, MaxSize, _Timeout) ->
+    Bin = iolist_to_binary(IoData),
+    case byte_size(Bin) > MaxSize of
+        true -> {error, {limit, max_size}};
+        false -> {ok, Bin}
+    end;
+read_body({stream, Reader}, MaxSize, Timeout) ->
+    drain(Reader, Timeout, MaxSize, []).
 
 -spec is_urlencoded(livery_req:req()) -> boolean().
 is_urlencoded(Req) ->
@@ -136,8 +154,8 @@ normalize_ct(Value) ->
     [Main | _] = binary:split(Lower, <<";">>),
     iolist_to_binary(string:trim(Main)).
 
--spec drain(term(), timeout(), pos_integer(), [iodata()]) ->
-    {ok, binary()} | {error, read_form_error()}.
+-spec drain(livery_body:reader(), timeout(), pos_integer(), [iodata()]) ->
+    {ok, binary()} | {error, read_error()}.
 drain(Reader, Timeout, MaxSize, Acc) ->
     case livery_body:read(Reader, Timeout) of
         {ok, Chunk, Reader1} ->
@@ -148,6 +166,8 @@ drain(Reader, Timeout, MaxSize, Acc) ->
             end;
         {done, _Reader1} ->
             {ok, iolist_to_binary(lists:reverse(Acc))};
+        {error, body_too_large, _Reader1} ->
+            {error, {limit, max_size}};
         {error, Reason, _Reader1} ->
             {error, Reason}
     end.

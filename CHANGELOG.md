@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   although the scheme name is case-insensitive (RFC 9110 section 11.1).
   It now accepts any case, like the bearer middleware already did, and
   treats an empty token as no token.
+- `livery_ext:json/1` returned `{error, not_buffered}` for every request
+  over HTTP/1.1, HTTP/2 and HTTP/3, because those adapters hand the body
+  over as a stream; only the test adapter's buffered bodies worked. It
+  now reads the body to the end first, up to 1 MiB and 5 seconds per
+  chunk, and `json/2` changes both. It no longer returns `not_buffered`;
+  a body that is too large, stalls or is cut off gives
+  `{limit, max_size}`, `timeout` or `{client_reset, Reason}`.
 - Over HTTP/1.1, a response with no body (204, 304, or an answer to
   HEAD) could go out with chunked framing and a stray end-of-body
   marker, which broke the next response on a kept-alive connection;

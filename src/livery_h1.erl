@@ -526,6 +526,9 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
             key => StreamId,
             classify => fun classify/1,
             conn => Conn,
+            %% erlang_h1 has no receive flow control yet (no h1:consume/3),
+            %% so a slow handler relies on TCP buffers alone.
+            credit => none,
             %% Nothing to tell the client: h1's early-response drain reads
             %% and discards the rest of the body before closing, so the
             %% client reads the response instead of a reset.

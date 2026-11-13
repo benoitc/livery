@@ -277,6 +277,7 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
             RespHeaders = drop_status(ws_h3_upgrade:response_headers(Info)) ++ ExtHeaders,
             case quic_h3:send_response(Conn, StreamId, 200, RespHeaders) of
                 ok ->
+                    ok = hand_off(Conn, StreamId, Req),
                     WsReq = #{
                         method => <<"CONNECT">>,
                         path => livery_req:path(Req),
@@ -300,6 +301,25 @@ accept_ws({Conn, StreamId}, Req, HandlerMod, Opts) ->
 
 drop_status(Headers) ->
     [{N, V} || {N, V} <- Headers, N =/= <<":status">>].
+
+%% Register `Pid' as the stream's handler, with `manual' or `auto' flow
+%% control. A connection already gone reads as `{error, closed}'.
+set_stream_handler(Conn, StreamId, Pid, Flow) ->
+    closed_guard(fun() ->
+        quic_h3:set_stream_handler(Conn, StreamId, Pid, #{
+            drain_buffer => false, flow_control => Flow
+        })
+    end).
+
+%% Before a WebSocket or WebTransport session takes the stream: its
+%% translator lets it go, and the stream returns to `auto' flow control,
+%% since the session reads it without calling quic_h3:consume/3. quic_h3
+%% keeps a stream's mode when the session registers itself.
+-spec hand_off(pid(), non_neg_integer(), livery_req:req()) -> ok.
+hand_off(Conn, StreamId, #livery_req{notifier_pid = Translator} = Req) ->
+    ok = livery_translator:release(Req),
+    _ = set_stream_handler(Conn, StreamId, Translator, auto),
+    ok.
 
 %% The h3 request does not carry the peer, but the underlying QUIC
 %% connection knows it. Reach it via quic_h3:get_quic_conn/1. A
@@ -325,6 +345,7 @@ with `transport => h3`.
 -spec accept_wt(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_wt({Conn, StreamId}, Req, HandlerMod, Opts) ->
+    ok = hand_off(Conn, StreamId, Req),
     Headers = connect_pseudo_headers(Req, wt_protocol(Req)),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h3,
@@ -476,9 +497,7 @@ make_handler_fun(Stack, Handler, MaxBody, Config) ->
 serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
     {RawPath, RawQuery} = livery_translator:split_query(Path),
     Req = build_req(Conn, StreamId, Method, RawPath, Headers),
-    Registered = closed_guard(fun() ->
-        quic_h3:set_stream_handler(Conn, StreamId, self(), #{drain_buffer => false})
-    end),
+    Registered = set_stream_handler(Conn, StreamId, self(), manual),
     case Registered of
         {error, _} ->
             ok;
@@ -492,6 +511,11 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
                     key => Conn,
                     classify => fun(Event) -> classify(StreamId, Event) end,
                     conn => Conn,
+                    %% Flow control: credit is granted only as the handler
+                    %% reads, so a slow handler holds the client back.
+                    credit => fun(Bytes) ->
+                        closed_guard(fun() -> quic_h3:consume(Conn, StreamId, Bytes) end)
+                    end,
                     %% The response is out; STOP_SENDING tells the client to
                     %% stop sending the rest (RFC 9114 Section 4.1.1). The
                     %% client answers with RESET_STREAM, which makes quic_h3

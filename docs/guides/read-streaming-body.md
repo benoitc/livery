@@ -52,12 +52,14 @@ livery_resp:text(401, <<"nope">>).
 Combine with `livery_body_limit` (buffered only today) or call
 `livery_body:read/2` with a maximum byte count tracked yourself.
 
-## Signal backpressure
+## Backpressure
 
-`livery_body:signal_demand(R, N)` hints the adapter that the handler
-is ready for `N` more bytes. The H1/H2/H3 adapters translate this into
-engine-level window updates. This is a no-op for the test adapter; the
-H1 adapter wires it to `h1`'s read size.
+Nothing to do: each chunk `livery_body:read/2` returns gives its flow
+control credit back, so on HTTP/2 and HTTP/3 a client sends only one
+flow window ahead of what you have read. Read at the pace you can
+process. HTTP/1.1 relies on TCP buffers for now.
+`livery_body:signal_demand/2` is deprecated: `read/2` already does its
+job.
 
 ## See also
 

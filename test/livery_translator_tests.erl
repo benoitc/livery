@@ -13,6 +13,9 @@ start(Max) ->
     start(Max, none).
 
 start(Max, OnAbandoned) ->
+    start(Max, OnAbandoned, none).
+
+start(Max, OnAbandoned, Credit) ->
     Worker = self(),
     Conn = spawn(fun() ->
         receive
@@ -27,6 +30,7 @@ start(Max, OnAbandoned) ->
         key => Key,
         classify => fun classify/1,
         conn => Conn,
+        credit => Credit,
         on_abandoned => OnAbandoned
     },
     Pid = spawn(fun() ->
@@ -186,3 +190,70 @@ other_key_stays_in_the_mailbox_test() ->
 split_query_test() ->
     ?assertEqual({<<"/a">>, <<"b=1">>}, livery_translator:split_query(<<"/a?b=1">>)),
     ?assertEqual({<<"/a">>, <<>>}, livery_translator:split_query(<<"/a">>)).
+
+%% Demand from the reader becomes credit for the wire library, until the
+%% body goes over the limit.
+demand_becomes_credit_while_accepting_test() ->
+    Self = self(),
+    #{pid := Pid, body := Ref} = T = start(4, none, fun(N) -> Self ! {credit, N} end),
+    wire(T, {chunk, <<"abc">>, false}),
+    Pid ! {livery_body_demand, Ref, 3},
+    ?assertEqual(
+        3,
+        receive
+            {credit, N} -> N
+        after 500 -> none
+        end
+    ),
+    wire(T, {chunk, <<"defg">>, false}),
+    ?assertEqual([{data, <<"abc">>}, {error, body_too_large}], body_msgs(T)),
+    Pid ! {livery_body_demand, Ref, 4},
+    ?assertEqual(
+        none,
+        receive
+            {credit, _} -> got
+        after 200 -> none
+        end
+    ).
+
+%% A body the handler never read to the end: once the worker is done,
+%% the client is told to stop sending it.
+on_abandoned_runs_for_an_unread_body_test() ->
+    Self = self(),
+    as_worker(fun() ->
+        T = start(infinity, fun() -> Self ! abandoned end),
+        wire(T, {chunk, <<"part">>, false}),
+        body_msgs(T),
+        ok
+    end),
+    receive
+        abandoned -> ok
+    after 1000 -> error(on_abandoned_not_run)
+    end.
+
+on_abandoned_skipped_after_reset_test() ->
+    Self = self(),
+    as_worker(fun() ->
+        T = start(infinity, fun() -> Self ! abandoned end),
+        wire(T, {reset, cancel}),
+        body_msgs(T),
+        ok
+    end),
+    receive
+        abandoned -> error(on_abandoned_ran)
+    after 200 -> ok
+    end.
+
+%% A stream handed to a WebSocket or WebTransport session is not the
+%% translator's to stop any more.
+on_abandoned_skipped_after_release_test() ->
+    Self = self(),
+    as_worker(fun() ->
+        #{pid := Pid, disc := Disc} = start(infinity, fun() -> Self ! abandoned end),
+        Pid ! {livery_released, Disc},
+        ok
+    end),
+    receive
+        abandoned -> error(on_abandoned_ran)
+    after 200 -> ok
+    end.

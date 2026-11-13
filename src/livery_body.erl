@@ -15,10 +15,16 @@ stream reference and tracks terminal state. `read/2` returns the
 next chunk, blocking on the mailbox up to a caller-supplied
 timeout. `read_all/1,2` drains the entire body.
 
-Backpressure is per-chunk: the handler reads one chunk per call,
-so the engine can size its windows accordingly. Real demand
-signaling lands with the H1 adapter; this module exposes
-`signal_demand/2` as the hook.
+## Backpressure
+
+A reader built with a source (the adapter's translator) gives credit
+back for every chunk `read/2` hands out, by sending
+`{livery_body_demand, Ref, Bytes}` to the source. The adapter turns it
+into its wire library's flow control, so a handler that reads slowly
+holds the client back to one flow window instead of letting the body
+pile up in its mailbox. Nothing is needed in handler code. HTTP/2 and
+HTTP/3 do this; HTTP/1.1 relies on TCP buffers until `erlang_h1` offers
+the same.
 """.
 
 -export([
@@ -44,6 +50,8 @@ signaling lands with the H1 adapter; this module exposes
 -define(DEFAULT_MAX_BODY, 16 * 1024 * 1024).
 
 -export_type([reader/0, read_result/0, error_reason/0]).
+
+-deprecated([{signal_demand, 2, "read/2 gives credit back for every chunk it hands out"}]).
 
 -record(reader, {
     ref :: reference(),
@@ -125,6 +133,7 @@ read(#reader{error = E} = R, _Timeout) when E =/= undefined ->
 read(#reader{ref = Ref} = R, Timeout) ->
     receive
         {livery_body, Ref, {data, Chunk}} ->
+            ok = credit(R, Chunk),
             counted(Chunk, R);
         {livery_body, Ref, eof} ->
             {done, R#reader{ended = true}};
@@ -138,6 +147,14 @@ read(#reader{ref = Ref} = R, Timeout) ->
     after Timeout ->
         {error, timeout, R}
     end.
+
+%% Give back the flow-control credit for a chunk the handler now holds.
+-spec credit(reader(), iodata()) -> ok.
+credit(#reader{source = Pid, ref = Ref}, Chunk) when is_pid(Pid) ->
+    Pid ! {livery_body_demand, Ref, iolist_size(Chunk)},
+    ok;
+credit(#reader{}, _Chunk) ->
+    ok.
 
 counted(Chunk, #reader{max = Max, seen = Seen} = R) ->
     case Seen + iolist_size(Chunk) of
@@ -209,11 +226,12 @@ discard(R, Timeout) ->
 %%====================================================================
 
 -doc """
-Hint to the adapter that the handler is ready for more bytes.
+Deprecated: `read/2` already gives credit back for every chunk it
+hands out (see the module docs).
 
-A no-op when no source pid is registered. Real adapters will
-translate this into engine-level demand (h1 read_size, h2 flow
-control, h3 receive credit).
+Sends `N` bytes of credit to the reader's source. The wire libraries
+never grant more than was received, so a call is harmless, but it is
+never needed.
 """.
 -spec signal_demand(reader(), non_neg_integer()) -> ok.
 signal_demand(#reader{source = undefined}, _N) ->

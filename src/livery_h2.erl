@@ -246,6 +246,7 @@ accept_ws({Conn, StreamId, _Alpn}, Req, HandlerMod, Opts) ->
             RespHeaders = drop_status(ws_h2_upgrade:response_headers(Info)) ++ ExtHeaders,
             case h2:send_response(Conn, StreamId, 200, RespHeaders) of
                 ok ->
+                    ok = hand_off(Conn, StreamId, Req),
                     WsReq = #{
                         method => <<"CONNECT">>,
                         path => livery_req:path(Req),
@@ -299,6 +300,7 @@ Reconstructs the CONNECT pseudo-headers from the request value
 -spec accept_wt(stream(), livery_req:req(), module(), term()) ->
     {ok, pid()} | {error, term()}.
 accept_wt({Conn, StreamId, _Alpn}, Req, HandlerMod, Opts) ->
+    ok = hand_off(Conn, StreamId, Req),
     Headers = connect_pseudo_headers(Req, <<"webtransport">>),
     webtransport:accept(Conn, StreamId, Headers, Opts#{
         transport => h2,
@@ -413,7 +415,7 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
     {RawPath, RawQuery} = livery_translator:split_query(Path),
     Stream = {Conn, StreamId, Alpn},
     Req = build_req(Stream, Method, RawPath, Headers, Transport),
-    case set_stream_handler(Conn, StreamId, self()) of
+    case set_stream_handler(Conn, StreamId, self(), manual) of
         {error, _} ->
             ok;
         _Registered ->
@@ -426,6 +428,11 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
                     key => Conn,
                     classify => fun(Event) -> classify(StreamId, Event) end,
                     conn => Conn,
+                    %% Flow control: the window opens only as the handler
+                    %% reads, so a slow handler holds the client back.
+                    credit => fun(Bytes) ->
+                        closed_guard(fun() -> h2:consume(Conn, StreamId, Bytes) end)
+                    end,
                     %% The response is out; RST_STREAM(NO_ERROR) tells the
                     %% client to stop sending the rest (RFC 9113 Section 8.1).
                     on_abandoned => fun() -> h2:cancel(Conn, StreamId, no_error) end
@@ -442,15 +449,25 @@ classify(StreamId, {trailers, StreamId, Trailers}) -> {trailers, Trailers};
 classify(StreamId, {stream_reset, StreamId, Reason}) -> {reset, Reason};
 classify(_StreamId, _Event) -> ignore.
 
-%% Register this process as the stream's handler. Like the send
-%% callbacks, a connection that is already shutting down (client gone)
-%% exits the gen_statem:call; map it to `{error, closed}` so the request
-%% is dropped quietly instead of crashing (which would error-log per
-%% disconnect).
-set_stream_handler(Conn, StreamId, Pid) ->
+%% Register `Pid' as the stream's handler, with `manual' or `auto' flow
+%% control. Like the send callbacks, a connection that is already
+%% shutting down (client gone) exits the gen_statem:call; map it to
+%% `{error, closed}` so the request is dropped quietly instead of
+%% crashing (which would error-log per disconnect).
+set_stream_handler(Conn, StreamId, Pid, Flow) ->
     closed_guard(fun() ->
-        h2:set_stream_handler(Conn, StreamId, Pid, #{drain_buffer => false})
+        h2:set_stream_handler(Conn, StreamId, Pid, #{drain_buffer => false, flow_control => Flow})
     end).
+
+%% Before a WebSocket or WebTransport session takes the stream: its
+%% translator lets it go, and the stream returns to `auto' flow control,
+%% since the session reads it without calling h2:consume/3. h2 keeps a
+%% stream's mode when the session registers itself.
+-spec hand_off(h2:connection(), h2:stream_id(), livery_req:req()) -> ok.
+hand_off(Conn, StreamId, #livery_req{notifier_pid = Translator} = Req) ->
+    ok = livery_translator:release(Req),
+    _ = set_stream_handler(Conn, StreamId, Translator, auto),
+    ok.
 
 -spec build_req(
     stream(),

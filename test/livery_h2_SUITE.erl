@@ -30,6 +30,7 @@
     error_500_on_crash/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
+    cancelled_requests_leave_no_worker/1,
     send_to_gone_client_is_closed/1,
     peer_on_request/1,
     early_hints_interim/1,
@@ -54,6 +55,7 @@ all() ->
         error_500_on_crash,
         response_with_trailers,
         cancel_on_connection_close,
+        cancelled_requests_leave_no_worker,
         send_to_gone_client_is_closed,
         peer_on_request,
         early_hints_interim,
@@ -211,6 +213,12 @@ handler_for(peer_on_request) ->
             end,
         livery_resp:text(200, Body)
     end;
+handler_for(cancelled_requests_leave_no_worker) ->
+    fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        _ = livery_body:read_all(Reader, 5000),
+        livery_resp:text(200, <<"read">>)
+    end;
 handler_for(early_hints_interim) ->
     fun(R) ->
         ok = livery_req:inform(
@@ -319,6 +327,41 @@ cancel_on_connection_close(Config) ->
     receive
         cancelled -> ok
     after 5000 -> ct:fail(cancel_callback_not_run)
+    end.
+
+%% Streams the client cancels right after their HEADERS must not leave
+%% a request worker behind, whether the cancel lands before or after
+%% the stream is registered.
+cancelled_requests_leave_no_worker(Config) ->
+    Before = livery_req_sup:in_flight(),
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    Headers = [
+        {<<":method">>, <<"POST">>},
+        {<<":path">>, <<"/">>},
+        {<<":scheme">>, <<"http">>},
+        {<<":authority">>, <<"127.0.0.1">>}
+    ],
+    [
+        begin
+            {ok, StreamId} = h2:request(Conn, Headers, #{end_stream => false}),
+            _ = h2:cancel(Conn, StreamId)
+        end
+     || _ <- lists:seq(1, 50)
+    ],
+    await_in_flight(Before, 2000),
+    h2:close(Conn).
+
+%% Wait until no request worker is left, or fail after Ms.
+await_in_flight(Expected, Ms) when Ms =< 0 ->
+    ?assertEqual(Expected, livery_req_sup:in_flight());
+await_in_flight(Expected, Ms) ->
+    case livery_req_sup:in_flight() of
+        Expected ->
+            ok;
+        _ ->
+            timer:sleep(20),
+            await_in_flight(Expected, Ms - 20)
     end.
 
 %% A send to a connection whose client has gone away must report

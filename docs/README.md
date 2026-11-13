@@ -15,6 +15,7 @@ exact API.
 
 | If you ... | Read |
 |---|---|
+| Want to know what Livery is, without code | [What is Livery](what-is-livery.md) |
 | Want a one-paragraph summary | [Overview](overview.md) |
 | Want a hello-world service in 5 minutes | [Quickstart](quickstart.md) |
 | Want to learn Livery from scratch | [Tutorials](#tutorials) |

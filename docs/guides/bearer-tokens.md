@@ -16,10 +16,10 @@ end.
 `livery_ext:bearer_token/1`:
 
 - Reads the `Authorization` header (case-insensitive).
-- Accepts `Bearer `, `bearer `, and `BEARER ` prefixes (RFC 6750
-  section 2.1 makes the scheme case-insensitive).
-- Returns the token bytes after the prefix, or `undefined` when the
-  header is absent or uses another scheme.
+- Accepts the `Bearer` scheme in any case (`Bearer`, `bearer`,
+  `bEaReR`), as RFC 9110 section 11.1 says.
+- Returns the token after the scheme, or `undefined` when the header
+  is absent, uses another scheme, or has an empty token.
 
 ## Use it inside a middleware
 

@@ -182,19 +182,15 @@ header(Name, Req) ->
 -doc """
 Extract a bearer token from the `Authorization` header.
 
-Accepts `Bearer `, `bearer `, and `BEARER ` prefixes (RFC 6750
-§2.1 makes the scheme case-insensitive).
+The scheme name is matched in any case (`Bearer`, `bearer`, `bEaReR`),
+as RFC 9110 section 11.1 says. Returns `undefined` for no header,
+another scheme, or an empty token.
 """.
 -spec bearer_token(livery_req:req()) -> binary() | undefined.
 bearer_token(Req) ->
-    case livery_req:header(<<"authorization">>, Req) of
-        undefined ->
-            undefined;
-        Value ->
-            case parse_bearer(Value) of
-                {ok, Token} -> Token;
-                error -> undefined
-            end
+    case auth_token(Req) of
+        {bearer, Token} -> Token;
+        _ -> undefined
     end.
 
 -doc """
@@ -221,12 +217,6 @@ auth_token(Req) ->
                     undefined
             end
     end.
-
--spec parse_bearer(binary()) -> {ok, binary()} | error.
-parse_bearer(<<"Bearer ", T/binary>>) -> {ok, T};
-parse_bearer(<<"bearer ", T/binary>>) -> {ok, T};
-parse_bearer(<<"BEARER ", T/binary>>) -> {ok, T};
-parse_bearer(_) -> error.
 
 -doc """
 Return the value of a request cookie by name.

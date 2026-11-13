@@ -236,11 +236,13 @@ reset({Conn, StreamId}, _Reason) ->
     _ = quic_h3:cancel(Conn, StreamId),
     ok.
 
-%% Interim (1xx) responses are not surfaced by the h3 engine yet.
+%% quic_h3 sends a 1xx HEADERS frame at once and keeps the stream open
+%% for the final response. It rejects 101 (RFC 9114 section 4.5). Hints
+%% are best-effort, so a full send queue is returned, not retried.
 -spec send_informational(stream(), 100..199, [{binary(), binary()}]) ->
-    {error, unsupported}.
-send_informational(_Stream, _Status, _Headers) ->
-    {error, unsupported}.
+    livery_adapter:send_result().
+send_informational({Conn, StreamId}, Status, Headers) ->
+    closed_guard(fun() -> quic_h3:send_response(Conn, StreamId, Status, Headers) end).
 
 -spec peer_info(stream()) -> livery_adapter:peer_info().
 peer_info({Conn, _StreamId}) ->
@@ -253,7 +255,7 @@ capabilities(_Listener) ->
         extended_connect => true,
         datagrams => true,
         capsules => true,
-        informational => false
+        informational => true
     }.
 
 %%====================================================================

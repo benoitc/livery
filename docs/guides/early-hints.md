@@ -31,11 +31,9 @@ matter there (the `103` block is advisory only).
 Hints are best-effort. `inform/3` returns `ok` when the interim
 response was written, or `{error, Reason}` when it could not be:
 
-- HTTP/1.1 and HTTP/2 send it on the wire. HTTP/1.1 skips HTTP/1.0
-  clients (RFC 9110 forbids 1xx there) and returns
-  `{error, http_1_0}`.
-- HTTP/3 does not support it yet and returns
-  `{error, unsupported}`.
+- HTTP/1.1, HTTP/2 and HTTP/3 send it on the wire.
+- HTTP/1.1 skips HTTP/1.0 clients (RFC 9110 forbids 1xx there) and
+  returns `{error, http_1_0}`.
 
 Matching `_ = livery_req:inform(...)` and moving on is the normal
 pattern; a page that loads without hints is still a page.

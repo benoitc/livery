@@ -39,7 +39,7 @@
     peer_on_request/1,
     scheme_and_authority_on_request/1,
     named_restart_creates_no_atom/1,
-    inform_unsupported/1,
+    early_hints_interim/1,
     body_too_large_no_disconnect/1,
     oversize_upload_delivers_413/1,
     oversize_open_upload_delivers_413/1,
@@ -69,7 +69,7 @@ all() ->
         peer_on_request,
         scheme_and_authority_on_request,
         named_restart_creates_no_atom,
-        inform_unsupported,
+        early_hints_interim,
         body_too_large_no_disconnect,
         oversize_upload_delivers_413,
         oversize_open_upload_delivers_413,
@@ -146,12 +146,21 @@ named_restart_creates_no_atom(Config) ->
     [Cycle() || _ <- lists:seq(1, 5)],
     ?assertEqual(Before, erlang:system_info(atom_count)).
 
-%% The H3 adapter does not implement interim responses yet: inform/3
-%% reports {error, unsupported} instead of crashing the handler.
-inform_unsupported(Config) ->
-    {Status, _Headers, Body, _} = get(Config, <<"/">>),
-    ?assertEqual(200, Status),
-    ?assertEqual(<<"unsupported">>, Body).
+%% A 103 reaches the client ahead of the final response on the same
+%% stream; quic_h3 reports each HEADERS block as a response event.
+early_hints_interim(Config) ->
+    {ok, Conn, StreamId} = open_request(Config, <<"GET">>),
+    try
+        {103, Hints} = receive_response(Conn, StreamId),
+        ?assertEqual(<<"</app.css>; rel=preload; as=style">>, header(<<"link">>, Hints)),
+        {Status, _Headers, Body, _} = collect_response(
+            Conn, StreamId, undefined, [], [], undefined
+        ),
+        ?assertEqual(200, Status),
+        ?assertEqual(<<"hinted">>, Body)
+    after
+        catch quic_h3:close(Conn)
+    end.
 
 %% A handler that does not read yet holds the client back to the stream
 %% window, then still gets the whole body once it reads.
@@ -389,14 +398,12 @@ handler_for(cancelled_requests_leave_no_worker) ->
         _ = livery_body:read_all(Reader, 5000),
         livery_resp:text(200, <<"read">>)
     end;
-handler_for(inform_unsupported) ->
+handler_for(early_hints_interim) ->
     fun(R) ->
-        Body =
-            case livery_req:inform(103, [], R) of
-                {error, unsupported} -> <<"unsupported">>;
-                Other -> iolist_to_binary(io_lib:format("~p", [Other]))
-            end,
-        livery_resp:text(200, Body)
+        ok = livery_req:inform(
+            103, [{<<"link">>, <<"</app.css>; rel=preload; as=style">>}], R
+        ),
+        livery_resp:text(200, <<"hinted">>)
     end;
 handler_for(text_response) ->
     fun(_R) -> livery_resp:text(200, <<"hello">>) end;
@@ -648,6 +655,11 @@ request(Method, Config, Path, Body) ->
         end
     after
         catch quic_h3:close(Conn)
+    end.
+receive_response(Conn, StreamId) ->
+    receive
+        {quic_h3, Conn, {response, StreamId, S, Hs}} -> {S, Hs}
+    after ?REQUEST_TIMEOUT -> {error, timeout}
     end.
 
 collect_response(Conn, StreamId, Status, Headers, BodyAcc, Trailers) ->

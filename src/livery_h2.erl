@@ -11,10 +11,10 @@ request. In that process the adapter:
 2. Registers the process as the `h2` stream handler, so the body and
    trailer events of the stream (and any that arrived earlier) come to
    it.
-3. Starts a `livery_req_proc` worker through `livery_req_sup`.
-4. Turns the `{h2, Conn, _}` events into the `{livery_body, Ref, _}`
-   messages the worker reads via `livery_body`, until the worker
-   exits. The process is the request's translator.
+3. Hands over to `livery_translator`, which starts the
+   `livery_req_proc` worker and turns the `{h2, Conn, _}` events into
+   the `{livery_body, Ref, _}` messages the worker reads via
+   `livery_body`, until the worker exits.
 
 Response emission goes through `livery:emit/3` and lands on the
 adapter callbacks (`send_headers/4`, `send_data/3`,
@@ -389,86 +389,58 @@ copy_keys([K | Rest], Src, Dst) ->
         ) -> ok
     ).
 make_handler_fun(Stack, Handler, MaxBody, Config, Transport, Alpn) ->
+    Ctx = #{
+        stack => Stack,
+        handler => Handler,
+        max_body => MaxBody,
+        config => Config,
+        transport => Transport,
+        alpn => Alpn
+    },
     fun(Conn, StreamId, Method, Path, Headers) ->
-        dispatch_request(
-            Conn,
-            StreamId,
-            Method,
-            Path,
-            Headers,
-            Stack,
-            Handler,
-            MaxBody,
-            Config,
-            Transport,
-            Alpn
-        )
+        serve_request(Conn, StreamId, Method, Path, Headers, Ctx)
     end.
 
--spec dispatch_request(
-    h2:connection(),
-    h2:stream_id(),
-    binary(),
-    binary(),
-    h2:headers(),
-    livery_middleware:stack(),
-    livery_middleware:handler(),
-    non_neg_integer() | infinity,
-    term(),
-    tcp | ssl,
-    binary() | undefined
+%% Runs in the process h2 spawned for the request, which becomes the
+%% request's translator (livery_translator). It registers first: h2 then
+%% replays what already arrived into this mailbox, in order. A stream
+%% that is already gone (the client left) gets no worker.
+-spec serve_request(
+    h2:connection(), h2:stream_id(), binary(), binary(), h2:headers(), map()
 ) -> ok.
-dispatch_request(
-    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport, Alpn
-) ->
-    BodyRef = make_ref(),
-    DiscRef = make_ref(),
-    Reader = livery_body:new(BodyRef),
-    {RawPath, RawQuery} = split_query(Path),
+serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
+    #{transport := Transport, alpn := Alpn} = Ctx,
+    {RawPath, RawQuery} = livery_translator:split_query(Path),
     Stream = {Conn, StreamId, Alpn},
-    Req = build_req(Stream, Method, RawPath, Headers, Reader, Transport),
-    %% This function runs in the process h2 spawned for the request; it
-    %% becomes the request's translator, as on H1.
-    Req1 = Req#livery_req{
-        raw_query = RawQuery,
-        notifier_pid = self(),
-        disc_ref = DiscRef,
-        config = Config
-    },
-    %% Register before the worker starts: h2 replays what already arrived
-    %% into this mailbox, in order. A stream that is already gone (the
-    %% client left) gets no worker.
+    Req = build_req(Stream, Method, RawPath, Headers, Transport),
     case set_stream_handler(Conn, StreamId, self()) of
         {error, _} ->
             ok;
         _Registered ->
-            Started = livery_req_sup:start_request(#{
+            livery_translator:serve(Req, Ctx#{
                 adapter => ?MODULE,
                 stream => Stream,
-                req => Req1,
-                stack => Stack,
-                handler => Handler
-            }),
-            translate(Started, Stream, BodyRef, DiscRef, MaxBody)
+                raw_query => RawQuery,
+                wire => #{
+                    tag => h2,
+                    key => Conn,
+                    classify => fun(Event) -> classify(StreamId, Event) end,
+                    conn => Conn,
+                    %% The response is out; RST_STREAM(NO_ERROR) tells the
+                    %% client to stop sending the rest (RFC 9113 Section 8.1).
+                    on_abandoned => fun() -> h2:cancel(Conn, StreamId, no_error) end
+                }
+            })
     end.
 
--spec translate(
-    {ok, pid()} | {error, term()},
-    stream(),
-    reference(),
-    reference(),
-    non_neg_integer() | infinity
-) -> ok.
-translate({ok, WorkerPid}, {Conn, StreamId, _Alpn}, BodyRef, DiscRef, MaxBody) ->
-    %% Monitor the worker (normal completion or handoff) and the
-    %% connection (client disconnect while the handler is busy).
-    WMRef = erlang:monitor(process, WorkerPid),
-    CMRef = erlang:monitor(process, Conn),
-    translate_loop(
-        Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-    );
-translate({error, _}, Stream, _BodyRef, _DiscRef, _MaxBody) ->
-    reject_overload(Stream).
+%% The h2 events of this request, in livery_translator's terms. Other
+%% connection events (`closed', `goaway') are ignored: the translator
+%% watches the connection process itself.
+-spec classify(h2:stream_id(), term()) -> livery_translator:event().
+classify(StreamId, {data, StreamId, Chunk, Fin}) -> {data, Chunk, Fin};
+classify(StreamId, {trailers, StreamId, Trailers}) -> {trailers, Trailers};
+classify(StreamId, {stream_reset, StreamId, Reason}) -> {reset, Reason};
+classify(_StreamId, _Event) -> ignore.
 
 %% Register this process as the stream's handler. Like the send
 %% callbacks, a connection that is already shutting down (client gone)
@@ -480,26 +452,14 @@ set_stream_handler(Conn, StreamId, Pid) ->
         h2:set_stream_handler(Conn, StreamId, Pid, #{drain_buffer => false})
     end).
 
-%% No worker slot available (concurrency cap reached): answer 503.
--spec reject_overload(stream()) -> ok.
-reject_overload(Stream) ->
-    _ = send_headers(
-        Stream,
-        503,
-        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
-        #{end_stream => true}
-    ),
-    ok.
-
 -spec build_req(
     stream(),
     binary(),
     binary(),
     h2:headers(),
-    livery_body:reader(),
     tcp | ssl
 ) -> livery_req:req().
-build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Transport) ->
+build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Transport) ->
     Authority = proplists:get_value(<<":authority">>, Headers, <<>>),
     Scheme = proplists:get_value(<<":scheme">>, Headers, <<"http">>),
     livery_req:new(#{
@@ -509,7 +469,6 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
         authority => Authority,
         path => Path,
         headers => app_headers(Authority, Headers),
-        body => {stream, Reader},
         adapter => ?MODULE,
         stream => Stream,
         engine_pid => Conn,
@@ -541,13 +500,6 @@ is_pseudo_header(<<":authority">>) -> true;
 is_pseudo_header(<<":scheme">>) -> true;
 is_pseudo_header(_) -> false.
 
--spec split_query(binary()) -> {binary(), binary()}.
-split_query(Path) ->
-    case binary:split(Path, <<"?">>) of
-        [P, Q] -> {P, Q};
-        [P] -> {P, <<>>}
-    end.
-
 %% Rebuild the pseudo-header proplist the ws/webtransport handshake
 %% validators read. The adapter delivers method/path/scheme/authority
 %% out of band, so they are re-injected here.
@@ -567,101 +519,3 @@ connect_pseudo_headers(Req, Protocol) ->
         {<<":path">>, Path}
         | livery_req:headers(Req)
     ].
-
-%%====================================================================
-%% Translator: h2 messages -> livery_body protocol
-%%====================================================================
-
--spec translate_loop(
-    h2:connection(),
-    h2:stream_id(),
-    reference(),
-    reference(),
-    pid(),
-    reference(),
-    reference(),
-    [fun(() -> term())],
-    boolean(),
-    non_neg_integer() | infinity,
-    non_neg_integer() | aborted | discarded
-) -> ok.
-translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes) ->
-    Loop = fun(Cbs1, Fired1, Bytes1) ->
-        translate_loop(
-            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1, Max, Bytes1
-        )
-    end,
-    receive
-        %% Over `max_body': drop the rest, noting when the client is done.
-        {h2, Conn, {data, StreamId, _, Fin}} when Bytes =:= aborted; Bytes =:= discarded ->
-            Loop(Cbs, Fired, dropped_after(Fin));
-        {h2, Conn, {data, StreamId, <<>>, true}} ->
-            WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired, Bytes);
-        {h2, Conn, {data, StreamId, Chunk, true}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    WorkerPid ! {livery_body, BodyRef, eof},
-                    Loop(Cbs, Fired, Bytes1);
-                over ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, discarded)
-            end;
-        {h2, Conn, {data, StreamId, Chunk, false}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    Loop(Cbs, Fired, Bytes1);
-                over ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
-            end;
-        {h2, Conn, {trailers, StreamId, Trailers}} ->
-            WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            Loop(Cbs, Fired, Bytes);
-        {h2, Conn, {stream_reset, StreamId, Reason}} ->
-            WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
-        {'DOWN', CMRef, process, Conn, Reason} ->
-            %% Connection closed: client disconnect. Fire, keep looping
-            %% (to serve late registrations) until the worker exits.
-            Loop(
-                Cbs,
-                livery_disconnect:fire_once(
-                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
-                ),
-                Bytes
-            );
-        {livery_local_reset, DiscRef} ->
-            %% The worker is resetting the stream itself (see
-            %% livery_disconnect:local_reset/0); its echo is not a disconnect.
-            Loop(Cbs, true, Bytes);
-        {livery_on_disconnect, DiscRef, Fun} ->
-            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
-        {'DOWN', WMRef, process, WorkerPid, _Reason} when Bytes =:= aborted ->
-            %% The response is out; RST_STREAM(NO_ERROR) tells the client
-            %% to stop sending the rest (RFC 9113 Section 8.1).
-            _ = h2:cancel(Conn, StreamId, no_error),
-            ok;
-        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
-            %% Worker finished (normal request done, or it handed the
-            %% stream off to a ws/wt session). Stop translating.
-            ok;
-        {h2, Conn, _Other} ->
-            Loop(Cbs, Fired, Bytes)
-    end.
-
-%% Signal the worker that the body exceeded `max_body'. The stream is
-%% not reset here, so the handler's 413 reaches the client; the
-%% translator discards the rest and resets once the worker is done.
-%% That reset drops response bytes still waiting on the peer's window,
-%% which a short error response does not hit.
--spec abort_body(pid(), reference()) -> ok.
-abort_body(WorkerPid, BodyRef) ->
-    WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    ok.
-
--spec dropped_after(boolean()) -> aborted | discarded.
-dropped_after(true) -> discarded;
-dropped_after(false) -> aborted.

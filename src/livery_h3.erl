@@ -13,9 +13,9 @@ every request. In that process the adapter, as `livery_h1` and
    (`quic_h3:set_stream_handler/4`), so the stream's body and trailer
    events, and any that arrived earlier, come to it. A stream already
    gone gets no worker.
-3. Starts a `livery_req_proc` worker through `livery_req_sup`.
-4. Turns the `{quic_h3, Conn, _}` events into the
-   `{livery_body, Ref, _}` messages the worker reads via
+3. Hands over to `livery_translator`, which starts the
+   `livery_req_proc` worker and turns the `{quic_h3, Conn, _}` events
+   into the `{livery_body, Ref, _}` messages the worker reads via
    `livery_body`, until the worker exits.
 
 Response emission goes through `livery:emit/3` and lands on the
@@ -461,48 +461,21 @@ copy_keys([K | Rest], Src, Dst) ->
         ) -> ok
     ).
 make_handler_fun(Stack, Handler, MaxBody, Config) ->
+    Ctx = #{stack => Stack, handler => Handler, max_body => MaxBody, config => Config},
     fun(Conn, StreamId, Method, Path, Headers) ->
-        dispatch_request(
-            Conn,
-            StreamId,
-            Method,
-            Path,
-            Headers,
-            Stack,
-            Handler,
-            MaxBody,
-            Config
-        )
+        serve_request(Conn, StreamId, Method, Path, Headers, Ctx)
     end.
 
--spec dispatch_request(
-    pid(),
-    non_neg_integer(),
-    binary(),
-    binary(),
-    [{binary(), binary()}],
-    livery_middleware:stack(),
-    livery_middleware:handler(),
-    non_neg_integer() | infinity,
-    term()
+%% Runs in the process quic_h3 spawned for the request, which becomes
+%% the request's translator (livery_translator). It registers first:
+%% quic_h3 then replays what already arrived into this mailbox, in order.
+%% A stream that is already gone (the client left) gets no worker.
+-spec serve_request(
+    pid(), non_neg_integer(), binary(), binary(), [{binary(), binary()}], map()
 ) -> ok.
-dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config) ->
-    BodyRef = make_ref(),
-    DiscRef = make_ref(),
-    Reader = livery_body:new(BodyRef),
-    {RawPath, RawQuery} = split_query(Path),
-    Req = build_req(Conn, StreamId, Method, RawPath, Headers, Reader),
-    %% This function runs in the process quic_h3 spawned for the
-    %% request; it becomes the request's translator, as on H1 and H2.
-    Req1 = Req#livery_req{
-        raw_query = RawQuery,
-        notifier_pid = self(),
-        disc_ref = DiscRef,
-        config = Config
-    },
-    %% Register before the worker starts: quic_h3 replays what already
-    %% arrived into this mailbox, in order. A stream that is already gone
-    %% (the client left) gets no worker.
+serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
+    {RawPath, RawQuery} = livery_translator:split_query(Path),
+    Req = build_req(Conn, StreamId, Method, RawPath, Headers),
     Registered = closed_guard(fun() ->
         quic_h3:set_stream_handler(Conn, StreamId, self(), #{drain_buffer => false})
     end),
@@ -510,36 +483,43 @@ dispatch_request(Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody,
         {error, _} ->
             ok;
         _ ->
-            Started = livery_req_sup:start_request(#{
+            livery_translator:serve(Req, Ctx#{
                 adapter => ?MODULE,
                 stream => {Conn, StreamId},
-                req => Req1,
-                stack => Stack,
-                handler => Handler
-            }),
-            translate(Started, {Conn, StreamId}, BodyRef, DiscRef, MaxBody)
+                raw_query => RawQuery,
+                wire => #{
+                    tag => quic_h3,
+                    key => Conn,
+                    classify => fun(Event) -> classify(StreamId, Event) end,
+                    conn => Conn,
+                    %% The response is out; STOP_SENDING tells the client to
+                    %% stop sending the rest (RFC 9114 Section 4.1.1). The
+                    %% client answers with RESET_STREAM, which makes quic_h3
+                    %% drop the stream.
+                    on_abandoned => fun() ->
+                        quic:stop_sending(quic_h3:get_quic_conn(Conn), StreamId, ?H3_NO_ERROR)
+                    end
+                }
+            })
     end.
 
-%% No worker slot available (concurrency cap reached): answer 503.
--spec reject_overload(stream()) -> ok.
-reject_overload(Stream) ->
-    _ = send_headers(
-        Stream,
-        503,
-        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
-        #{end_stream => true}
-    ),
-    ok.
+%% The quic_h3 events of this request, in livery_translator's terms.
+%% quic_h3 reports a connection close to the owner only, so the
+%% translator learns of a disconnect from the connection's DOWN.
+-spec classify(non_neg_integer(), term()) -> livery_translator:event().
+classify(StreamId, {data, StreamId, Chunk, Fin}) -> {data, Chunk, Fin};
+classify(StreamId, {trailers, StreamId, Trailers}) -> {trailers, Trailers};
+classify(StreamId, {stream_reset, StreamId, Reason}) -> {reset, Reason};
+classify(_StreamId, _Event) -> ignore.
 
 -spec build_req(
     pid(),
     non_neg_integer(),
     binary(),
     binary(),
-    [{binary(), binary()}],
-    livery_body:reader()
+    [{binary(), binary()}]
 ) -> livery_req:req().
-build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
+build_req(Conn, StreamId, Method, Path, Headers) ->
     livery_req:new(#{
         protocol => h3,
         method => Method,
@@ -548,7 +528,6 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         authority => proplists:get_value(<<":authority">>, Headers, <<>>),
         path => Path,
         headers => Headers,
-        body => {stream, Reader},
         adapter => ?MODULE,
         stream => {Conn, StreamId},
         engine_pid => Conn,
@@ -556,125 +535,3 @@ build_req(Conn, StreamId, Method, Path, Headers, Reader) ->
         %% HTTP/3 always runs over TLS, so the map is always there.
         tls => livery_tls:peer(fun() -> quic:peercert(quic_h3:get_quic_conn(Conn)) end)
     }).
-
--spec split_query(binary()) -> {binary(), binary()}.
-split_query(Path) ->
-    case binary:split(Path, <<"?">>) of
-        [P, Q] -> {P, Q};
-        [P] -> {P, <<>>}
-    end.
-
-%%====================================================================
-%% Translator: quic_h3 messages -> livery_body protocol
-%%====================================================================
-
-%% Monitor the worker and the connection. quic_h3 routes a single-stream
-%% reset to the connection owner (not the stream handler), so the
-%% reliable client disconnect signal here is the connection 'DOWN'. A
-%% single-stream RST without a connection close is not observable in the
-%% current quic_h3.
--spec translate(
-    {ok, pid()} | {error, term()},
-    stream(),
-    reference(),
-    reference(),
-    non_neg_integer() | infinity
-) -> ok.
-translate({ok, WorkerPid}, {Conn, StreamId}, BodyRef, DiscRef, MaxBody) ->
-    WMRef = erlang:monitor(process, WorkerPid),
-    CMRef = erlang:monitor(process, Conn),
-    translate_loop(
-        Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-    );
-translate({error, _}, Stream, _BodyRef, _DiscRef, _MaxBody) ->
-    reject_overload(Stream).
-
--spec translate_loop(
-    pid(),
-    non_neg_integer(),
-    reference(),
-    reference(),
-    pid(),
-    reference(),
-    reference(),
-    [fun(() -> term())],
-    boolean(),
-    non_neg_integer() | infinity,
-    non_neg_integer() | aborted | discarded
-) -> ok.
-translate_loop(Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes) ->
-    Loop = fun(Cbs1, Fired1, Bytes1) ->
-        translate_loop(
-            Conn, StreamId, BodyRef, DiscRef, WorkerPid, WMRef, CMRef, Cbs1, Fired1, Max, Bytes1
-        )
-    end,
-    receive
-        %% Over `max_body': drop the rest, noting when the client is done.
-        {quic_h3, Conn, {data, StreamId, _, Fin}} when Bytes =:= aborted; Bytes =:= discarded ->
-            Loop(Cbs, Fired, dropped_after(Fin));
-        {quic_h3, Conn, {data, StreamId, <<>>, true}} ->
-            WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired, Bytes);
-        {quic_h3, Conn, {data, StreamId, Chunk, true}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    WorkerPid ! {livery_body, BodyRef, eof},
-                    Loop(Cbs, Fired, Bytes1);
-                over ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, discarded)
-            end;
-        {quic_h3, Conn, {data, StreamId, Chunk, false}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    Loop(Cbs, Fired, Bytes1);
-                over ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
-            end;
-        {quic_h3, Conn, {trailers, StreamId, Trailers}} ->
-            WorkerPid ! {livery_body, BodyRef, {trailers, Trailers}},
-            Loop(Cbs, Fired, Bytes);
-        {quic_h3, Conn, {stream_reset, StreamId, Reason}} ->
-            WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
-        {'DOWN', CMRef, process, Conn, Reason} ->
-            Loop(
-                Cbs,
-                livery_disconnect:fire_once(
-                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
-                ),
-                Bytes
-            );
-        {livery_local_reset, DiscRef} ->
-            %% The worker is resetting the stream itself (see
-            %% livery_disconnect:local_reset/0); its echo is not a disconnect.
-            Loop(Cbs, true, Bytes);
-        {livery_on_disconnect, DiscRef, Fun} ->
-            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
-        {'DOWN', WMRef, process, WorkerPid, _Reason} when Bytes =:= aborted ->
-            %% The response is out; tell the client to stop sending
-            %% (RFC 9114 Section 4.1.1).
-            _ = quic:stop_sending(quic_h3:get_quic_conn(Conn), StreamId, ?H3_NO_ERROR),
-            ok;
-        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
-            ok;
-        {quic_h3, Conn, _Other} ->
-            Loop(Cbs, Fired, Bytes)
-    end.
-
-%% Signal the worker that the body exceeded `max_body'. The stream is
-%% not reset here, so the handler's 413 reaches the client. The
-%% translator discards the rest and sends STOP_SENDING only once the
-%% worker is done: the client answers it with RESET_STREAM, which makes
-%% quic_h3 drop the stream.
--spec abort_body(pid(), reference()) -> ok.
-abort_body(WorkerPid, BodyRef) ->
-    WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    ok.
-
--spec dropped_after(boolean()) -> aborted | discarded.
-dropped_after(true) -> discarded;
-dropped_after(false) -> aborted.

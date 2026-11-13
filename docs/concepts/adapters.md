@@ -109,6 +109,13 @@ out through `livery:emit/3`, which calls your `send_headers/4`,
 inbound wire events into the body protocol, and implement the `send_*`
 callbacks for the outbound side.
 
+Livery's own HTTP adapters share the inbound half in `livery_translator`.
+Each runs in the process its wire library starts for the request, builds
+the request value, registers the stream if the library needs that, and
+hands over with a `classify` fun that recognises the library's body,
+trailer and reset events. The translator starts the worker, enforces
+`max_body`, and reports disconnects, the same way on every protocol.
+
 `examples/livery_example_adapter.erl` is a complete, readable adapter that
 does exactly this, capturing the response in ETS instead of a socket so
 the wiring is easy to follow. Section 10 of

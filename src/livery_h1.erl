@@ -9,11 +9,10 @@ request and delivers that request's body and trailer events to it as
 
 1. Builds a `#livery_req{}` from the method, path, and headers
    delivered by `h1`.
-2. Starts a `livery_req_proc` worker through `livery_req_sup`.
-3. Turns the `{h1_stream, StreamId, _}` events into the
-   `{livery_body, Ref, _}` messages the worker reads via
-   `livery_body`, until the worker exits. The process is the
-   request's translator.
+2. Hands over to `livery_translator`, which starts the
+   `livery_req_proc` worker and turns the `{h1_stream, StreamId, _}`
+   events into the `{livery_body, Ref, _}` messages the worker reads via
+   `livery_body`, until the worker exits.
 
 Response emission goes through `livery:emit/3` and lands on the
 adapter callbacks (`send_headers/4`, `send_full/5`, `send_data/3`,
@@ -494,99 +493,61 @@ copy_keys([K | Rest], Src, Dst) ->
         ) -> ok
     ).
 make_handler_fun(Stack, Handler, MaxBody, Config, Transport, Alpn) ->
-    fun(Conn, StreamId, Method, Path, Headers) ->
-        dispatch_request(
-            Conn,
-            StreamId,
-            Method,
-            Path,
-            Headers,
-            Stack,
-            Handler,
-            MaxBody,
-            Config,
-            Transport,
-            Alpn
-        )
-    end.
-
--spec dispatch_request(
-    h1:connection(),
-    h1:stream_id(),
-    binary(),
-    binary(),
-    h1:headers(),
-    livery_middleware:stack(),
-    livery_middleware:handler(),
-    non_neg_integer() | infinity,
-    term(),
-    tcp | ssl,
-    binary() | undefined
-) -> ok.
-dispatch_request(
-    Conn, StreamId, Method, Path, Headers, Stack, Handler, MaxBody, Config, Transport, Alpn
-) ->
-    %% This function runs in the per-request worker spawned by
-    %% h1_server. Body and trailer events arrive as
-    %% `{h1_stream, StreamId, _}' messages in this process's
-    %% mailbox.
-    BodyRef = make_ref(),
-    DiscRef = make_ref(),
-    Reader = livery_body:new(BodyRef),
-    {RawPath, RawQuery} = split_query(Path),
-    Stream = {Conn, StreamId, Alpn},
-    Req = build_req(Stream, Method, RawPath, Headers, Reader, Transport),
-    %% The dispatch process (this one) runs the translator loop, so it
-    %% is the disconnect notifier the handler registers with.
-    Req1 = Req#livery_req{
-        raw_query = RawQuery,
-        notifier_pid = self(),
-        disc_ref = DiscRef,
-        config = Config
+    Ctx = #{
+        stack => Stack,
+        handler => Handler,
+        max_body => MaxBody,
+        config => Config,
+        transport => Transport,
+        alpn => Alpn
     },
-    case
-        livery_req_sup:start_request(#{
-            adapter => ?MODULE,
-            stream => Stream,
-            req => Req1,
-            stack => Stack,
-            handler => Handler
-        })
-    of
-        {ok, WorkerPid} ->
-            WMRef = erlang:monitor(process, WorkerPid),
-            %% Monitor the h1 connection process too, so a client
-            %% disconnect fires even when the handler is not reading the
-            %% body or emitting.
-            CMRef = erlang:monitor(process, Conn),
-            translate_until_done(
-                StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, [], false, MaxBody, 0
-            );
-        {error, _} ->
-            reject_overload(Stream)
+    fun(Conn, StreamId, Method, Path, Headers) ->
+        serve_request(Conn, StreamId, Method, Path, Headers, Ctx)
     end.
 
-%% No worker slot available (concurrency cap reached): answer 503 and
-%% serve the next request instead of crashing the stream handler.
--spec reject_overload(stream()) -> ok.
-reject_overload(Stream) ->
-    _ = send_headers(
-        Stream,
-        503,
-        [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
-        #{end_stream => true}
-    ),
-    ok.
+%% Runs in the process h1 spawned for the request, which becomes the
+%% request's translator (livery_translator). h1 already sends this
+%% stream's events here as `{h1_stream, StreamId, _}', so nothing needs
+%% registering.
+-spec serve_request(
+    h1:connection(), h1:stream_id(), binary(), binary(), h1:headers(), map()
+) -> ok.
+serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
+    #{transport := Transport, alpn := Alpn} = Ctx,
+    {RawPath, RawQuery} = livery_translator:split_query(Path),
+    Stream = {Conn, StreamId, Alpn},
+    Req = build_req(Stream, Method, RawPath, Headers, Transport),
+    livery_translator:serve(Req, Ctx#{
+        adapter => ?MODULE,
+        stream => Stream,
+        raw_query => RawQuery,
+        wire => #{
+            tag => h1_stream,
+            key => StreamId,
+            classify => fun classify/1,
+            conn => Conn,
+            %% Nothing to tell the client: h1's early-response drain reads
+            %% and discards the rest of the body before closing, so the
+            %% client reads the response instead of a reset.
+            on_abandoned => none
+        }
+    }).
+
+%% The h1 events of this request, in livery_translator's terms.
+-spec classify(term()) -> livery_translator:event().
+classify({data, Chunk, Fin}) -> {data, Chunk, Fin};
+classify({trailers, Trailers}) -> {trailers, Trailers};
+classify({stream_reset, Reason}) -> {reset, Reason};
+classify(_Event) -> ignore.
 
 -spec build_req(
     stream(),
     binary(),
     binary(),
     h1:headers(),
-    livery_body:reader(),
     tcp | ssl
 ) -> livery_req:req().
-build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Transport) ->
+build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Transport) ->
     livery_req:new(#{
         protocol => h1,
         method => Method,
@@ -594,7 +555,6 @@ build_req({Conn, _StreamId, _Alpn} = Stream, Method, Path, Headers, Reader, Tran
         authority => host(Headers),
         path => Path,
         headers => Headers,
-        body => {stream, Reader},
         adapter => ?MODULE,
         stream => Stream,
         engine_pid => Conn,
@@ -617,101 +577,3 @@ host(Headers) ->
 -spec tls_info(h1:connection(), tcp | ssl) -> undefined | livery_tls:info().
 tls_info(Conn, ssl) -> livery_tls:info(h1:peercert(Conn));
 tls_info(_Conn, _) -> undefined.
-
--spec split_query(binary()) -> {binary(), binary()}.
-split_query(Path) ->
-    case binary:split(Path, <<"?">>) of
-        [P, Q] -> {P, Q};
-        [P] -> {P, <<>>}
-    end.
-
-%%====================================================================
-%% Translator: h1 messages -> livery_body protocol
-%%====================================================================
-
-%% Run inside the h1-spawned worker. Forward body and trailer events
-%% to the livery_req_proc until it exits (the worker is monitored).
-%% Returning from this function lets h1_server pump the next request
-%% on the same connection.
--spec translate_until_done(
-    h1:stream_id(),
-    reference(),
-    reference(),
-    pid(),
-    pid(),
-    reference(),
-    reference(),
-    [fun(() -> term())],
-    boolean(),
-    non_neg_integer() | infinity,
-    non_neg_integer() | aborted
-) -> ok.
-translate_until_done(
-    StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs, Fired, Max, Bytes
-) ->
-    Loop = fun(Cbs1, Fired1, Bytes1) ->
-        translate_until_done(
-            StreamId, BodyRef, DiscRef, Conn, WorkerPid, WMRef, CMRef, Cbs1, Fired1, Max, Bytes1
-        )
-    end,
-    receive
-        {h1_stream, StreamId, {data, <<>>, true}} ->
-            WorkerPid ! {livery_body, BodyRef, eof},
-            Loop(Cbs, Fired, Bytes);
-        {h1_stream, StreamId, {data, Chunk, true}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    WorkerPid ! {livery_body, BodyRef, eof},
-                    Loop(Cbs, Fired, Bytes1);
-                _ ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
-            end;
-        {h1_stream, StreamId, {data, Chunk, false}} ->
-            case livery_body:account(Bytes, Chunk, Max) of
-                {ok, Bytes1} ->
-                    WorkerPid ! {livery_body, BodyRef, {data, Chunk}},
-                    Loop(Cbs, Fired, Bytes1);
-                aborted ->
-                    Loop(Cbs, Fired, aborted);
-                over ->
-                    abort_body(WorkerPid, BodyRef),
-                    Loop(Cbs, Fired, aborted)
-            end;
-        {h1_stream, StreamId, {trailers, Headers}} ->
-            WorkerPid ! {livery_body, BodyRef, {trailers, Headers}},
-            Loop(Cbs, Fired, Bytes);
-        {h1_stream, StreamId, {stream_reset, Reason}} ->
-            WorkerPid ! {livery_body, BodyRef, {reset, Reason}},
-            Loop(Cbs, livery_disconnect:fire_once(Fired, WorkerPid, DiscRef, Reason, Cbs), Bytes);
-        {'DOWN', CMRef, process, Conn, Reason} ->
-            Loop(
-                Cbs,
-                livery_disconnect:fire_once(
-                    Fired, WorkerPid, DiscRef, {connection_closed, Reason}, Cbs
-                ),
-                Bytes
-            );
-        {livery_local_reset, DiscRef} ->
-            %% The worker is resetting the stream itself (see
-            %% livery_disconnect:local_reset/0); its echo is not a disconnect.
-            Loop(Cbs, true, Bytes);
-        {livery_on_disconnect, DiscRef, Fun} ->
-            Loop(livery_disconnect:register(Fired, Fun, Cbs), Fired, Bytes);
-        {'DOWN', WMRef, process, WorkerPid, _Reason} ->
-            ok
-    end.
-
-%% Signal the worker that the body exceeded `max_body' and switch the
-%% translator to drop-mode (the caller loops with `aborted'), which
-%% bounds the worker mailbox. We deliberately do NOT reset the stream:
-%% the handler can still commit a response (typically 413) and h1's
-%% early-response drain reads and discards the rest of the inbound body
-%% before closing, so the client reads the response instead of an RST.
-%% The leftover inbound is bounded by h1's drain budget and the
-%% request timeout; the worker mailbox is bounded by drop-mode.
--spec abort_body(pid(), reference()) -> ok.
-abort_body(WorkerPid, BodyRef) ->
-    WorkerPid ! {livery_body, BodyRef, {error, body_too_large}},
-    ok.

@@ -1,19 +1,29 @@
 # Livery Design Document
 
+This is the long-form design of Livery: the problem it solves, the
+rules it is built on, how a request flows, and what it leaves out. Read
+it when you want the whole picture in one place. The reasons behind
+specific choices are in
+[Design decisions](concepts/architecture.md#design-decisions); the exact
+API is in the module docs.
+
 ## 1. What Livery is
 
 Livery is a modern Erlang web framework. You define routes, handlers,
 and a middleware stack once. Livery serves them over HTTP/1.1,
 HTTP/2, and HTTP/3 on the same host, WebSocket on any of the three,
 WebTransport on H2 and H3, Server-Sent Events on all three, and MCP
-Streamable HTTP at `/mcp`, with OIDC/OAuth2, OpenAPI 3.2, and
-OpenTelemetry-style observability as built-in middleware.
+and A2A agents on the main listener, with authentication (OpenID
+Connect sign-in, bearer tokens, introspection, DPoP, passkeys),
+OpenAPI 3.2, and OpenTelemetry-style observability as built-in
+modules. `livery_client` gives you the same middleware model for the
+calls your service makes.
 
 It is written in the spirit of Axum + Tower + Hyper. It does not
 reimplement the wire: the three HTTP protocol libraries
-(`h1`, `h2`, `quic`/`quic_h3`) and the WebSocket library (`ws`) are
-separate hex packages that Livery consumes as deps. Livery is the
-developer-facing layer on top of them.
+(`h1`, `h2`, `quic`/`quic_h3`), the WebSocket library (`ws`) and
+`webtransport` are separate hex packages that Livery consumes as deps.
+Livery is the developer-facing layer on top of them.
 
 ## 2. Problem
 
@@ -50,33 +60,42 @@ middleware stack.
 
 ## 4. Design principles
 
-1. **Protocol neutrality.** The handler does not know whether it is
-   talking over H1, H2, or H3. The request value is the same. The
-   response value is the same. Differences surface only through
-   capabilities (`trailers`, `extended_connect`, `datagrams`).
-2. **Race H3, fall back to H2, fall back to H1.** A service runs all
-   three on the same host, one router and one middleware stack
-   serving the lot, and advertises Alt-Svc so clients can upgrade.
-3. **Thin adapters.** Each protocol adapter is a translator, not a
-   state machine. Flow control, HPACK, QPACK, QUIC, framing all live
-   upstream.
-4. **Axum + Tower ergonomics.** Axum-style handler signature and
-   extractors. Tower-style ordered middleware stack with request and
-   response transformation.
-5. **Data, not processes.** Requests and responses are values.
-   Middleware transforms values. Processes only exist where they
-   earn their keep: per-request process for isolation, listener
-   processes for socket ownership.
-6. **Backpressure by default.** Streaming bodies read on demand.
-   When a client stalls, Livery applies backpressure to the handler
-   before it falls behind the wire.
-7. **Composable integrations.** Auth, MCP, OpenAPI, WebTransport,
-   and instrumentation are modules in the same app, engaged only
-   when the user mounts or configures them. They share the adapter
-   stack and middleware pipeline.
-8. **No secret sauce in the wire.** Anything visible on the network
-   is the job of the wire libraries. If something is wrong at the
-   frame or stream level, the fix lands there, not in Livery.
+Livery was announced with five rules. Every change is checked against
+them (the `livery-foundations` skill in `.agents/skills/` does it for
+you):
+
+1. **Values, not handles.** `Req` and `Resp` are plain records, never a
+   shared mutable handle, so they are easy to pass between processes and
+   to test.
+2. **Middleware is a continuation.** `call(Req, Next, State) -> Resp`.
+   `Next` is the rest of the pipeline as a function, so wrapping it in a
+   try/catch, a timeout or a span is just calling it inside your own
+   code.
+3. **Protocol neutrality.** A handler never knows whether it is on H1,
+   H2 or H3. The request and response values are the same everywhere;
+   differences show up only through capabilities and optional adapter
+   callbacks.
+4. **Thin adapters.** Framing, header compression, flow control, QUIC
+   and TLS live in the wire libraries. An adapter translates between a
+   library and Livery's values, nothing more, and a wire problem is
+   fixed in its library.
+5. **The same model outbound.** `livery_client` is the middleware model
+   turned around: layers around an adapter.
+
+Some consequences worth naming:
+
+- **Race H3, fall back to H2, fall back to H1.** A service runs all
+  three on the same host, one router and one middleware stack serving
+  the lot, and advertises Alt-Svc so clients can upgrade.
+- **Backpressure by default.** A handler reads its body at its own
+  pace: each chunk it reads gives flow-control credit back to the wire
+  library, so a slow handler holds the client back instead of buffering
+  the body. On the way out, a full window makes `Emit` wait or return
+  an error.
+- **Composable integrations.** Auth, MCP, A2A, OpenAPI, WebTransport
+  and instrumentation are modules in the same app, engaged only when you
+  mount or configure them. They share the adapters and the middleware
+  pipeline.
 
 ## 5. Architecture at a glance
 
@@ -133,10 +152,13 @@ Router =
     ]),
 
 Middleware =
-    [ livery_middleware:wrap(fun livery_errors:to_resp/3)
+    [ livery_middleware:wrap(fun(_Class, _Reason, _Stack) ->
+          livery_resp:text(500, <<"internal error">>)
+      end)
     , {livery_instrument_trace,   #{}}
     , {livery_instrument_metrics, #{}}
-    , {livery_auth_bearer,        #{issuer => <<"https://auth.example">>}}
+    , {livery_auth_bearer,        #{jwks_uri => <<"https://auth.example/jwks">>,
+                                    issuer   => <<"https://auth.example">>}}
     ],
 
 livery:start_service(#{
@@ -144,7 +166,7 @@ livery:start_service(#{
     http3      => #{port => 443, cert => Cert, key => Key},
     https      => #{port => 443, cert => Cert, key => Key,
                     alpn  => [h2, http1]},
-    http       => #{port => 80, redirect => https},
+    http       => #{port => 80},
     router     => Router,
     middleware => Middleware,
     alt_svc    => advertise
@@ -165,10 +187,10 @@ create_user(Req) ->
         {ok, #{<<"email">> := Email}} ->
             ok = users:create(Email),
             livery_resp:empty(201);
-        {error, malformed_json} ->
-            livery_resp:text(400, <<"bad json">>);
-        {error, {missing, <<"email">>}} ->
-            livery_resp:text(422, <<"email required">>)
+        {ok, _} ->
+            livery_resp:text(422, <<"email required">>);
+        {error, invalid_json} ->
+            livery_resp:text(400, <<"bad json">>)
     end.
 ```
 
@@ -215,8 +237,9 @@ emit_loop(Ref, Emit) ->
 ```
 
 The callback runs in the per-request process and is free to
-`receive` between emits. Livery hibernates the process during long
-idle stretches (model pull, slow LLM token output). There is no
+`receive` between emits. During long idle stretches (model pull, slow
+LLM token output) it can hibernate with `erlang:hibernate/3`, so it
+costs almost no memory while it waits. There is no
 separate `loop` or `info/3` callback shape: a streaming handler is
 a fun that yields chunks through `Emit`. The same model applies to
 `livery_resp:sse/2` and `livery_resp:stream/3`. Client disconnect
@@ -226,13 +249,7 @@ replacement for Cowboy's `cowboy_loop`.
 ### 6.7 MCP
 
 ```erlang
-Mcp = livery_mcp:handler(#{session_enabled => true}),
-Router2 = livery_router:compile([
-    {<<"POST">>,   <<"/mcp">>, Mcp},
-    {<<"GET">>,    <<"/mcp">>, Mcp},
-    {<<"DELETE">>, <<"/mcp">>, Mcp}
-    | Routes
-]),
+Router2 = livery_router:merge(Router, livery_mcp:router(#{session_enabled => true})),
 livery:start_service(#{router => Router2, ...}).
 ```
 
@@ -254,14 +271,19 @@ and is served over H1, H2, and H3 automatically.
    as `{livery_body, Ref, _}` messages. The engine continues to serve
    other streams.
 4. The request process runs the middleware stack followed by the
-   handler. The body reader drains adapter messages lazily with
-   bounded buffering.
+   handler. The handler reads the body as it needs it; each chunk it
+   reads gives flow-control credit back, so the client sends only one
+   window ahead.
 5. The handler returns `#livery_resp{}`. Core walks the body
    variant (`{full, _}`, `{chunked, Fun}`, `{sse, Fun}`,
-   `{file, _, _}`, `{upgrade, _, _}`) and drives the adapter's
-   `send_headers/send_data/send_trailers`.
-6. On client disconnect, the adapter resets the stream; the
-   request process observes it and terminates.
+   `{file, _, _}`, `empty`) and drives the adapter's
+   `send_headers/send_data/send_trailers`. A WebSocket, WebTransport,
+   MCP or A2A handler writes through the adapter itself and returns
+   `taken_over`, so core stops there.
+6. On client disconnect, the translator sends the worker
+   `{livery_disconnect, Ref, Reason}` and runs any callbacks registered
+   with `livery_req:on_disconnect/2`; a send to the gone client returns
+   `{error, closed}`. The handler decides when to stop.
 
 No part of this pipeline is protocol-specific above the adapter
 boundary.
@@ -276,8 +298,10 @@ boundary.
 | Middleware        | `livery_middleware` | Ordered list, `call(Req, Next, State) -> Resp`                 |
 | Extractors        | `livery_ext`        | `json/1`, `form/1`, `path_param/2`, `query/2`, `bearer_token/1`|
 | Body              | `livery_body`       | Opaque reader, lazy, bounded buffer                            |
-| Adapter behaviour | `livery_adapter`    | `start, stop, send_headers, send_data, send_trailers, reset`   |
+| Adapter behaviour | `livery_adapter`    | `start, stop, send_*, reset`, plus optional upgrade callbacks  |
+| Translator        | `livery_translator` | Wire events to body messages, `max_body`, credit, disconnects  |
 | Service runtime   | `livery_service`    | Orchestrates H3+H2+H1, Alt-Svc, drain                          |
+| Client            | `livery_client`     | Layers around an outbound adapter (hackney)                    |
 
 ## 9. Protocol race and fallback
 
@@ -301,8 +325,8 @@ transport.
   codec), content negotiation helpers, ranges on file responses.
 - **OpenAPI:** routes carry metadata, `livery_openapi:build/1`
   emits a 3.2 document, `/openapi.json` is served, optional
-  request/response validation middleware, Redoc and Swagger UI
-  from `priv/`.
+  request validation middleware, and Redoc or Swagger UI pages that
+  load their assets from a CDN.
 - **MCP:** Streamable HTTP handler mounted at a user-chosen path,
   bridging to `barrel_mcp`'s protocol core. No second listener. No
   separate auth. No separate tracing.
@@ -311,13 +335,18 @@ transport.
   available.
 - **WebTransport:** via `webtransport` on H2 and H3. Datagram send
   and bidirectional streams.
-- **SSE:** `livery_resp:sse/2` with heartbeat and disconnect
-  detection, works identically on H1 (chunked), H2 (DATA frames),
-  H3 (DATA frames).
-- **Auth:** OIDC discovery, JWKS rotation, JWT RS256 and ES256
-  verification, optional RFC 7662 introspection, optional session
-  cookie. `livery_auth_bearer` middleware, `user/1` extractor in
-  `livery_ext`.
+- **SSE:** `livery_resp:sse/2,3`, with disconnect detection, works
+  identically on H1 (chunked), H2 (DATA frames), H3 (DATA frames).
+- **A2A:** `livery_a2a` mounts an Agent-to-Agent agent (card, JSON-RPC
+  and REST bindings, SSE streams), bridging to `barrel_a2a`.
+- **Client:** `livery_client` with timeout, retry, concurrency limit,
+  circuit breaker and load-balancing layers, OAuth and DPoP, a cookie
+  jar, and streamed bodies.
+- **Auth:** bearer JWT verification (RSA, ECDSA, EdDSA) with JWKS
+  rotation, RFC 7662 introspection, DPoP and certificate-bound tokens,
+  signed session cookies, OpenID Connect sign-in, step-up
+  authentication, TOTP, and passkeys (WebAuthn). The specifications and
+  the known deviations are listed in `AGENTS.md`.
 - **Observability:** `livery_instrument_trace` opens a span per
   request via `instrument_tracer`, propagates W3C traceparent,
   attaches HTTP semantic attributes. `livery_instrument_metrics`
@@ -343,12 +372,14 @@ transport.
   after that.
 - Per-request process is short-lived and uses minimal heap. No
   gen_server mailbox churn for small requests.
-- Streaming reads demand-driven, bounded buffer, reset on
-  overflow.
+- Streaming reads are demand-driven: the client sends one flow
+  window ahead of what the handler has read, and a body over
+  `max_body` is answered with `413`.
 - Dispatch path dialyzer-clean and inline-friendly.
-- Continuous benchmarks against a reference handler on wrk, h2load,
-  and quiche-client. CI fails on a p99 regression larger than 10
-  percent.
+- `bench/` (`rebar3 as bench shell`, `livery_bench`) measures latency
+  percentiles and throughput on a reference handler over H1, H2 and H3,
+  and can compare a run against a baseline with a 10 percent p99 gate.
+  CI does not run it yet.
 
 ## 12. Out of scope
 
@@ -360,31 +391,36 @@ transport.
   by the wire libraries.
 - Built-in HTML templating, view helpers, ORM. Composable with
   user-chosen libraries.
-- Built-in JSON codec. Users plug `thoas`, `jsx`, or any other
-  codec. Livery's `json/2` accepts pre-encoded iodata.
+- Its own JSON codec. Encode with OTP's `json` module, `thoas`, `jsx`
+  or any other; `livery_resp:json/2,3` takes the encoded iodata.
 
-## 13. Success criteria
+## 13. Toward 1.0
 
-Livery v1.0 ships when:
+Livery 1.0 ships when each of these holds. Where things stand:
 
-1. `livery:start_service/1` brings up H1, H2, and H3 on :443/:80,
-   all serving one handler set.
-2. `test/livery_parity_SUITE.erl` is green: the same handler matrix
-   passes against `livery_test_adapter`, `livery_h1`, `livery_h2`,
-   `livery_h3`.
-3. `h2spec`, QUIC interop (quiche-client, ngtcp2-client), and
-   Autobahn suites are green in docker-CI.
-4. A Keycloak-protected route, an `/openapi.json`, an MCP tool
-   over Inspector, a WebSocket echo, an SSE feed, and a WT echo
-   session all work from a single umbrella service.
-5. Tracing is visible in Jaeger with the HTTP semantic attributes
-   set and `traceparent` propagated.
-6. Performance on the reference handler is within 10 percent p99
-   of the legacy baseline.
-7. `rebar3 as check dialyzer` and `rebar3 as check xref` are clean.
-8. `erllama_server` runs against `livery:start_service/1` over the
-   full H3 -> H2 -> H1 chain: its CT suite passes when driven over
-   H1, H2, and H3 with the same handler set, NDJSON streaming on
-   `/api/pull` and `/api/chat` works on each protocol, and clients
-   race up to H3 via Alt-Svc. Concrete proof that Livery replaces
-   Cowboy in a live service and unlocks H2 and H3 in the process.
+1. **Done.** `livery:start_service/1` brings up H1, H2, and H3 on
+   :443/:80, all serving one handler set.
+2. **Done.** `test/livery_parity_SUITE.erl` runs the same handler
+   matrix against `livery_test_adapter`, `livery_h1`, `livery_h2` and
+   `livery_h3`, and `livery_e2e_SUITE` runs a full journey over the
+   H3, H2 and H1 chain.
+3. **Not yet.** `h2spec`, QUIC interop (quiche-client, ngtcp2-client)
+   and Autobahn suites green in CI. The wire libraries carry their own
+   conformance suites; Livery's CI does not run these yet.
+4. **In pieces.** A Keycloak-protected route, an `/openapi.json`, an
+   MCP tool over Inspector, a WebSocket echo, an SSE feed and a
+   WebTransport echo session each work and are tested on their own; one
+   umbrella service showing them together is not in this repository.
+5. **In part.** `livery_instrument_trace` sets the HTTP semantic
+   attributes and propagates `traceparent`; seeing the traces in Jaeger
+   is not checked here.
+6. **Not yet.** The bench harness has the 10 percent p99 gate against
+   a baseline; it does not run in CI.
+7. **Done.** `rebar3 as check dialyzer` and `rebar3 as check xref`
+   are clean, and CI enforces both.
+8. **Outside this repository.** `erllama_server` runs against
+   `livery:start_service/1` over the full H3, H2 and H1 chain: its CT
+   suite passes over each protocol with the same handler set, NDJSON
+   streaming on `/api/pull` and `/api/chat` works on each, and clients
+   race up to H3 via Alt-Svc. That is the proof that Livery replaces
+   Cowboy in a live service.

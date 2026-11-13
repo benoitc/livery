@@ -1,8 +1,8 @@
 # How to parse a JSON body
 
-`livery_ext:json/1` decodes a JSON request body into an Erlang term.
-You need it when a handler accepts a JSON-encoded body and wants the
-decoded value.
+`livery_ext:json/1` reads a JSON request body and decodes it into an
+Erlang term. You need it when a handler accepts a JSON body and wants
+the decoded value.
 
 ## Decode the body
 
@@ -18,39 +18,41 @@ create_user(Req) ->
             livery_resp:text(400, <<"bad json">>);
         {error, no_body} ->
             livery_resp:text(400, <<"empty body">>);
-        {error, not_buffered} ->
-            livery_resp:text(500, <<"body must be buffered">>)
+        {error, {limit, max_size}} ->
+            livery_resp:text(413, <<"body too large">>);
+        {error, _} ->
+            livery_resp:text(400, <<"body incomplete">>)
     end.
 ```
 
 `livery_ext:json/1` returns `{ok, Term}` or `{error, Reason}`. It uses
 the OTP `json` module (OTP 27+).
 
-## Buffer a streaming body first
+The H1, H2 and H3 adapters hand the body over as a stream, so
+`livery_ext:json/1` reads it to the end before decoding it. It reads at
+most 1 MiB and waits at most 5 seconds for each chunk. The other errors
+are `timeout` and `{client_reset, Reason}`.
 
-JSON extraction requires the body to be in
-`#livery_req{body = {buffered, _}}` form. Streaming bodies must be
-drained first via `livery_body:read_all/2`:
+## Change the limits
+
+Pass `max_size` (bytes) and `timeout` (milliseconds) to
+`livery_ext:json/2`:
 
 ```erlang
-{stream, Reader} = livery_req:body(Req),
-{ok, Bytes, _} = livery_body:read_all(Reader, 5_000),
-Req1 = livery_req:set_body({buffered, Bytes}, Req),
-{ok, Term} = livery_ext:json(Req1).
+livery_ext:json(Req, #{max_size => 65_536, timeout => 10_000}).
 ```
 
-The H1/H2/H3 adapters can be configured to buffer up to a per-route
-threshold automatically.
+## Refuse large bodies early
 
-## Cap the size first
-
-JSON parsing on a large body wastes CPU and memory. Put
-`livery_body_limit` upstream:
+Decoding a large body costs CPU and memory. Put `livery_body_limit`
+before the handler in the stack:
 
 ```erlang
 Stack = [
     {livery_body_limit, #{max => 65_536}},
-    %% ... handler runs only for bodies <= 64 KiB
+    %% ... a Content-Length over 64 KiB gets a 413 before the handler;
+    %% a longer body without one makes livery_ext:json/1 return
+    %% {error, {limit, max_size}}
 ].
 ```
 

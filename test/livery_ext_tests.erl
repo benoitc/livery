@@ -24,9 +24,23 @@ json_invalid_test() ->
         livery_ext:json(with_body(<<"not json">>))
     ).
 
-json_stream_body_not_buffered_test() ->
-    Req = livery_req:set_body({stream, fake_reader}, req()),
-    ?assertEqual({error, not_buffered}, livery_ext:json(Req)).
+%% The H1, H2 and H3 adapters hand every body over as a stream.
+json_stream_body_test() ->
+    Req = json_stream_req([<<"{\"a\"">>, <<":1}">>]),
+    ?assertEqual({ok, #{<<"a">> => 1}}, livery_ext:json(Req)).
+
+json_stream_empty_body_test() ->
+    ?assertEqual({error, no_body}, livery_ext:json(json_stream_req([]))).
+
+json_stream_over_limit_test() ->
+    Req = json_stream_req([<<"[1,">>, <<"2,3]">>]),
+    ?assertEqual({error, {limit, max_size}}, livery_ext:json(Req, #{max_size => 4})).
+
+json_buffered_over_limit_test() ->
+    ?assertEqual(
+        {error, {limit, max_size}},
+        livery_ext:json(with_body(<<"[1,2,3]">>), #{max_size => 4})
+    ).
 
 %%====================================================================
 %% Form
@@ -266,6 +280,12 @@ ct_req(ContentType, Body) ->
 
 form_req(Bin) ->
     ct_req(<<"application/x-www-form-urlencoded">>, {buffered, Bin}).
+
+json_stream_req(Chunks) ->
+    Ref = make_ref(),
+    [self() ! {livery_body, Ref, {data, C}} || C <- Chunks],
+    self() ! {livery_body, Ref, eof},
+    ct_req(<<"application/json">>, {stream, livery_body:new(Ref)}).
 
 form_stream_req(Chunks) ->
     Ref = make_ref(),

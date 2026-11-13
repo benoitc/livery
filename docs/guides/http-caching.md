@@ -58,9 +58,12 @@ Stack = [{livery_etag, #{}}, {livery_compress, #{}} | Rest].
 ```
 
 If you place it inside compression, the ETag is computed from the
-uncompressed body; rely on `Vary: Accept-Encoding` (which
-`livery_compress` already sets) so caches keep per-encoding variants
-distinct.
+uncompressed body. `livery_compress` then turns it into a weak ETag
+(`W/"..."`) on every compressed response, because a strong ETag must
+change when the bytes change (RFC 9110 section 8.8.1), and gzip changes
+them. The same happens to an ETag your handler sets with
+`livery_resp:with_etag/2`. Revalidation still works: `If-None-Match`
+compares weakly.
 
 ## Notes
 

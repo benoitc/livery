@@ -9,10 +9,10 @@ deflate are built in (OTP `zlib`); brotli/zstd become available when
 their apps register a codec. Configure as a stack entry
 `{livery_compress, Config}` where every key is optional:
 
-- `codecs` — list of codec modules in server-preference order
+- `codecs`: list of codec modules in server-preference order
   (default `livery_codec:registered()`); restricts/overrides the set.
-- `min_size` — minimum `{full, _}` body size to compress (default 1024).
-- `types` — compressible `Content-Type` prefixes (default text and the
+- `min_size`: minimum `{full, _}` body size to compress (default 1024).
+- `types`: compressible `Content-Type` prefixes (default text and the
   common structured types).
 
 ## Negotiation (RFC 9110 section 12.5.3)
@@ -32,6 +32,15 @@ absent or empty `Accept-Encoding` gets unencoded content.
 Only `{full, _}` (>= `min_size`) and `{chunked, _}` bodies with a
 compressible `Content-Type` and no existing `Content-Encoding` are
 eligible. SSE, file, empty, and upgrade bodies pass through unchanged.
+
+## Validators (RFC 9110 section 8.8.1)
+
+A content coding changes the bytes of the representation, so a strong
+`ETag` cannot cover both the coded and the unencoded response. When a
+response is compressed, a strong `ETag` becomes weak (`"v1"` becomes
+`W/"v1"`); a weak one is kept. `If-None-Match` compares weakly, so
+revalidation keeps working. Put `livery_etag` outside this middleware
+to get a strong tag computed over the bytes actually sent.
 """.
 -behaviour(livery_middleware).
 
@@ -223,7 +232,7 @@ apply_codec(Codec, Resp) ->
 -spec apply_full(module(), iodata(), livery_resp:resp()) -> livery_resp:resp().
 apply_full(Codec, Body, Resp) ->
     Comp = iolist_to_binary(Codec:compress(Body)),
-    R1 = livery_resp:with_body({full, Comp}, Resp),
+    R1 = livery_resp:with_body({full, Comp}, weaken_etag(Resp)),
     R2 = livery_resp:with_header(<<"content-encoding">>, Codec:name(), R1),
     case livery_resp:trailers(Resp) of
         undefined ->
@@ -239,9 +248,20 @@ apply_full(Codec, Body, Resp) ->
 ) -> livery_resp:resp().
 apply_chunked(Codec, Producer, Resp) ->
     Wrapped = fun(Emit) -> stream(Codec, Producer, Emit) end,
-    R1 = livery_resp:with_body({chunked, Wrapped}, Resp),
+    R1 = livery_resp:with_body({chunked, Wrapped}, weaken_etag(Resp)),
     R2 = livery_resp:with_header(<<"content-encoding">>, Codec:name(), R1),
     livery_resp:delete_header(<<"content-length">>, R2).
+
+%% RFC 9110 8.8.1: a strong validator changes with the representation
+%% data, which the coding just changed.
+-spec weaken_etag(livery_resp:resp()) -> livery_resp:resp().
+weaken_etag(Resp) ->
+    case [iolist_to_binary(V) || {<<"etag">>, V} <- livery_resp:headers(Resp)] of
+        [<<$", _/binary>> = Strong] ->
+            livery_resp:with_header(<<"etag">>, <<"W/", Strong/binary>>, Resp);
+        _ ->
+            Resp
+    end.
 
 -spec stream(
     module(),

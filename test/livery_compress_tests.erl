@@ -215,6 +215,63 @@ codec_registry_append_test() ->
 %% Helpers
 %%====================================================================
 
+%%====================================================================
+%% RFC 9110 8.8.1: a content coding changes the representation, so a
+%% strong ETag cannot cover both
+%%====================================================================
+
+etag_handler(Tag) ->
+    fun(_R) -> livery_resp:with_etag(Tag, livery_resp:json(200, ?JSON)) end.
+
+gzip(Extra) ->
+    #{headers => [{<<"accept-encoding">>, <<"gzip">>} | Extra]}.
+
+gzip_weakens_strong_etag_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_compress, #{min_size => 0}}], etag_handler(<<"v1">>), gzip([])
+    ),
+    ?assertEqual(<<"gzip">>, h(<<"content-encoding">>, Cap)),
+    ?assertEqual(<<"W/\"v1\"">>, h(<<"etag">>, Cap)).
+
+chunked_gzip_weakens_strong_etag_test() ->
+    Handler = fun(_R) ->
+        Resp = livery_resp:stream(
+            200, [{<<"content-type">>, <<"application/json">>}], fun(Emit) -> Emit(?JSON) end
+        ),
+        livery_resp:with_etag(<<"v1">>, Resp)
+    end,
+    Cap = livery_test_adapter:run([{livery_compress, #{min_size => 0}}], Handler, gzip([])),
+    ?assertEqual(<<"gzip">>, h(<<"content-encoding">>, Cap)),
+    ?assertEqual(<<"W/\"v1\"">>, h(<<"etag">>, Cap)).
+
+identity_keeps_strong_etag_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_compress, #{min_size => 0}}], etag_handler(<<"v1">>), #{}
+    ),
+    ?assertEqual(undefined, h(<<"content-encoding">>, Cap)),
+    ?assertEqual(<<"\"v1\"">>, h(<<"etag">>, Cap)).
+
+weak_etag_left_alone_test() ->
+    Cap = livery_test_adapter:run(
+        [{livery_compress, #{min_size => 0}}], etag_handler(<<"W/\"v1\"">>), gzip([])
+    ),
+    ?assertEqual(<<"W/\"v1\"">>, h(<<"etag">>, Cap)).
+
+%% With livery_etag outside livery_compress (the documented placement),
+%% a revalidation gets a 304 carrying the ETag and Vary of the 200.
+etag_outside_compress_304_matches_200_test() ->
+    Stack = [{livery_etag, #{}}, {livery_compress, #{min_size => 0}}],
+    Ok = livery_test_adapter:run(Stack, etag_handler(<<"v1">>), gzip([])),
+    ?assertEqual(200, livery_test_adapter:status(Ok)),
+    Tag = h(<<"etag">>, Ok),
+    ?assertEqual(<<"W/\"v1\"">>, Tag),
+    NotModified = livery_test_adapter:run(
+        Stack, etag_handler(<<"v1">>), gzip([{<<"if-none-match">>, Tag}])
+    ),
+    ?assertEqual(304, livery_test_adapter:status(NotModified)),
+    ?assertEqual(Tag, h(<<"etag">>, NotModified)),
+    ?assert(has_vary(<<"accept-encoding">>, NotModified)).
+
 run_full(Cfg, Body, ReqHeaders) ->
     Handler = fun(_R) -> livery_resp:json(200, Body) end,
     livery_test_adapter:run(

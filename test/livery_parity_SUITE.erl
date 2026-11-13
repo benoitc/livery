@@ -43,6 +43,7 @@
     full_pipeline_with_builtins/1,
     gzip_negotiation/1,
     gzip_with_trailers/1,
+    gzip_weakens_strong_etag/1,
     multipart_echo/1,
     concurrency_shed/1,
     rate_limit_shed/1,
@@ -78,6 +79,7 @@ groups() ->
         full_pipeline_with_builtins,
         gzip_negotiation,
         gzip_with_trailers,
+        gzip_weakens_strong_etag,
         multipart_echo,
         concurrency_shed,
         rate_limit_shed,
@@ -409,6 +411,19 @@ gzip_negotiation(Config) ->
     %% Decode the wire bytes with an independent zlib call: identical on
     %% test_adapter, h1, h2, h3.
     ?assertEqual(Body, zlib:gunzip(body(Resp))).
+
+%% RFC 9110 8.8.1: the gzip representation cannot share the strong ETag
+%% of the identity one.
+gzip_weakens_strong_etag(Config) ->
+    Body = <<"{\"message\":\"compress me with my validator\",\"items\":[1,2,3]}">>,
+    Resp = drive(
+        Config,
+        [{livery_compress, #{min_size => 0}}],
+        fun(_R) -> livery_resp:with_etag(<<"v1">>, livery_resp:json(200, Body)) end,
+        #{headers => [{<<"accept-encoding">>, <<"gzip">>}]}
+    ),
+    ?assertEqual(<<"gzip">>, header(<<"content-encoding">>, Resp)),
+    ?assertEqual(<<"W/\"v1\"">>, header(<<"etag">>, Resp)).
 
 gzip_with_trailers(Config) ->
     Body = <<"{\"k\":\"trailer body that is gzip compressed on the wire\"}">>,

@@ -32,6 +32,28 @@ fun(Req) ->
 end.
 ```
 
+## Authenticate to the authorization server another way
+
+HTTP Basic is the default. Your authorization server may ask for
+something else; `client_auth` takes the same methods as the token
+client:
+
+```erlang
+%% client_id and client_secret in the form body
+#{endpoint => Endpoint, client_id => <<"my-api">>, client_secret => Secret,
+  client_auth => client_secret_post}
+
+%% a signed assertion instead of a shared secret (RFC 7523)
+#{endpoint => Endpoint, client_id => <<"my-api">>,
+  client_auth => private_key_jwt,
+  private_key => {<<"ES256">>, Key}, key_id => <<"k1">>,
+  issuer => <<"https://issuer.example">>}
+```
+
+With `private_key_jwt`, the assertion's audience is the authorization
+server's `issuer`, as RFC 10070 requires. Mutual TLS needs a client
+certificate on the connection: use your own `fetch` for it (below).
+
 A missing token is rejected with `401` unless `required => false`.
 An inactive token, or any transport or decoding failure, is always
 rejected with `401` and `WWW-Authenticate: Bearer error="invalid_token"`.
@@ -70,7 +92,9 @@ too costly, and keep the cache shorter than the token's `exp`.
 
 ## Plug in a custom HTTP client
 
-The call is pluggable. Pass `fetch => fun((Url, Headers, Body) ->
+By default the call goes through `livery_client`, verifies the
+authorization server's certificate against the system trust store,
+and waits 5 seconds for the answer. The call is pluggable. Pass `fetch => fun((Url, Headers, Body) ->
 {ok, Status, Body} | {error, _})` to use your own client or to
 test without a network:
 

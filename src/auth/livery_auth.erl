@@ -44,7 +44,7 @@ nothing. `scp` is read as well as `scope`, because Azure AD and Okta
 issue it. See AGENTS.md, Known deviations.
 """.
 
--export([verify/2, tls_opts/0, missing_scopes/2, audience_matches/2]).
+-export([verify/2, tls_opts/0, client/0, authorized/2, missing_scopes/2, audience_matches/2]).
 
 -export_type([jwk/0, verify_opts/0, claims/0, error_reason/0]).
 
@@ -130,6 +130,40 @@ audience_matches(AudList, ExpectedList) when is_list(AudList), is_list(ExpectedL
     lists:any(fun(E) -> lists:member(E, AudList) end, ExpectedList);
 audience_matches(_, _) ->
     false.
+
+-doc """
+The outbound client the auth modules use to reach an authorization
+server (key sets, discovery, introspection): it verifies the server's
+certificate with `tls_opts/0` and gives up after 5 seconds without a
+connection.
+""".
+-spec client() -> livery_client:client().
+client() ->
+    {ok, _} = application:ensure_all_started(hackney),
+    livery_client:new(#{
+        adapter_opts => #{
+            hackney => [{connect_timeout, 5000}, {ssl_options, tls_opts()}]
+        }
+    }).
+
+-doc """
+Whether verified `Claims` may proceed: the sign-in is recent and strong
+enough (RFC 9470, `livery_auth_stepup`), then the token carries every
+required `scope`. Shared by `livery_auth_bearer` and
+`livery_auth_introspect`, in that order.
+""".
+-spec authorized(claims(), map()) ->
+    ok | {error, {insufficient_scope, [binary()]} | term()}.
+authorized(Claims, State) ->
+    case livery_auth_stepup:check(Claims, State) of
+        ok ->
+            case missing_scopes(Claims, maps:get(scope, State, [])) of
+                [] -> ok;
+                Missing -> {error, {insufficient_scope, Missing}}
+            end;
+        {error, _} = E ->
+            E
+    end.
 
 -doc """
 TLS client options for verifying an HTTPS peer's certificate.

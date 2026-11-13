@@ -29,16 +29,29 @@ State:
 }}
 ```
 
-`client_id`/`client_secret` authenticate this resource server to
-the introspection endpoint via HTTP Basic, each form-encoded first
-(RFC 6749 2.3.1). `audience` and `scope` are checked against the
-response's `aud` and `scope` when set.
+This resource server authenticates to the introspection endpoint
+(RFC 7662 2.1) the way the token client does (`livery_auth_token`):
+
+- by default, HTTP Basic with `client_id` and `client_secret`, each
+  form-encoded first (RFC 6749 2.3.1), or no client authentication when
+  they are not both set;
+- `client_auth => client_secret_post`: the two in the form body;
+- `client_auth => private_key_jwt`: a signed assertion (RFC 7523, as
+  updated by RFC 10070), with `private_key => {Alg, Key}`, an optional
+  `key_id`, and the authorization server's `issuer` as its audience.
+
+Mutual TLS (`tls_client_auth`) needs a client certificate on the
+outbound connection; use your own `fetch` for it.
+
+`audience` and `scope` are checked against the response's `aud` and
+`scope` when set.
 
 Deviations: responses are not cached, so every request asks the
 authorization server; cache in your own middleware if you need to. See
 AGENTS.md, Known deviations. The HTTP call is
 pluggable via `fetch => fun((Url, Headers, Body) -> {ok, Status,
-Body} | {error, _})`; the default uses `hackney`.
+Body} | {error, _})`; the default goes through `livery_client`
+(`livery_auth:client/0`), verifying the server's certificate.
 """.
 -behaviour(livery_middleware).
 
@@ -50,6 +63,11 @@ Body} | {error, _})`; the default uses `hackney`.
     endpoint := binary(),
     client_id => binary(),
     client_secret => binary(),
+    client_auth => client_secret_basic | client_secret_post | private_key_jwt | none,
+    private_key => {binary(), term()},
+    key_id => binary(),
+    issuer => binary(),
+    assertion_audience => issuer | token_endpoint,
     token_type_hint => binary(),
     audience => binary() | [binary()],
     scope => [binary()],
@@ -102,9 +120,11 @@ call(Req, Next, State) ->
 authorize(Scheme, Token, Claims, Req, Next, State) ->
     case livery_auth_binding:check(Scheme, Token, Claims, Req, State) of
         ok ->
-            case authorized(Claims, State) of
+            case livery_auth:authorized(Claims, State) of
                 ok ->
-                    granted(Scheme, Next(livery_req:set_meta(user, Claims, Req)), State);
+                    livery_auth_challenge:granted(
+                        Scheme, Next(livery_req:set_meta(user, Claims, Req)), State
+                    );
                 {error, Outcome} ->
                     livery_auth_challenge:respond(Outcome, Scheme, State)
             end;
@@ -127,11 +147,37 @@ on transport or decoding failure.
 introspect(Token, Opts) ->
     Endpoint = maps:get(endpoint, Opts),
     Fetch = maps:get(fetch, Opts, fun default_fetch/3),
-    case Fetch(Endpoint, headers(Opts), form_body(Token, Opts)) of
-        {ok, 200, Body} -> check(parse_response(Body), Opts);
-        {ok, Code, _Body} -> {error, {http_status, Code}};
-        {error, _} = Error -> Error
+    case client_auth(Opts) of
+        {ok, AuthHeaders, AuthForm} ->
+            Headers = AuthHeaders ++ base_headers(),
+            case Fetch(Endpoint, Headers, form_body(Token, Opts, AuthForm)) of
+                {ok, 200, Body} -> check(parse_response(Body), Opts);
+                {ok, Code, _Body} -> {error, {http_status, Code}};
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
     end.
+
+%% RFC 7662 2.1: the protected resource authenticates to the endpoint.
+%% The methods are the token client's (livery_auth_token). Without
+%% `client_auth', Basic when both credentials are set, nothing otherwise.
+%% The endpoint stands in for the token endpoint in the legacy
+%% `assertion_audience => token_endpoint' mode.
+-spec client_auth(opts()) ->
+    {ok, [{binary(), binary()}], [{binary(), binary()}]} | {error, term()}.
+client_auth(#{client_auth := tls_client_auth}) ->
+    {error, {unsupported_client_auth, tls_client_auth}};
+client_auth(#{client_auth := _, client_id := _} = Opts) ->
+    livery_auth_token:client_auth(Opts#{token_endpoint => maps:get(endpoint, Opts)});
+client_auth(#{client_auth := _}) ->
+    {error, {missing_option, client_id}};
+client_auth(#{client_id := Id, client_secret := Secret} = Opts) when
+    is_binary(Id), is_binary(Secret)
+->
+    livery_auth_token:client_auth(Opts#{client_auth => client_secret_basic});
+client_auth(_Opts) ->
+    {ok, [], []}.
 
 -spec parse_response(binary()) -> {ok, map()} | {error, error_reason()}.
 parse_response(Body) ->
@@ -162,71 +208,44 @@ check({ok, Claims}, Opts) ->
 check(Error, _Opts) ->
     Error.
 
--spec form_body(binary(), opts()) -> binary().
-form_body(Token, Opts) ->
-    Pairs =
+-spec form_body(binary(), opts(), [{binary(), binary()}]) -> binary().
+form_body(Token, Opts, AuthForm) ->
+    Hint =
         case maps:get(token_type_hint, Opts, undefined) of
-            undefined -> [{<<"token">>, Token}];
-            Hint -> [{<<"token">>, Token}, {<<"token_type_hint">>, Hint}]
+            undefined -> [];
+            H -> [{<<"token_type_hint">>, H}]
         end,
-    iolist_to_binary(uri_string:compose_query(Pairs)).
+    iolist_to_binary(uri_string:compose_query([{<<"token">>, Token}] ++ Hint ++ AuthForm)).
 
--spec headers(opts()) -> [{binary(), binary()}].
-headers(Opts) ->
-    Base = [
+-spec base_headers() -> [{binary(), binary()}].
+base_headers() ->
+    [
         {<<"content-type">>, <<"application/x-www-form-urlencoded">>},
         {<<"accept">>, <<"application/json">>}
-    ],
-    case {maps:get(client_id, Opts, undefined), maps:get(client_secret, Opts, undefined)} of
-        {Id, Secret} when is_binary(Id), is_binary(Secret) ->
-            %% RFC 6749 2.3.1: each part is form-encoded before Basic.
-            Cred = base64:encode(<<(form_encode(Id))/binary, ":", (form_encode(Secret))/binary>>),
-            [{<<"authorization">>, <<"Basic ", Cred/binary>>} | Base];
-        _ ->
-            Base
-    end.
+    ].
 
 %%====================================================================
-%% Default HTTP fetcher (hackney)
+%% Default HTTP fetcher
 %%====================================================================
 
--doc "Default introspection POST using `hackney`, verifying the server's TLS cert.".
+-doc """
+Default introspection POST, through `livery_client` (`livery_auth:client/0`),
+verifying the server's certificate. Waits 5 seconds for the answer.
+""".
 -spec default_fetch(binary(), [{binary(), binary()}], binary()) ->
     {ok, non_neg_integer(), binary()} | {error, term()}.
 default_fetch(Url, Headers, Body) ->
-    {ok, _} = application:ensure_all_started(hackney),
-    Opts = [
-        with_body,
-        {recv_timeout, 5000},
-        {connect_timeout, 5000},
-        {ssl_options, livery_auth:tls_opts()}
-    ],
-    case hackney:request(post, Url, Headers, Body, Opts) of
-        {ok, Code, _RespHeaders, RespBody} ->
-            {ok, Code, RespBody};
-        {error, Reason} ->
-            {error, Reason}
+    Req = #{headers => Headers, body => {full, Body}, timeout => 5000},
+    case livery_client:request(livery_auth:client(), post, Url, Req) of
+        {ok, Resp} ->
+            {ok, livery_client:status(Resp), full_body(Resp)};
+        {error, _} = Error ->
+            Error
     end.
 
-%%====================================================================
-%% Internals
-%%====================================================================
-
-form_encode(Value) ->
-    iolist_to_binary(uri_string:compose_query([{Value, true}])).
-
-%% A DPoP client gets the nonce for its next proof with every answer.
-granted(dpop, Resp, State) -> livery_auth_challenge:with_nonce(Resp, State);
-granted(bearer, Resp, _State) -> Resp.
-
-%% Who signed in, and how (RFC 9470), before what the token may do.
-authorized(Claims, State) ->
-    case livery_auth_stepup:check(Claims, State) of
-        ok ->
-            case livery_auth:missing_scopes(Claims, maps:get(scope, State, [])) of
-                [] -> ok;
-                Missing -> {error, {insufficient_scope, Missing}}
-            end;
-        {error, _} = E ->
-            E
+-spec full_body(livery_client:response()) -> binary().
+full_body(Resp) ->
+    case livery_client:body(Resp) of
+        {full, Body} -> iolist_to_binary(Body);
+        _ -> <<>>
     end.

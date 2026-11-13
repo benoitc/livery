@@ -13,9 +13,16 @@ Stack = [
 ].
 ```
 
-`livery_timeout` runs the rest of the pipeline in a monitored worker
-process. If the worker does not return within `after_ms`, the process
-is killed and `504` is emitted. Handler crashes are mapped to `500`.
+`livery_timeout` runs the rest of the pipeline in a monitored process.
+If it does not return within `after_ms`, the process is killed and
+`504` is emitted. Handler crashes are mapped to `500`.
+
+Your handler does not notice the extra process. It reads a streamed
+request body as usual, receives `{livery_disconnect, _, _}` if the
+client goes away, and keeps the logger metadata and trace context set
+before it. A `livery_concurrency` slot taken behind the timeout is
+given back after the response is sent, or when the deadline cuts the
+request off.
 
 ## Set per-route deadlines
 
@@ -29,17 +36,10 @@ LongPolls  = [{livery_timeout, #{after_ms => 60_000}} | Common].
 
 ## Notes
 
-- Streaming request bodies: the deadline runs in a spawned, monitored
-  worker, but body messages from the adapter target the original
-  request process (`livery_req_proc`). Handlers that read body chunks
-  via `livery_body:read/2` will not see them under this middleware.
-  Either place a body-buffering middleware in front of
-  `livery_timeout`, or apply the middleware only to routes whose
-  handlers do not stream input.
-- Long-lived streams: SSE and chunked streaming handlers are
-  open-ended by design. Do not place `livery_timeout` in front of
-  them. If you need an idle timer for streams, implement it inside the
-  producer with `receive ... after Ms`.
+- The deadline covers the time until your handler returns its
+  response. A streamed response (SSE, chunked) is produced after that,
+  so it is not bounded by `after_ms`. If a stream needs an idle limit,
+  put it in the producer with `receive ... after Ms`.
 
 ## See also
 

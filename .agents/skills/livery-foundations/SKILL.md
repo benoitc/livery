@@ -77,6 +77,11 @@ mutating anything the next layer sees other than the `Req` value it passes?
 Drift looks like: `spawn` around `Next` without carrying context; a
 middleware that reads state another middleware stored outside `Req`.
 
+Allowed: `livery_timeout` runs `Next` in another process the right way
+(`livery_middleware:capture_context/1` and `adopt_context/1`, hooks
+handed back, body and disconnect messages passed on). Follow it if
+you need the same.
+
 ### R3 Protocol neutrality
 
 A handler never knows whether it is on H1, H2 or H3. The request and

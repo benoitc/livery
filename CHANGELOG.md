@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Livery now requires h1 0.11.0, h2 0.17.0, quic 2.7.0, webtransport
+  0.5.8 and hackney 4.11.1.
+- A WebTransport session keeps at most 4 MiB of data waiting for the
+  peer's flow-control credit (webtransport 0.5.8); a send past that
+  returns `{error, send_buffer_full}` instead of queueing without limit.
+  Over HTTP/3, a session now ends when its connection closes.
+- On Linux, an HTTP/3 listener now runs one UDP listener process by
+  default instead of two, as quic documents. Set `pool_size => 2` to
+  keep the old behaviour.
 - An adapter written outside Livery can now offer WebSocket and
   WebTransport: `livery_ws:upgrade/3` and `livery_wt:upgrade/3` use any
   adapter that implements `accept_ws/4` or `accept_wt/4`, now optional
@@ -40,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Over HTTP/1.1, a response with no body (204, 304, or an answer to
+  HEAD) could go out with chunked framing and a stray end-of-body
+  marker, which broke the next response on a kept-alive connection;
+  browsers showed it on the request after a CORS preflight. A handler
+  that answered with `Connection: close` also left the connection open
+  until the idle timeout. Both are fixed in h1 0.10.1.
+- Over HTTP/2, an empty 204 or 304 response was sent, then treated as a
+  failed write, so Livery tried to reset a stream that had already
+  ended. Fixed in h2 0.17.0, which also drops a `Content-Length` a
+  handler sets on a 1xx or 204 (RFC 9110 section 8.6).
+- Crash reports from an HTTP/3 listener could print the server's
+  private key and TLS secrets. quic 2.7.0 keeps them out of reports.
 - An A2A request whose body was too large, too slow or cut off reached
   the agent as an empty request, so the client got a JSON parse error
   instead of the real reason. It is now refused before the agent sees

@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handler does not read to the end is stopped once the response is sent
   (RFC 9113 section 8.1, RFC 9114 section 4.1.1). HTTP/1.1 still relies
   on TCP buffers alone, until `erlang_h1` offers receive flow control.
+- Over HTTP/2, a WebSocket message larger than about 1 MiB could not be
+  sent while the client's flow window was small, and never reached the
+  client. The server now waits for the window, up to 30 seconds, as it
+  already did over HTTP/3.
 - An HTTP/3 request cancelled by the client right after its headers
   still started its handler, which then waited for a body that would
   never come and held its place in the request limit until it gave up.

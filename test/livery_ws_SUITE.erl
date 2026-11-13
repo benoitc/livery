@@ -34,6 +34,7 @@
     h1_idle_timeout_closes/1,
     h2_echo_text_frame/1,
     h2_large_message_after_upgrade/1,
+    h2_echoes_message_over_send_buffer/1,
     h2_rejects_plain_get/1,
     h2_surfaces_peer/1,
     h3_echo_text_frame/1,
@@ -66,6 +67,7 @@ all() ->
         h1_idle_timeout_closes,
         h2_echo_text_frame,
         h2_large_message_after_upgrade,
+        h2_echoes_message_over_send_buffer,
         h2_rejects_plain_get,
         h2_surfaces_peer,
         h3_echo_text_frame,
@@ -98,6 +100,7 @@ end_per_suite(_Config) ->
 init_per_testcase(TC, Config) when
     TC =:= h2_echo_text_frame;
     TC =:= h2_large_message_after_upgrade;
+    TC =:= h2_echoes_message_over_send_buffer;
     TC =:= h2_rejects_plain_get
 ->
     {ok, Listener} = livery_h2:start(#{
@@ -624,6 +627,35 @@ h2_large_message_after_upgrade(Config) ->
         Parser0 = ws_frame:init_parser(#{role => client}),
         {{text, <<"ready">>}, Parser1} = recv_ws_frame(Conn, StreamId, Parser0),
         Big = binary:copy(<<"w">>, ?LARGE_MESSAGE),
+        Frame = iolist_to_binary(ws_frame:encode({binary, Big}, client)),
+        ok = h2:send_data(Conn, StreamId, Frame, false, #{block => 10000}),
+        {Echo, _} = recv_ws_frame(Conn, StreamId, Parser1),
+        ?assertEqual({binary, Big}, Echo)
+    after
+        h2:close(Conn)
+    end.
+
+%% A message larger than h2's 1 MiB per-stream send buffer: the server
+%% waits for the client's window instead of failing the send.
+h2_echoes_message_over_send_buffer(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    try
+        {ok, StreamId} = h2:request(
+            Conn,
+            [
+                {<<":method">>, <<"CONNECT">>},
+                {<<":scheme">>, <<"http">>},
+                {<<":authority">>, <<"localhost">>},
+                {<<":path">>, <<"/ws">>},
+                {<<"sec-websocket-version">>, <<"13">>}
+            ],
+            #{protocol => <<"websocket">>}
+        ),
+        200 = wait_h2_status(Conn, StreamId),
+        Parser0 = ws_frame:init_parser(#{role => client}),
+        {{text, <<"ready">>}, Parser1} = recv_ws_frame(Conn, StreamId, Parser0),
+        Big = binary:copy(<<"m">>, 2 * 1048576),
         Frame = iolist_to_binary(ws_frame:encode({binary, Big}, client)),
         ok = h2:send_data(Conn, StreamId, Frame, false, #{block => 10000}),
         {Echo, _} = recv_ws_frame(Conn, StreamId, Parser1),

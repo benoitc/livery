@@ -154,6 +154,79 @@ timeout_maps_crash_to_500_test() ->
     ),
     ?assertEqual(500, livery_test_adapter:status(Cap)).
 
+%% A concurrency slot taken behind the timeout comes back when the
+%% timeout kills the request.
+timeout_releases_concurrency_slot_after_kill_test() ->
+    Stack = [
+        {livery_timeout, #{after_ms => 50}},
+        {livery_concurrency, livery_concurrency:limiter(1)}
+    ],
+    Slow = fun(_R) ->
+        timer:sleep(500),
+        livery_resp:text(200, <<"late">>)
+    end,
+    Fast = fun(_R) -> livery_resp:text(200, <<"ok">>) end,
+    ?assertEqual(504, livery_test_adapter:status(livery_test_adapter:run(Stack, Slow, #{}))),
+    ?assertEqual(200, livery_test_adapter:status(livery_test_adapter:run(Stack, Fast, #{}))).
+
+%% Behind the timeout, the slot is held until the response is sent,
+%% streaming included, as it is without the timeout.
+concurrency_inside_timeout_holds_until_emit_test() ->
+    #{ref := Ref} = Limiter = livery_concurrency:limiter(1),
+    Stack = [{livery_timeout, #{after_ms => 1000}}, {livery_concurrency, Limiter}],
+    Handler = fun(_R) ->
+        livery_resp:stream(200, [], fun(Emit) ->
+            Emit(integer_to_binary(atomics:get(Ref, 1)))
+        end)
+    end,
+    Cap = livery_test_adapter:run(Stack, Handler, #{}),
+    ?assertEqual(<<"1">>, livery_test_adapter:body(Cap)),
+    ?assertEqual(0, atomics:get(Ref, 1)).
+
+timeout_delivers_streamed_body_test() ->
+    Handler = fun(R) ->
+        {stream, Reader} = livery_req:body(R),
+        case livery_body:read_all(Reader, 500) of
+            {ok, Body, _} -> livery_resp:text(200, Body);
+            {error, Reason, _} -> livery_resp:text(500, atom_to_binary(Reason))
+        end
+    end,
+    Cap = livery_test_adapter:run(
+        [{livery_timeout, #{after_ms => 2000}}],
+        Handler,
+        #{method => <<"POST">>, body => streamed([<<"he">>, <<"llo">>])}
+    ),
+    ?assertEqual(<<"hello">>, livery_test_adapter:body(Cap)).
+
+timeout_forwards_disconnect_test() ->
+    Tag = livery_req:disconnect_tag(),
+    self() ! {Tag, make_ref(), closed},
+    Handler = fun(_R) ->
+        receive
+            {Tag, _, closed} -> livery_resp:text(200, <<"seen">>)
+        after 500 -> livery_resp:text(200, <<"missed">>)
+        end
+    end,
+    Cap = livery_test_adapter:run([{livery_timeout, #{after_ms => 2000}}], Handler, #{}),
+    ?assertEqual(<<"seen">>, livery_test_adapter:body(Cap)).
+
+timeout_keeps_logger_metadata_test() ->
+    SetMeta = fun(Req, Next) ->
+        logger:update_process_metadata(#{request_id => <<"r-1">>}),
+        Next(Req)
+    end,
+    Handler = fun(_R) ->
+        livery_resp:text(200, maps:get(request_id, logger:get_process_metadata(), <<"none">>))
+    end,
+    try
+        Cap = livery_test_adapter:run(
+            [SetMeta, {livery_timeout, #{after_ms => 1000}}], Handler, #{}
+        ),
+        ?assertEqual(<<"r-1">>, livery_test_adapter:body(Cap))
+    after
+        logger:unset_process_metadata()
+    end.
+
 %%====================================================================
 %% livery_access_log
 %%====================================================================

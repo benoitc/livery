@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it ends early. MCP already behaved this way, and both now share the
   same code. A2A now waits up to 60 seconds for each body chunk, as MCP
   does, instead of 30.
+- A `livery_concurrency` slot taken behind `livery_timeout` was never
+  given back when the deadline cut the request off, so after enough
+  timeouts every request was refused with 503. Even without a timeout,
+  the slot was given back before the response was sent instead of
+  after.
+- Behind `livery_timeout`, a handler could not read a streamed request
+  body, did not receive the disconnect notice, and lost the logger
+  metadata and trace context set before it. The deadline now runs the
+  handler with all of them.
 
 ## [0.12.1] - 2026-11-11
 

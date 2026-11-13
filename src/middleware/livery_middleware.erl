@@ -18,7 +18,7 @@ transform the response after, or both.
 
 ## Callback
 
-- `call(Req, Next, State) -> Resp` — invoke the middleware with
+- `call(Req, Next, State) -> Resp`: invoke the middleware with
   the request, the next continuation, and the per-instance state.
 """.
 
@@ -30,12 +30,14 @@ transform the response after, or both.
     after_response/1,
     wrap/1,
     after_emit/1,
-    with_emit_hooks/1
+    with_emit_hooks/1,
+    capture_context/1,
+    adopt_context/1
 ]).
 
 -define(EMIT_HOOKS, '$livery_after_emit').
 
--export_type([stack/0, entry/0, next/0, handler/0]).
+-export_type([stack/0, entry/0, next/0, handler/0, context/0]).
 
 -type req() :: #livery_req{}.
 -type resp() :: #livery_resp{}.
@@ -49,6 +51,8 @@ transform the response after, or both.
 -type handler() ::
     {module(), atom()}
     | fun((req()) -> resp()).
+
+-opaque context() :: [{term(), term()}].
 
 -callback call(req(), next(), term()) -> resp().
 
@@ -126,6 +130,11 @@ after_emit(Fun) when is_function(Fun, 0) ->
     case get(?EMIT_HOOKS) of
         undefined ->
             unsupported;
+        {forward, Pid, Tag} ->
+            %% Running for a worker in another process: hand the hook
+            %% over now, so it still runs if this process is killed.
+            Pid ! {Tag, {after_emit, Fun}},
+            ok;
         Hooks ->
             put(?EMIT_HOOKS, [Fun | Hooks]),
             ok
@@ -155,3 +164,31 @@ with_emit_hooks(Fun) ->
 
 restore(undefined) -> erase(?EMIT_HOOKS);
 restore(Outer) -> put(?EMIT_HOOKS, Outer).
+
+-doc false.
+%% For a middleware that runs `Next' in another process (see
+%% livery_timeout): what the pipeline keeps in this worker's process
+%% dictionary, to be adopted by that process. Emit hooks registered
+%% there are sent back as `{Tag, {after_emit, Fun}}' messages, which the
+%% worker registers with `after_emit/1'. Process identity and the random
+%% seed stay behind.
+-spec capture_context(reference()) -> context().
+capture_context(Tag) ->
+    Hooks =
+        case get(?EMIT_HOOKS) of
+            undefined -> [];
+            _ -> [{?EMIT_HOOKS, {forward, self(), Tag}}]
+        end,
+    Hooks ++
+        [
+            Entry
+         || {Key, _} = Entry <- get(),
+            not lists:member(Key, [?EMIT_HOOKS, '$ancestors', '$initial_call', rand_seed])
+        ].
+
+-doc false.
+%% Install a context captured with `capture_context/1' in the calling
+%% process.
+-spec adopt_context(context()) -> ok.
+adopt_context(Context) ->
+    lists:foreach(fun({Key, Value}) -> put(Key, Value) end, Context).

@@ -8,7 +8,8 @@ verify them locally.
 
 ## Add it to the stack
 
-The middleware authenticates this resource server with HTTP Basic.
+The middleware authenticates your API (the resource server) to the
+authorization server with HTTP Basic.
 On success the response (with `scope`, `sub`, `exp`, ...) is stored
 under `meta(user, _)`:
 
@@ -61,8 +62,8 @@ rejected with `401` and `WWW-Authenticate: Bearer error="invalid_token"`.
 ## Check who the token is for and what it grants
 
 The authorization server only says whether a token is active. Whether
-it is meant for your API, and whether it allows this request, is your
-call (RFC 7662 section 4). Set `audience` and `scope`:
+it is meant for your API, and whether it allows this request, is for
+you to decide (RFC 7662 section 4). Set `audience` and `scope`:
 
 ```erlang
 {livery_auth_introspect, #{
@@ -94,9 +95,9 @@ too costly, and keep the cache shorter than the token's `exp`.
 
 By default the call goes through `livery_client`, verifies the
 authorization server's certificate against the system trust store,
-and waits 5 seconds for the answer. The call is pluggable. Pass `fetch => fun((Url, Headers, Body) ->
-{ok, Status, Body} | {error, _})` to use your own client or to
-test without a network:
+and waits 5 seconds for the answer. You can replace it: pass
+`fetch => fun((Url, Headers, Body) -> {ok, Status, Body} | {error, _})`
+to use your own client or to test without a network:
 
 ```erlang
 #{endpoint => Endpoint,

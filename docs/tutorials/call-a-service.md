@@ -1,12 +1,13 @@
 # Tutorial: Call another service
 
 In this tutorial you build an HTTP client for an upstream service
-and add the resilience you would want in production: a timeout,
-retries, a circuit breaker. It is for you once your own service has
+and add what you would want in production to cope with failures: a
+timeout, retries, a circuit breaker. It is for you once your own service has
 to call someone else, an API for payments, an internal service for
 users, a webhook out to a partner. About 15 minutes.
 
-The client is the outbound twin of Livery's middleware. If you have
+The client works like Livery's middleware, for the requests you send
+out. If you have
 written a middleware stack, this will feel familiar: you stack layers
 around a request the way you stack them around a handler. Same idea, the
 other direction.
@@ -34,7 +35,7 @@ processes as you like.
 
 ## 2. Headers and a base URL, set once
 
-Repeating an `authorization` header on every call gets old fast. Put the
+Repeating an `authorization` header on every call is tedious. Put the
 defaults on the client and forget about them:
 
 ```erlang
@@ -56,8 +57,8 @@ without rebuilding the client.
 
 ## 3. Turn the response into something useful
 
-A status and a blob of bytes is not what your code wants to work with.
-It wants a decoded value, or a clear error. Funnel every call through one
+A status and some raw bytes are not what your code wants to work with.
+It wants a decoded value, or a clear error. Send every answer through one
 decoder:
 
 ```erlang
@@ -87,7 +88,7 @@ Now `fetch_user/2` returns `{ok, Map}`, `{error, not_found}`, or
 ## 4. Add a timeout
 
 The network will, eventually, hang. A call that never returns is worse
-than one that fails, so put a ceiling on it. This is your first layer:
+than one that fails, so put a limit on it. This is your first layer:
 
 ```erlang
 Client = livery_client:new(#{
@@ -100,15 +101,16 @@ case livery_client:get(Client, <<"/slow">>) of
 end.
 ```
 
-`timeout(5000)` gives the whole call five seconds; overrun and it returns
-`{error, timeout}` and tears down the connection underneath. A layer is
-an entry in the `stack` list, exactly like a middleware entry.
+`timeout(5000)` gives the whole call five seconds; if it takes longer, it
+returns `{error, timeout}` and closes the connection the call was using.
+A layer is an entry in the `stack` list, like a middleware entry.
 
 ## 5. Retry the failures worth retrying
 
-Transient failures happen: a `503` while the other side restarts, a
-connection reset. For idempotent calls, retrying a few times with backoff
-papers over most of them.
+Short-lived failures happen: a `503` while the other side restarts, a
+connection reset. For idempotent calls (calls that are safe to repeat),
+retrying a few times, waiting a little longer each time, hides most of
+them.
 
 ```erlang
 Client = livery_client:new(#{
@@ -123,21 +125,21 @@ Client = livery_client:new(#{
 
 `retry` retries transport errors and `502/503/504`, up to `max` times,
 waiting `200ms` then `400ms` then `800ms` (base `200`, factor `2.0`,
-with a little jitter). It only retries idempotent methods unless you opt
-in with `retry_non_idempotent => true`, so a `POST` is left alone by
+plus a small random delay). It only retries idempotent methods unless
+you turn on `retry_non_idempotent => true`, so a `POST` is left alone by
 default.
 
 Order matters here. `timeout` sits outside `retry`, so the five seconds
 is the budget for all attempts together, not for each one. That is
-usually what you want: a hard ceiling on the whole operation.
+usually what you want: a firm limit on the whole operation.
 
 ## 6. Stop hammering a service that is down
 
-Retries are kind to a service having a hiccup. They are cruel to one that
-is genuinely down: every caller piles on more load at the worst moment. A
-circuit breaker watches the failure rate and, once it crosses a line,
-trips, after which calls fail instantly without touching the network
-until the service has had time to recover.
+Retries help a service that has a short problem. They hurt one that is
+really down: every caller adds more load at the worst moment. A circuit
+breaker watches how many calls fail. Once too many do, it opens, and
+calls then fail at once, without touching the network, until the
+service has had time to recover.
 
 ```erlang
 Client = livery_client:new(#{
@@ -155,19 +157,23 @@ case livery_client:get(Client, <<"/users/42">>) of
 end.
 ```
 
-Once half of the last 20 calls have failed (`window => 20`,
-`trip => 0.5`), the breaker opens and the next call returns
-`{error, circuit_open}` straight away. After a cooldown it half-opens to
-let one probe through; if that succeeds, it closes again. The `name` is
-how breakers are kept apart, so give each upstream its own.
+The breaker counts calls in blocks of 20 (`window => 20`). When a block
+ends with half or more of its calls failed (`trip => 0.5`), the breaker
+opens and the next call returns `{error, circuit_open}` straight away.
+Only an error counts as a failure: any response, even a `503`, counts as
+a success. After a cooldown it half-opens: it lets one test call
+through, and if that call succeeds, it closes again. The `name` is how
+breakers are kept apart, so give each upstream its own.
 
-The breaker sits below `retry` on purpose: when it is open, the retries
-do not even start.
+The breaker sits below `retry`, so it counts each attempt on its own.
+While it is open, every attempt gets `{error, circuit_open}` at once,
+without touching the network, but `retry` still waits between attempts:
+the caller sees the error after the last one.
 
 ## 7. Put it together
 
 Here is the whole thing as the module you would actually keep, a small
-typed client over one API:
+client for one API that returns your own values:
 
 ```erlang
 -module(users_api).
@@ -201,21 +207,21 @@ fetch(Client, Id) ->
 ```
 
 Call `users_api:client/1` once, hold the value, and call `fetch/2`
-wherever you need a user. Timeout, retry, and breaker come along for free
-on every call, and the caller only ever sees `{ok, User}` or a clean
-error.
+wherever you need a user. Timeout, retry, and breaker apply to every
+call, and the caller only ever sees `{ok, User}` or a clear error.
 
 ## 8. Stream a response to your process
 
 A streamed response with `stream => true` gives you a `{stream, Reader}`
-body and `livery_client:read/2`, a blocking pull. That is right for a
-process whose only job is to drain the body, but it forces a worker that
-also wants to react to its own messages, a cancel signal, a progress
-tick, into a second process to run the read loop.
+body and `livery_client:read/2`, a call that blocks until the next part
+of the body arrives. That suits a process whose only job is to read the
+body to the end. But a worker that must also react to its own messages,
+such as a cancel signal or a progress tick, then needs a second process
+to run the read loop.
 
-Push mode turns the body around. Set `stream_to` to a pid and the chunks
-arrive as messages, so the worker can selectively receive body chunks and
-its own control messages side by side:
+Push mode works the other way round: the body comes to you. Set
+`stream_to` to a pid and the chunks arrive as messages, so the worker can
+receive body chunks and its own control messages side by side:
 
 ```erlang
 {ok, Resp} = livery_client:request(Client, get, <<"/blob">>, #{
@@ -249,13 +255,13 @@ in order: one `{status, Status, Headers}`, then zero or more
 `{chunk, Binary}`, then a single `done` (or `{error, Reason}` if the
 transfer fails).
 
-The `cancel` clause is the point: a plain message in the same mailbox aborts
-the download mid-flight. `livery_client:stop_stream/1` drops the connection,
+The `cancel` clause is the reason for all this: a plain message in the
+same mailbox stops the download halfway. `livery_client:stop_stream/1` drops the connection,
 so a user who quits a multi-gigabyte fetch stops paying for it immediately.
 
 ### Backpressure with `flow => manual`
 
-By default chunks are pushed as fast as the wire delivers them. If the
+By default chunks are sent to you as fast as the network delivers them. If the
 worker writes each chunk somewhere slower than the network, ask for one
 chunk at a time with `flow => manual` and pull with
 `livery_client:stream_next/1`:
@@ -280,17 +286,17 @@ No chunk arrives until you call `stream_next/1`, so a slow consumer never
 builds an unbounded backlog in its mailbox.
 
 The pull-based `{stream, Reader}` API stays as it was for simple
-consumers; reach for push mode when one process needs to interleave body
-chunks with its own work.
+consumers; use push mode when one process needs to handle body chunks
+in between its own work.
 
 ## Where to go next
 
 - Need to download something large without buffering it? See
   [Make outbound HTTP requests](../guides/make-http-requests.md) for
   streaming responses and request bodies.
-- Want to understand why the layers compose the way they do? Read
+- Want to understand why the layers fit together the way they do? Read
   [The middleware pipeline](../concepts/middleware-pipeline.md): the
   client is the same model, outbound.
-- Fronting a different HTTP client or a mock in tests? The transport is
-  a `livery_client_adapter`, the dual of the server
+- Want to use a different HTTP client, or a mock in tests? The transport
+  is a `livery_client_adapter`, the client-side counterpart of the server
   [adapters](../concepts/adapters.md).

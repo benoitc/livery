@@ -56,8 +56,9 @@ For `mtls`, the listener has to ask for client certificates; see
 
 ## Require fresh proofs with a server nonce
 
-A client creates its own proofs, so one that had its DPoP key copied
-for a moment could have proofs made for later. With a server nonce
+A client makes its own proofs, so if its DPoP key is copied even for a
+moment, whoever copied it can make proofs ahead of time and use them
+later. With a server nonce
 (RFC 9449 section 9), each proof has to carry a value your server
 handed out shortly before:
 
@@ -69,8 +70,8 @@ handed out shortly before:
 A proof without a valid nonce gets `401` with
 `error="use_dpop_nonce"` and a `DPoP-Nonce` header; the client retries
 with that value. Every answer to a DPoP request carries the next
-nonce, so a busy client rarely sees the `401`. Nonces are a timestamp
-signed with the secret, nothing is stored, and nodes that share the
+nonce, so a busy client rarely sees the `401`. A nonce is a timestamp
+signed with the secret. Nothing is stored, and nodes that share the
 secret accept each other's nonces.
 
 ## Behind a proxy
@@ -89,7 +90,7 @@ scheme, host or path, tell Livery the public URL:
 
 - A proof is accepted for 60 seconds after its `iat`
   (`dpop_iat_window`), plus `leeway`.
-- Each proof is accepted once. The record of used proofs lives in the
+- Each proof is accepted once. Livery remembers used proofs on each
   node. In a cluster, give every node the same store with
   `dpop_replay => fun((Key, ExpiresAt) -> fresh | replayed)`, or a
   proof could be replayed against another node.

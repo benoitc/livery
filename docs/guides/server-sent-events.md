@@ -1,9 +1,10 @@
 # How to return Server-Sent Events
 
-`livery_resp:sse/2` streams `text/event-stream` framing to the
-client. You need it when your client uses the EventSource API (or
-any RFC 8895 compatible consumer) and expects a one-way stream of
-events over a long-lived response.
+`livery_resp:sse/2` sends events to the client in the
+`text/event-stream` format of the HTML standard. You need it when your
+client uses the EventSource API (or any client that reads that format)
+and expects events sent one way, from server to client, over a response
+that stays open.
 
 ## Stream events
 
@@ -17,16 +18,16 @@ events(_Req) ->
 ```
 
 `livery_resp:sse/2` sets `content-type: text/event-stream` and
-`cache-control: no-cache`. The producer fun runs in the per-request
-process and drives `Emit` with one event at a time.
+`cache-control: no-cache`. The producer fun runs in the request's
+process and calls `Emit` once for each event.
 
 ## Shape an event
 
 `Emit` accepts:
 
-- A map `#{event, id, retry, data}` where any field is optional
-  except `data`. Livery formats it into the standard SSE frame.
-- Plain `iodata()`, framed as a `data:` line only.
+- A map `#{event, id, retry, data}` where only `data` is required.
+  Livery writes it out as a standard SSE event.
+- Plain `iodata()`, sent as a `data:` line and nothing else.
 
 ```erlang
 Emit(#{event => <<"ping">>, data => <<"pong">>}).
@@ -65,8 +66,8 @@ left out.
 
 ## Keep idle connections alive
 
-To keep idle connections alive through proxies, emit a comment line
-periodically (a line beginning with `:`):
+Proxies may close a connection that stays quiet. To keep it open, send
+a comment line (a line that starts with `:`) every so often:
 
 ```erlang
 loop(Emit) ->
@@ -81,8 +82,7 @@ loop(Emit) ->
 ## Detect a disconnect
 
 `Emit` returns `{error, closed}` once the client disconnects (the
-H1/H2/H3 adapters surface this; the test adapter always returns
-`ok`):
+H1/H2/H3 adapters report it; the test adapter always returns `ok`):
 
 ```erlang
 loop(Emit) ->

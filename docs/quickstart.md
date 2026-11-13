@@ -1,9 +1,9 @@
 # Quickstart
 
-Write your first Livery handler and exercise it end-to-end through
-the in-memory adapter. This takes about five minutes. No socket is
-involved; the same handler runs unchanged behind the H1, H2, and H3
-adapters when you serve it with `livery:start_service/1`.
+Write your first Livery handler and run it end to end through the
+in-memory adapter. This takes about five minutes. No socket is
+involved, and the same handler runs unchanged behind the H1, H2, and
+H3 adapters when you serve it with `livery:start_service/1`.
 
 ## Prerequisites
 
@@ -79,9 +79,11 @@ Stack = [
 Cap = livery_test_adapter:run(Stack, fun hello:index/1, #{}).
 ```
 
-The response will carry an `X-Request-ID` header, the access log
-will emit one entry via `logger:log/2`, and any inbound body over
-1 MiB will be rejected with a `413` before the handler runs.
+The response carries an `X-Request-ID` header, the access log writes
+one entry with `logger:log/2`, and a request body over 1 MiB is
+refused. When its `Content-Length` says so, the client gets a `413`
+before the handler runs; otherwise the body reader returns
+`{error, body_too_large, _}` once the handler has read past 1 MiB.
 
 ## What's next
 

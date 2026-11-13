@@ -2,18 +2,18 @@
 
 This page explains what middleware is in Livery, the shape it takes, and
 why it is a continuation over values rather than a mutable response you
-write into. Read it when you have cross-cutting work to add. Middleware
-is the code that runs around your handlers: the work that does not belong
-to any one route but to many. A request id on every response, an access
-log line, a body-size cap, an auth check, a CORS preflight, a timeout.
-You write each concern once and stack it.
+write into. Read it when you have work to add that many routes share.
+Middleware is the code that runs around your handlers: the work that does
+not belong to one route but to many. A request id on every response, an
+access log line, a body-size cap, an auth check, a CORS preflight, a
+timeout. You write each one once and stack them.
 
 A Livery middleware is a function over immutable values, in the
 Tower/Axum style: it receives the request and a `Next` continuation, and
 it *returns* a response. It can change the request before calling `Next`,
-change the response after, decline to call `Next` at all, or wrap the
-call. There is no shared mutable response object to write into and
-remember to forward.
+change the response after, not call `Next` at all, or wrap the call.
+There is no shared response object to write into and remember to pass
+on.
 
 ## When you want middleware (and when you do not)
 
@@ -21,18 +21,19 @@ remember to forward.
 authentication, logging, rate limiting, CORS, compression, security
 headers, request ids, deadlines. **Keep it in the handler when** the
 logic is specific to one endpoint. **Put it on a route's `Meta`** when it
-applies to just a few routes (see [Routing](routing.md)).
+applies to only a few routes (see [Routing](routing.md)).
 
 ## A modern, value-based model
 
 Livery's middleware is the **Tower/Axum** model, not the legacy
-`(req, res, next)` one (principle #4 in [design.md](../design.md):
-*"Axum + Tower ergonomics"*).
+`(req, res, next)` one (rule 2 in [design.md](../design.md):
+*"Middleware is a continuation"*).
 
 **Legacy** (Express, Rack, Cowboy middlewares): a middleware gets a
-mutable request *and* response object plus a `next` callback. You mutate
-the response in place and remember to call `next()`; control flow is
-implicit and the response is shared, mutable state.
+mutable request *and* response object plus a `next` callback. You change
+the response in place and remember to call `next()`. Nothing in the code
+shows where control goes next, and every middleware changes the same
+response.
 
 ```text
 %% legacy shape - mutate-and-next
@@ -56,8 +57,8 @@ Why it matters:
 - **Composition is a value.** `Next` *is* "the rest of the pipeline" as a
   function; wrapping it in `try`/`catch`, a timeout, or a span means
   calling it inside your own code.
-- **Pairs with extractors.** Typed input comes from `livery_ext`
-  (`json/1`, `query/2`, `bearer_token/1`), not from mutating the request.
+- **Works with extractors.** Typed input comes from `livery_ext`
+  (`json/1`, `query/2`, `bearer_token/1`), not from changing the request.
 
 ## Shape
 
@@ -82,8 +83,8 @@ Request  ──> M1 ──> M2 ──> M3 ──> Handler ──> M3 ──> M2 
 
 A reusable middleware is a module implementing the one callback,
 `call(Req, Next, State)`. `State` is whatever you configured the entry
-with. This one rejects requests without a known API key, and otherwise
-gets out of the way:
+with. This one rejects requests without a known API key, and lets the
+others through:
 
 ```erlang
 -module(my_api_key).
@@ -136,7 +137,7 @@ inside the service-wide stack:
 
 ## Sugar constructors, and when to use them
 
-For the common cases you do not need a whole module: lift a small
+For the common cases you do not need a whole module: turn a small
 function into a stack entry.
 
 ```erlang
@@ -145,7 +146,7 @@ livery_middleware:after_response(fun(Resp) -> ... end)       %% response transfo
 livery_middleware:wrap(fun(Class, Reason, Stack) -> ... end) %% try/catch
 ```
 
-**Which to reach for:**
+**Which one to use:**
 
 | You need to ... | Use |
 |---|---|
@@ -157,33 +158,33 @@ livery_middleware:wrap(fun(Class, Reason, Stack) -> ... end) %% try/catch
 ## Threading state to the handler
 
 A middleware stores values for the handler with `livery_req:set_meta/3`;
-the handler reads them with `livery_req:meta/2`. Common payloads: the
+the handler reads them with `livery_req:meta/2`. Typical values: the
 authenticated user, a trace id, parsed form data. The handler may also
-write `meta` for a downstream `after_response`.
+write `meta` for an `after_response` that runs after it.
 
 ## Ordering rules of thumb
 
 | Position | Why |
 |---|---|
 | `livery_request_id` outermost | every response carries an id |
-| error wrapper just below | catches everything, including auth and routing |
+| error wrapper right below | catches everything, including auth and routing |
 | `livery_access_log` after wrapper | sees the final status |
 | `livery_body_limit` further in | bodies are checked once |
 | `livery_timeout` further still | deadline covers body + handler |
 | auth before business logic | handlers can assume `meta(user, _)` is set |
-| handler last | a single function, never explicit |
+| handler last | a single function, not an entry in the stack |
 
 ## Performance
 
 The pipeline is built per request as a chain of closures: each `Next` is
-`fun(R) -> run(Rest, Handler, R) end`. The BEAM handles these well; the
-per-request overhead is a few calls plus the real work. Keep stacks under
-about ten entries.
+`fun(R) -> run(Rest, Handler, R) end`. The BEAM runs these cheaply: per
+request, the pipeline costs a few function calls on top of the real
+work. Keep stacks under about ten entries.
 
 ## Outbound: the same model, the other direction
 
-The same composable model runs in the other direction. `livery_client`
-is the outbound twin of this pipeline: you stack layers (timeout, retry,
+The same model works for the requests your service sends. `livery_client`
+is this pipeline turned around: you stack layers (timeout, retry,
 circuit breaker, concurrency) around an HTTP request the same way you
 stack middleware around a handler, and each layer is the same
 `call(Request, Next, State)` shape, returning `{ok, Response} |

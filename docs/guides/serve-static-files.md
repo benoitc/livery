@@ -1,15 +1,16 @@
 # How to serve static files
 
 `livery_static:handler/1,2` serves a directory of files (assets, a
-built SPA, downloads) over HTTP, with correct `Content-Type`,
-conditional GET, and `Range` support, and without exposing anything
-outside the directory. You need it when you want to ship a folder of
-files rather than write a handler per asset.
+built single-page app, downloads) over HTTP, with the right
+`Content-Type`, conditional GET (a `304` when the client already has
+the file), and `Range` support, and without exposing anything outside
+the directory. You need it when you want to serve a folder of files
+rather than write a handler per file.
 
 ## Mount it on a wildcard route
 
 Mount the handler on a router wildcard route. The `*path` segment
-captures the rest of the URL, which the handler maps to a file under
+takes the rest of the URL, and the handler turns it into a file under
 the root:
 
 ```erlang
@@ -28,13 +29,14 @@ If you are not using the router, configure a `prefix` to strip from the
 request path:
 
 ```erlang
-{livery_static, never}  %% NB: it is a handler, not middleware
-%% as a service handler:
-livery:start_listener(h1, #{
+livery:start_listener(livery_h1, #{
     port => 8080,
     handler => livery_static:handler("public", #{prefix => <<"/">>})
 }).
 ```
+
+`livery_static:handler/2` returns a handler, not a middleware, so it
+goes under `handler`, not in the middleware stack.
 
 ## Options
 
@@ -51,9 +53,10 @@ livery_static:handler("priv/assets", #{
 
 ## Behaviour
 
-- `Content-Type` is inferred from the file extension (text types get
-  `; charset=utf-8`), defaulting to `application/octet-stream`.
-- A weak `ETag` (`W/"size-mtime"`) is emitted; a matching
+- `Content-Type` comes from the file extension (text types get
+  `; charset=utf-8`), and is `application/octet-stream` when the
+  extension is unknown.
+- A weak `ETag` (`W/"size-mtime"`) is sent; a matching
   `If-None-Match` returns `304 Not Modified`.
 - `Range: bytes=...` returns `206 Partial Content`; an unsatisfiable
   range returns `416` with `Content-Range: bytes */<size>`.
@@ -68,11 +71,11 @@ livery_static:handler("priv/assets", #{
 
 ## Notes
 
-- The sub-path is percent-decoded and then confined: any `..` segment,
-  absolute path, control byte, or bad escape is rejected with `404`, so a
-  request can never traverse out of the root.
-- Only regular files are served (directories and symlinks yield `404`),
-  so a symlink inside the root cannot be used to escape it.
+- The sub-path is percent-decoded and then checked: any `..` segment,
+  absolute path, control byte, or bad escape is refused with `404`, so a
+  request can never reach a file outside the root.
+- Only regular files are served (directories and symlinks get `404`),
+  so a symlink inside the root cannot be used to get out of it.
 
 ## See also
 

@@ -4,7 +4,7 @@ When a client POSTs `multipart/form-data` (a browser form with
 files, or a multimodal request) you need the fields and uploaded
 files without buffering the whole request in memory. Use
 `livery_multipart`: pull parts one at a time and stream each part's
-body, so a large upload never sits in RAM.
+body, so a large upload never sits whole in memory.
 
 ## Stream parts one at a time
 
@@ -35,13 +35,13 @@ consume(MP, _Name, _File) ->
 
 `next_part/2` returns each part's `name`, `filename`,
 `content_type`, and raw `headers` (parsed from `Content-Disposition`).
-`read_part/2` streams that part's bytes; calling `next_part` again
-skips any unread remainder.
+`read_part/2` reads that part's bytes chunk by chunk; calling
+`next_part` again skips whatever you did not read.
 
 ## Read small forms at once
 
-When the parts are small, `read_all/1,2` collects them into memory
-under the limits:
+When the parts are small, `read_all/1,2` reads them all into memory,
+within the limits:
 
 ```erlang
 {ok, Parts} = livery_multipart:read_all(Req),
@@ -50,8 +50,8 @@ under the limits:
 
 ## Set the limits
 
-All buffering is bounded. Override the defaults via the options map
-on `new/2` / `read_all/2`:
+Everything held in memory has a limit. Change the defaults with the
+options map of `new/2` / `read_all/2`:
 
 ```erlang
 livery_multipart:read_all(Req, #{
@@ -66,7 +66,7 @@ livery_multipart:read_all(Req, #{
 
 ## Notes
 
-- Sanitize the filename. `filename` is returned exactly as the
+- Clean up the filename. `filename` is returned exactly as the
   client sent it and the parser never touches the filesystem. A
   hostile client can send `../../etc/passwd`. If you write uploads
   to disk, confine the path yourself (basename + a fixed directory);

@@ -1,7 +1,8 @@
 # How to return trailers
 
-Trailers are response headers sent after the body (HTTP/1.1
-chunked-trailers, HTTP/2 and HTTP/3 trailer frames). You need them
+Trailers are response headers sent after the body (at the end of a
+chunked body on HTTP/1.1, in a final headers frame on HTTP/2 and
+HTTP/3). You need them
 when a value is only known once the body has been produced, such as
 a checksum over the bytes you streamed.
 
@@ -19,8 +20,7 @@ fetch(_Req) ->
 ## Compute a trailer lazily
 
 When the trailer depends on bytes that have not been produced yet,
-pass a fun instead. Livery evaluates it after the body has been
-emitted:
+pass a fun instead. Livery calls it once the body has been sent:
 
 ```erlang
 livery_resp:with_trailers(
@@ -30,12 +30,12 @@ livery_resp:with_trailers(
 
 ## Notes
 
-- Trailers are always supported on HTTP/2 and HTTP/3. On HTTP/1.1
-  they require chunked transfer encoding; the H1 adapter
-  auto-promotes when trailers are present.
+- Trailers always work on HTTP/2 and HTTP/3. On HTTP/1.1 they need
+  chunked transfer encoding, and the H1 adapter switches to it on its
+  own when a response has trailers.
 - Check the adapter's capabilities map
-  (`c:livery_adapter:capabilities/1`) if your code must adapt by
-  protocol.
+  (`c:livery_adapter:capabilities/1`) if your code has to behave
+  differently per protocol.
 
 ## See also
 

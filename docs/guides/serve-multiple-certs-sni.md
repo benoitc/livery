@@ -4,15 +4,16 @@ When a client opens a TLS (or QUIC) connection it sends the hostname
 it is asking for in the ClientHello, as the Server Name Indication
 (SNI, RFC 6066). You need SNI when one listener serves several
 hostnames and each one has a different certificate: you look at that
-name and hand back the matching certificate, instead of pinning the
+name and return the matching certificate, instead of tying the
 listener to a single `cert`/`key` pair.
 
 ## Install a per-hostname callback
 
-Every TLS-bearing adapter lets you install a callback that runs once
-per connection, receives the SNI, and returns the certificate to
-present. The hook differs by protocol, because HTTP/1.1 and HTTP/2 run
-on Erlang's `ssl`, while HTTP/3 runs on QUIC's own TLS 1.3 stack:
+Every adapter that uses TLS lets you install a callback that runs once
+per connection, receives the SNI, and returns the certificate to send.
+The option is not the same for every protocol, because HTTP/1.1 and
+HTTP/2 run on Erlang's `ssl`, while HTTP/3 runs on QUIC's own TLS 1.3
+code:
 
 | Key | Protocol | Option | Callback |
 |---|---|---|---|
@@ -27,8 +28,8 @@ returns `{ok, #{cert := Der, key := Key}}` (with an optional
 
 ## HTTP/1.1 and HTTP/2
 
-`ssl_opts` is a passthrough to `ssl:listen/2`: whatever you put there
-is merged on top of the listener's own TLS defaults, so your options
+`ssl_opts` goes to `ssl:listen/2` as is: whatever you put there is
+merged on top of the listener's own TLS defaults, so your options
 win. Install `sni_fun` to pick the certificate per hostname.
 
 ```erlang
@@ -60,9 +61,9 @@ callback does not recognise.
 
 ## HTTP/3 (QUIC)
 
-QUIC negotiates TLS inside its own transport, so it does not use
-`ssl_opts`. Pass `sni_callback` instead. It is called once per
-connection with the SNI and returns the certificate map to present.
+QUIC runs the TLS handshake inside its own transport, so it does not
+use `ssl_opts`. Pass `sni_callback` instead. It is called once per
+connection with the SNI and returns the certificate map to send.
 
 ```erlang
 SniCallback = fun(ServerName) ->
@@ -85,19 +86,19 @@ end,
 }).
 ```
 
-The callback returns DER-encoded material: `cert` is the leaf
+The callback returns DER-encoded data: `cert` is the server's own
 certificate, `key` the private key term, and the optional
-`cert_chain => [Der]` carries intermediates. An `{error, _}`, a
-malformed result, or a raised exception fails the handshake with a
-`handshake_failure` alert, so a missing host closes the connection
-rather than serving the wrong certificate.
+`cert_chain => [Der]` holds the intermediate certificates. An
+`{error, _}`, a malformed result, or a raised exception fails the
+handshake with a `handshake_failure` alert, so an unknown host closes
+the connection instead of getting the wrong certificate.
 
 ## Share the same certificates on every protocol
 
 To serve one hostname over H1, H2, and H3, give each TLS adapter its
-own hook. The two callbacks differ only in their return shape (an
-`ssl` option list for `https`, a `{ok, CertMap}` for `http3`), so a
-small wrapper around one lookup keeps them in step:
+own callback. The two differ only in what they return (an `ssl` option
+list for `https`, a `{ok, CertMap}` for `http3`), so two small wrappers
+around one lookup keep them in agreement:
 
 ```erlang
 Lookup = fun(Name) -> cert_store:lookup(Name) end,
@@ -138,25 +139,27 @@ end,
 
 `https` and `http3` share the port number because one is TCP and the
 other UDP. `alt_svc => advertise` puts an `Alt-Svc` header on the H1
-and H2 responses so a capable client knows it can move up to H3.
+and H2 responses so a client that supports H3 knows it can move up
+to it.
 
 ## Notes
 
-- The `ServerName` type differs by stack: a charlist on `https` (what
-  `ssl` passes `sni_fun`), a binary on `http3`. Both receive `undefined`
-  when the client sends no SNI.
+- The `ServerName` type depends on the listener: a charlist on `https`
+  (what `ssl` passes to `sni_fun`), a binary on `http3`. When the client
+  sends no SNI, `ssl` does not call `sni_fun` at all, while
+  `sni_callback` receives `undefined`.
 - Keep a static `cert`/`key` on the listener. On `https` it is the
   fallback whenever `sni_fun` returns `[]`; on `http3` it is the
   certificate used when no `sni_callback` is set. HTTP/3 needs
   `quic` >= 1.6.5 for `sni_callback`.
-- The callback runs on the listener's connection path, in the
-  handshake. Keep it fast and side-effect-light: look up a cached
-  certificate, do not block on the network. Load and parse certificates
+- The callback runs during the handshake, before the connection can
+  go on. Keep it fast and with few side effects: look up a cached
+  certificate, do not wait on the network. Load and parse certificates
   ahead of time and keep them in a table your callback reads.
 - SNI selects the *certificate*, not the route. Once the handshake
-  completes the request flows through the same router and middleware as
-  any other; match on the `Host`/`:authority` header if you want
-  per-hostname behaviour.
+  completes the request goes through the same router and middleware as
+  any other; match on the `Host`/`:authority` header if you want each
+  hostname to behave differently.
 
 ## See also
 

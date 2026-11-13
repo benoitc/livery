@@ -16,8 +16,8 @@ you can run the finished thing while you read, and in
 
 A tiny notes service. You keep notes in an ETS table and expose them
 over HTTP: list them, create one, fetch one, delete one. Then you add a
-live events feed and a WebSocket echo on top. It touches every part of
-Livery you will reach for in a real service.
+live events feed and a WebSocket echo on top. It uses every part of
+Livery you will need in a real service.
 
 Run it first, so you know where you are going:
 
@@ -43,9 +43,9 @@ away. Now build it from scratch.
 
 ## 2. Start a service
 
-A service is the front door. `livery:start_service/1` takes one map and
-brings up listeners, wires your router, and shares one middleware stack
-across all of them.
+A service is the front door. `livery:start_service/1` takes one map,
+starts the listeners, connects your router, and shares one middleware
+stack across all of them.
 
 ```erlang
 start(Port) ->
@@ -61,11 +61,11 @@ That is the whole startup. The `http` key asks for an HTTP/1.1 listener
 on `Port`; `router` and `middleware` you define in the next sections. You
 get back `{ok, Pid}`, and `livery:stop_service(Pid)` later stops it.
 
-If you only ever want one protocol, `livery:start_listener/2` gives you a
+If you only ever want one protocol, `livery:start_listener/2` starts a
 single adapter directly, for example
-`livery:start_listener(livery_h1, Opts)`. The service is the friendlier
+`livery:start_listener(livery_h1, Opts)`. The service is the easier
 choice when you want several protocols sharing one set of handlers, which
-is exactly where you are headed in section 8.
+is where you are going in section 8.
 
 ## 3. Routing
 
@@ -149,17 +149,20 @@ You have met most of the response builders already: `livery_resp:json/2`,
 `with_header/3` adds or replaces a header on any response. There are more
 (`redirect/2`, `html/2`, `file/2`); see
 [Request and response](../concepts/request-and-response.md). To read query
-string parameters, reach for `livery_ext:query/2`, covered in
+string parameters, use `livery_ext:query/2`, covered in
 [Read query strings](../guides/read-query-strings.md).
 
 ## 5. Middleware
 
-Middleware is how you do the cross-cutting work: logging, request IDs,
-limits, timing. A Livery middleware is a continuation over immutable
-values, in the Tower and Axum spirit, not the old mutate-and-next style.
-The shape is `call(Req, Next, State)`, or a `fun((Req, Next))`. You
-may change the request before calling `Next`, change the response after,
-short-circuit by never calling `Next`, or all three.
+Middleware is where you put the work every request shares: logging,
+request IDs, limits, timing. A Livery middleware receives the request
+value and a `Next` function that runs the rest of the stack, and returns
+a response, as in Tower and Axum. Nothing is changed in place: this is
+not the older style where each step edits shared request and response
+objects and then calls `next`. The shape is `call(Req, Next, State)`, or
+a `fun((Req, Next))`. You may change the request before calling `Next`,
+change the response after, answer on your own by never calling `Next`,
+or all three.
 
 Here is a timing middleware, written as a fun:
 
@@ -201,17 +204,18 @@ list_marker() ->
     ).
 ```
 
-`livery_middleware:after_response/1` is a small convenience for the common
-"only touch the response" case. There is `before/1` for the request side
-and `wrap/1` for try/catch recovery. More in
+`livery_middleware:after_response/1` is a shortcut for the common case
+where you only change the response. There is `before/1` for the request
+side, and `wrap/1` to catch errors from the rest of the stack and turn
+them into a response. More in
 [The middleware pipeline](../concepts/middleware-pipeline.md).
 
 ## 6. Streaming with Server-Sent Events
 
-Not every response fits in one buffer. For a live feed you want to push
-events as they happen. `livery_resp:sse/2` hands your function an `Emit`
-callback; you call it as often as you like, and Livery frames each event
-on the wire.
+Not every response is ready all at once. For a live feed you want to
+send events as they happen. `livery_resp:sse/2` gives your function an
+`Emit` callback; you call it as often as you like, and Livery formats
+each event and sends it.
 
 ```erlang
 events(_Req) ->
@@ -225,8 +229,8 @@ events(_Req) ->
     end).
 ```
 
-`curl -N http://127.0.0.1:8080/events` shows the frames arriving. The same
-idea drives chunked bodies (`livery_resp:stream/3`) and NDJSON
+`curl -N http://127.0.0.1:8080/events` shows the events arriving. The same
+idea works for chunked bodies (`livery_resp:stream/3`) and NDJSON
 (`livery_resp:ndjson/2`). See
 [Streaming and backpressure](../concepts/streaming-and-backpressure.md).
 
@@ -256,13 +260,14 @@ handle_info(_Msg, State) -> {ok, State}.
 terminate(_Reason, _State) -> ok.
 ```
 
-The nice part: this upgrade rides the listener you already have. On
-HTTP/1.1 it is the classic Upgrade handshake; on HTTP/2 and HTTP/3 it is
-extended CONNECT. Same handler, no extra plumbing.
+The nice part: the upgrade uses the listener you already have. On
+HTTP/1.1 it is the usual Upgrade handshake; on HTTP/2 and HTTP/3 it is
+extended CONNECT. The same handler works on all three, with nothing
+extra to set up.
 
 ## 8. Serve three protocols at once
 
-This is where the service pays off. Add an `https` key and an
+This is what the service is for. Add an `https` key and an
 `http3` key to the same map, point all three at the same router, and you
 are serving HTTP/1.1, HTTP/2 over TLS, and HTTP/3 over QUIC from one set of
 handlers.
@@ -281,16 +286,18 @@ start_tls(Port) ->
 ```
 
 The example borrows the self-signed certs under `test/certs`, which are
-for local play only, never production. The service advertises HTTP/3 with
-an `Alt-Svc` header on the H1 and H2 responses, so clients that know how
-can upgrade themselves. To pin a specific address or go IPv6, see
+for local testing only, never production. Add `alt_svc => advertise` to
+the map and the service advertises HTTP/3 with an `Alt-Svc` header on
+the H1 and H2 responses, so clients that support HTTP/3 can switch to
+it. Without it, no `Alt-Svc` header is sent. To bind to a specific address or use
+IPv6, see
 [Bind to an address or IPv6](../guides/bind-listen-address.md), and for the
 bigger picture, [Adapters](../concepts/adapters.md).
 
 ## 9. Shut down gracefully
 
-Pulling the plug mid-request is rude. `livery:drain/2` stops accepting new
-connections, waits for the requests already running to finish, then stops
+Cutting a request off halfway is rude to the client. `livery:drain/2`
+stops accepting new connections, waits for the requests already running to finish, then stops
 the service.
 
 ```erlang
@@ -298,16 +305,16 @@ ok = livery:drain(Pid, #{timeout => 30000}).
 ```
 
 If you want to watch it happen, `livery_drain:in_flight/0` tells you how
-many requests are still in flight. More in
+many requests are still running. More in
 [Shut down gracefully](../guides/graceful-shutdown.md).
 
 ## 10. Write your own adapter
 
 So far you have used the adapters that ship with Livery. What if you have a
 transport they do not cover? You write an adapter. It is less work than it
-sounds, because an adapter owns almost no logic: framing and TLS live in
-the wire library, routing and middleware live above. The adapter
-translates between the two.
+sounds, because an adapter holds almost no logic: the protocol's framing
+and TLS live in the wire library, routing and middleware live in Livery
+above it. The adapter translates between the two.
 
 An adapter implements the `livery_adapter` behaviour, eight callbacks:
 
@@ -328,10 +335,10 @@ worker with `livery_req_sup:start_request/1`, feed the body into it as
 handler and drives the response back out through `livery:emit/3`, which
 calls the `send_*` callbacks above.
 
-`examples/livery_example_adapter.erl` is a readable, runnable adapter that
-does exactly this, with one shortcut: instead of a socket it captures the
-response in an ETS table, so you can study the wiring without a wire. The
-heart of it is the request driver:
+`examples/livery_example_adapter.erl` is a short, runnable adapter that
+does this, with one shortcut: instead of a socket it stores the
+response in an ETS table, so you can see how the pieces connect without
+a network. The main part is the function that drives a request:
 
 ```erlang
 request(Listener, Stack, Handler, Spec) ->
@@ -350,19 +357,20 @@ request(Listener, Stack, Handler, Spec) ->
     capture(Stream).
 ```
 
-To grow this into a real transport, keep the callbacks, replace the ETS
+To turn this into a real transport, keep the callbacks, replace the ETS
 sink with socket writes, and translate your wire's incoming body events
 into `{livery_body, Ref, _}` messages (the `{h1_stream, _}` loop in
 `livery_h1` is the template). When it works, add a group to
 `test/livery_parity_SUITE.erl` so your adapter is held to the same
-observable behaviour as the others. `livery_test_adapter` is the canonical
-minimal reference, and [Adapters](../concepts/adapters.md) explains the
-contract in full.
+behaviour, seen from outside, as the others. `livery_test_adapter` is the
+smallest complete adapter to compare against, and
+[Adapters](../concepts/adapters.md) explains in full what an adapter must
+do.
 
 ## 11. Test it without a socket
 
-Because handlers are pure functions of the request, you can test them with
-no service running at all. `livery_test_adapter:run/3` builds a request,
+Because a handler takes a request value and returns a response value, you
+can test it with no service running at all. `livery_test_adapter:run/3` builds a request,
 runs the stack and handler, and captures the response:
 
 ```erlang
@@ -384,8 +392,8 @@ see [Test your handlers](testing-handlers.md).
 
 ## Next steps
 
-You now have the whole core in your hands. From here, the how-to guides go
-deeper on the specialised pieces:
+You have now seen the whole core. From here, the how-to guides go further
+into the more specialised parts:
 
 - [Verify opaque tokens (introspection)](../guides/token-introspection.md)
   and [Extract a bearer token](../guides/bearer-tokens.md) for auth.

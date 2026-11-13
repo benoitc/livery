@@ -1,15 +1,15 @@
 # How to set security headers
 
-`livery_security_headers` is a middleware that adds baseline
-hardening headers to responses (`X-Content-Type-Options`,
+`livery_security_headers` is a middleware that adds a basic set of
+security headers to responses (`X-Content-Type-Options`,
 `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security`,
-optionally `Content-Security-Policy`). You need it when you want
-these defaults applied across your service without setting them in
-every handler.
+and `Content-Security-Policy` if you ask for it). You need it when you
+want these headers on every response of your service without setting
+them in each handler.
 
 ## Add it to the stack
 
-With no config it applies sensible defaults:
+With an empty config it uses safe defaults:
 
 ```erlang
 Stack = [
@@ -18,7 +18,7 @@ Stack = [
 ].
 ```
 
-Defaults emitted:
+Headers sent by default:
 
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
@@ -28,9 +28,9 @@ Defaults emitted:
 
 ## HSTS only on secure requests
 
-`Strict-Transport-Security` is meaningless over plain HTTP, so it is
-emitted only when the request is secure (`scheme` is `https` or TLS
-info is present). Tune or disable it:
+`Strict-Transport-Security` means nothing over plain HTTP, so it is
+sent only when the request is secure (`scheme` is `https` or TLS
+info is present). Change it or turn it off:
 
 ```erlang
 {livery_security_headers, #{
@@ -62,8 +62,8 @@ that header entirely:
 
 ## Notes
 
-- A header the handler already set on the response is preserved, so a
-  handler can override any of these per response.
+- A header the handler already set on the response is kept, so a
+  handler can override any of these for one response.
 
 ## See also
 

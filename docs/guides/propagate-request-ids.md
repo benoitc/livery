@@ -1,9 +1,9 @@
 # How to propagate request IDs
 
-`livery_request_id` gives every request a stable id that appears in
-logs and on the response, and that clients can pin to track work
-across services. You need it as soon as a request crosses more than
-one log line or one service.
+`livery_request_id` gives every request an id that appears in logs and
+on the response. A client can send its own id, to follow one piece of
+work across services. You need it as soon as one request leaves more
+than one log line, or goes through more than one service.
 
 ## Add it to the stack
 
@@ -20,8 +20,8 @@ Stack = [
 - If present, reuses it.
 - If absent, generates a 32-character lowercase hex id from
   `crypto:strong_rand_bytes/1`.
-- Stores it on `#livery_req{}` via `livery_req:set_req_id/2`.
-- Echoes the same value on the response as `X-Request-ID`.
+- Stores it on `#livery_req{}` with `livery_req:set_req_id/2`.
+- Sends the same value back on the response as `X-Request-ID`.
 
 ## Read it from your code
 
@@ -42,15 +42,14 @@ my_handler(Req) ->
     livery_resp:empty(204).
 ```
 
-When the downstream service also runs Livery with
-`livery_request_id`, it honors the value and keeps the chain
-consistent.
+If the service you call also runs Livery with `livery_request_id`, it
+keeps that value, so the whole chain shares one id.
 
 ## Place it first
 
-`livery_request_id` should be the outermost entry in the stack so
-every response carries the id, including ones produced by
-short-circuiting middleware below it.
+Put `livery_request_id` first in the stack (the outermost entry), so
+every response carries the id, even one that a middleware further down
+returns early without calling the handler.
 
 ## See also
 

@@ -1,7 +1,7 @@
 # How to migrate from Cowboy
 
-This guide maps Cowboy's request, routing, and streaming APIs onto their
-Livery counterparts. You need it when you have a service running on Cowboy
+This guide gives the Livery equivalent of Cowboy's request, routing, and
+streaming APIs. You need it when you have a service running on Cowboy
 and you want to move it to Livery without rewriting handlers from scratch.
 
 ## Mapping table
@@ -43,7 +43,8 @@ handle(_Req) ->
     livery_resp:json(200, json:encode(#{ok => true})).
 ```
 
-No `init`, no `Opts`, no `Req0/Req1` threading.
+No `init`, no `Opts`, no `Req0/Req1` to pass from one call to the
+next.
 
 ### 2. Convert a streaming `cowboy_loop` handler
 
@@ -83,10 +84,11 @@ loop(Emit) ->
     end.
 ```
 
-The producer fun runs in the per-request process. It can `receive`
-between emits and hibernate during idle stretches the same way
-`cowboy_loop` does, with one function instead of a three-callback state
-machine.
+The producer fun runs in the request's own process. It can `receive`
+between two calls to `Emit` and, on OTP 28 or later, hibernate while it
+waits with `erlang:hibernate/0`, as `cowboy_loop` does, with one
+function instead of three callbacks. Do not use `erlang:hibernate/3`
+there: it throws away the call stack, so the stream is never finished.
 
 ### 3. Convert the access log stream handler
 
@@ -101,7 +103,7 @@ Stack = [
 ].
 ```
 
-`livery_access_log` emits one structured `logger` entry per request with
+`livery_access_log` writes one structured `logger` entry per request with
 method, path, status, duration, and request id.
 
 ### 4. Convert the listener
@@ -126,31 +128,30 @@ Livery:
 }).
 ```
 
-The H1/H2/H3 adapters are wired, so the same handler set serves all three
-protocols from one `start_service/1` call. You can also drive handlers in
-EUnit through `livery_test_adapter:run/3`.
+The H1, H2 and H3 adapters are already in place, so the same handlers
+serve all three protocols from one `start_service/1` call. You can also
+call your handlers from EUnit through `livery_test_adapter:run/3`.
 
 ## Validated against Cowboy
 
 `examples/livery_example_migration.erl` is the "after" side of this
 guide: a plain handler, a small REST resource, SSE, a streaming
 (`cowboy_loop`) replacement, and a WebSocket echo, all in Livery.
-`test/livery_cowboy_parity_SUITE.erl` runs that exact handler set behind
-both a live Cowboy listener and Livery and diffs the observable behaviour
-(status, content-type, body, framing) over H1, then drives the same
+`test/livery_cowboy_parity_SUITE.erl` runs those same handlers behind
+both a live Cowboy listener and Livery and compares what a client sees
+(status, content-type, body, framing) over H1, then runs the same
 Livery handlers over H2 and H3 to show the protocol upgrade Cowboy cannot
-give you. The mappings in this guide are enforced by that suite.
+give you. That suite checks the mappings in this guide.
 
 ## Cowboy concepts that do not move
 
 - `cowboy_rest`: there is no equivalent. Use plain handlers with
-  `livery_ext` extractors. A REST helper module is not on the current
-  roadmap.
+  `livery_ext` extractors. No REST helper module is planned for now.
 - `cowboy_req:cast/2`: not needed. The request process owns its state;
   send a message to `livery_req:engine_pid/1` or use application-level
   pub/sub.
-- `cowboy_stream` custom handlers: replaced by middleware. There is no
-  second extension point.
+- `cowboy_stream` custom handlers: replaced by middleware. Livery has no
+  second place to hook into a request.
 
 ## See also
 

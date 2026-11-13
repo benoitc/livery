@@ -1,8 +1,8 @@
 # Tutorial: Your first service
 
-In this tutorial you build a small REST handler set, exercise it
-end-to-end through `livery_test_adapter`, and learn the shape of a
-Livery handler. No socket is involved, so this is the right starting
+In this tutorial you build a small set of REST handlers, run them from
+end to end through `livery_test_adapter`, and see what a Livery handler
+looks like. No socket is involved, so this is the right starting
 point if you have never written a Livery handler before. About 10
 minutes.
 
@@ -93,11 +93,11 @@ Run `rebar3 eunit`. All four tests pass.
 
 1. Built a `#livery_req{}` value from the spec map.
 2. Ran `livery:dispatch/3` (middleware stack plus handler).
-3. Walked the response variant via `livery:emit/3`, capturing the
-   status, headers, body chunks, and trailers.
+3. Turned the response into adapter calls with `livery:emit/3`,
+   recording the status, headers, body chunks, and trailers.
 
-The same pipeline runs unchanged once the H1/H2/H3 adapters ship.
-The only thing the test adapter substitutes is the wire.
+The same pipeline runs unchanged under the H1, H2 and H3 adapters.
+The only thing the test adapter replaces is the network.
 
 ## 4. Anatomy of a handler
 
@@ -108,8 +108,8 @@ A handler is a function `fun(livery_req:req()) -> livery_resp:resp()`.
   `livery_resp:text/2`, `:json/2`, `:empty/1`, etc.
 - Never touches a socket directly.
 
-There is no `init/2`, no `cowboy_req:reply`, no return-tuple
-gymnastics. One function in, one value out.
+There is no `init/2`, no `cowboy_req:reply`, no tuples to return. One
+request in, one response out.
 
 ## Next steps
 

@@ -3,15 +3,14 @@
 `config` is one value, set once at startup, that every request can
 read. You need it when your handlers all want the same things: a
 database pool, a cache, settings you read at boot. It saves you
-from capturing them in a closure for every handler, reaching for a
-global, or smuggling them through the per-request `meta` map (which
-is really for per-request scratch).
+from capturing them in a closure for every handler, using a global,
+or passing them through the per-request `meta` map (which is meant
+for data about one request).
 
 ## Pass config at startup
 
-Pass `config` when you start the service. It is whatever you like,
-most often a map of handles, and the same value reaches every
-request:
+Pass `config` when you start the service. It can be any term, most
+often a map of handles, and the same value reaches every request:
 
 ```erlang
 {ok, Pid} = livery:start_service(#{
@@ -49,8 +48,8 @@ call(Req, Next, _Opts) ->
 
 ## Use a record, if you prefer
 
-Config is any term, so a record gives you a little more discipline
-than a map:
+Config can be any term, so a record works too, and gives you a little
+more structure than a map:
 
 ```erlang
 %% -record(app, {db, cache}).
@@ -70,13 +69,13 @@ show(Req) ->
 ```
 
 A `config` inside one protocol's map on `start_service/1` overrides
-the service-wide one for that listener, handy when, say, your TLS
-endpoint should point at a different pool.
+the service-wide one for that listener. This helps when, for example,
+your TLS listener should use a different pool.
 
 ## Test with config in the spec
 
-Handlers stay testable with no socket: put `config` in the request
-spec.
+You can still test handlers without a socket: put `config` in the
+request spec.
 
 ```erlang
 Cap = livery_test_adapter:run([], fun my_app:list_users/1,
@@ -87,8 +86,8 @@ Cap = livery_test_adapter:run([], fun my_app:list_users/1,
 
 - `config` is service-wide and set at startup: the same value for
   every request, read-only. Use it for shared handles and settings.
-- `meta` is per-request scratch a middleware writes for this one
-  request, like the authenticated user or a trace id. See
+- `meta` holds data a middleware writes for one request only, like
+  the authenticated user or a trace id. See
   [Write a custom middleware](custom-middleware.md).
 
 ## See also

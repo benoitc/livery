@@ -1,6 +1,6 @@
 # How to add per-request deadlines
 
-`livery_timeout` is a middleware that bounds how long a handler may
+`livery_timeout` is a middleware that limits how long a handler may
 run. You need it when a slow handler would otherwise hang the client:
 instead of waiting forever, the client gets a `504`.
 
@@ -13,21 +13,22 @@ Stack = [
 ].
 ```
 
-`livery_timeout` runs the rest of the pipeline in a monitored process.
-If it does not return within `after_ms`, the process is killed and
-`504` is emitted. Handler crashes are mapped to `500`.
+`livery_timeout` runs the rest of the pipeline in a separate process
+that it monitors. If that process does not return within `after_ms`,
+it is killed and the client gets a `504`. If the handler crashes, the
+client gets a `500`.
 
 Your handler does not notice the extra process. It reads a streamed
 request body as usual, receives `{livery_disconnect, _, _}` if the
-client goes away, and keeps the logger metadata and trace context set
-before it. A `livery_concurrency` slot taken behind the timeout is
-given back after the response is sent, or when the deadline cuts the
-request off.
+client goes away, and keeps the logger metadata and trace context that
+were set before it. A `livery_concurrency` slot taken after the timeout
+in the stack is given back once the response is sent, or when the
+deadline cuts the request off.
 
 ## Set per-route deadlines
 
-Stack the middleware multiple times with different keys, or mount
-separate stacks per route group:
+Mount a separate stack for each group of routes, each with its own
+`after_ms`:
 
 ```erlang
 FastApi    = [{livery_timeout, #{after_ms => 1_000}} | Common],

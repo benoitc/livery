@@ -14,8 +14,8 @@ Then start one from a shell (`rebar3 as examples shell`):
 
 ## `livery_example_api`
 
-REST + path params + SSE + NDJSON + an OpenAPI document, served over
-HTTP/1.1 on one port. The compiled `livery_router` is passed to
+REST routes with path parameters, SSE, NDJSON and an OpenAPI document,
+served over HTTP/1.1 on one port. The compiled `livery_router` is passed to
 `livery:start_service/1` as `router =>`, so path parameters are bound
 before each handler runs.
 
@@ -57,14 +57,14 @@ curl -N http://127.0.0.1:8080/events
 A minimal custom adapter, the companion to the "write your own adapter"
 section of the same tutorial. It implements the `livery_adapter`
 behaviour and runs the real per-request worker, but captures the
-response in ETS instead of writing to a socket, so the wiring is easy to
-read. `test/livery_example_adapter_tests.erl` drives it end to end.
+response in ETS instead of writing to a socket, so you can follow how
+the pieces connect. `test/livery_example_adapter_tests.erl` drives it end to end.
 
 ## `livery_example_stream`
 
-The receive-driven streaming companion to the [Streaming and
+The companion to the [Streaming and
 backpressure](../docs/concepts/streaming-and-backpressure.md) concept
-doc. A `/clock` endpoint returns Server-Sent Events, one per second, from
+doc, where a process loops on `receive` to produce the stream. A `/clock` endpoint returns Server-Sent Events, one per second, from
 a named `tick/3` producer that loops on `receive` and stops on client
 disconnect. Start it with `livery_example_stream:start(8080)` and watch
 with `curl -N http://127.0.0.1:8080/clock`.

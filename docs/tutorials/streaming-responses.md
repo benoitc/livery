@@ -3,7 +3,7 @@
 In this tutorial you build three streaming endpoints: chunked
 bytes, Server-Sent Events, and a long-running progress feed driven
 by a separate process. It is for you once you can write a plain
-handler and want to send a body that does not fit in one buffer.
+handler and want to send a body in pieces rather than all at once.
 About 10 minutes.
 
 ## 1. Chunked bytes
@@ -18,9 +18,9 @@ download(_Req) ->
         end).
 ```
 
-The producer fun runs in the per-request process and is called with
-an `Emit` callback. Each `Emit(IoData)` becomes one body chunk on
-the wire. The fun returns when there is nothing more to send.
+The fun that produces the body runs in the request's own process and
+is called with an `Emit` callback. Each `Emit(IoData)` is sent as one
+body chunk. The fun returns when there is nothing more to send.
 
 ```erlang
 Cap = livery_test_adapter:run([], fun download/1, #{}),
@@ -39,8 +39,9 @@ events(_Req) ->
 ```
 
 `livery_resp:sse/2` sets the `text/event-stream` content type and
-the `cache-control: no-cache` header. The `Emit` callback formats
-each map into a proper SSE frame (`event:`, `id:`, `retry:`, `data:`).
+the `cache-control: no-cache` header. The `Emit` callback turns
+each map into an SSE event, with its `event:`, `id:`, `retry:` and
+`data:` lines.
 
 Plain bytes are accepted too:
 
@@ -72,13 +73,13 @@ loop(Ref, Emit) ->
     end.
 ```
 
-Hibernating between idle stretches is fine; the per-request process
-is exactly that, a process.
+The request's process is an ordinary Erlang process. On OTP 28 and
+later it can call `erlang:hibernate/0` while it waits for the next
+event; avoid `erlang:hibernate/3`, which never returns to the loop.
 
-This is the Livery replacement for Cowboy's `cowboy_loop` callback
-shape. There is no `init/2`/`info/3`/`terminate/3` triad: the
-streaming handler is a fun that drives `Emit` until it has nothing
-more to say.
+This is how Livery replaces Cowboy's `cowboy_loop` handlers. There are
+no `init/2`, `info/3` and `terminate/3` callbacks: the streaming handler
+is a fun that calls `Emit` until it has nothing more to send.
 
 ## 4. Detecting client disconnect
 
@@ -98,7 +99,7 @@ loop(Ref, Emit) ->
 ```
 
 The test adapter always returns `ok` from `Emit`. The real H1/H2/H3
-adapters surface peer disconnect through this return value.
+adapters tell you the client went away through this return value.
 
 ## Next steps
 

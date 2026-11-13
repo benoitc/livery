@@ -37,23 +37,24 @@ origins => fun(Origin) -> is_tenant_origin(Origin) end
 ```
 
 When the origin is not allowed, no `Access-Control-Allow-Origin` is
-emitted and the browser blocks the response.
+sent and the browser blocks the response.
 
 ## Use credentials
 
-`Access-Control-Allow-Origin: *` is invalid with credentials. When you set
+`Access-Control-Allow-Origin: *` is not allowed with credentials. When you set
 `credentials => true`, `livery_cors` echoes the request `Origin` instead
 of `*` and adds `Access-Control-Allow-Credentials: true`.
 
 ## Notes
 
-- `Vary` is set for you so shared caches stay correct. `Vary: Origin` is
-  added to every response whose output depends on the origin (any config
-  except a plain non-credentialed `'*'`), and mirroring preflights also add
-  `Vary: Access-Control-Request-Headers`. Existing `Vary` tokens are never
-  duplicated.
-- A plain `origins => '*'` without credentials is origin-independent, so no
-  `Vary` is added.
+- `Vary` is set for you, so shared caches do not hand one origin's
+  response to another. `Vary: Origin` is added to every response that
+  depends on the origin (any config except a plain `'*'` without
+  credentials), and preflights with `headers => mirror` also add
+  `Vary: Access-Control-Request-Headers`. A value already in `Vary` is
+  never added twice.
+- A plain `origins => '*'` without credentials gives the same answer to
+  every origin, so no `Vary` is added.
 
 ## See also
 

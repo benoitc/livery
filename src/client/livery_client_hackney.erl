@@ -2,8 +2,12 @@
 -moduledoc """
 Default client adapter: hackney.
 
-hackney 4.2 speaks HTTP/1.1, HTTP/2, and HTTP/3 (with TLS, pooling, and
-IPv6), so this one adapter covers every protocol. The request body may be
+hackney speaks HTTP/1.1, HTTP/2 and HTTP/3 (with TLS, pooling, and IPv6),
+so this one adapter covers every protocol. HTTP/3 is off unless you ask
+for it with `hackney => [{protocols, [http3, http2, http1]}]`: hackney then
+tries QUIC first on each new TLS host and falls back to TCP only after
+that attempt fails, which can take the whole connect timeout where UDP is
+blocked. The request body may be
 buffered (`{full, _}`) or a producer (`{stream, Fun}`); the response is
 buffered by default, or streamed (`{stream, Reader}`) when the request
 sets `stream => true`.

@@ -12,8 +12,8 @@ livery_resp:empty(204).   %% No Content
 livery_resp:empty(304).   %% Not Modified
 ```
 
-`empty/1` sends headers with `end_stream` set; no body bytes are
-emitted on the wire.
+`empty/1` sends the headers and ends the stream with them
+(`end_stream`); no body bytes are sent.
 
 ## Redirect
 

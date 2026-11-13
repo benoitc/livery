@@ -52,8 +52,9 @@ Router = livery_router:compile(livery_auth_passkey:routes(Passkeys) ++ AppRoutes
 
 This adds four POST routes under `/passkeys`: `register/options` and
 `register` for a signed-in user to add a passkey, `login/options` and
-`login` to sign in with one. The user `id` is a stable opaque handle (a
-database id, not an email), at most 64 bytes. Store the whole credential
+`login` to sign in with one. The user `id` is a value that never changes
+and says nothing about the user (a database id, not an email), at most
+64 bytes. Store the whole credential
 map you are given; it holds the public key and counter Livery needs
 later. `store_credential` must refuse an `id` that is already stored,
 for any user, in the same step as the insert, and return
@@ -61,8 +62,8 @@ for any user, in the same step as the insert, and return
 
 ## Call them from the page
 
-The browser does the cryptography. Modern browsers turn the JSON options
-into what `navigator.credentials` wants, and back:
+The browser does the cryptography. Current browsers convert the JSON
+options into what `navigator.credentials` expects, and back:
 
 ```javascript
 async function addPasskey() {
@@ -102,12 +103,12 @@ your site. A successful sign-in sets the session cookie, which
 
 - The origin and the RP ID, so a passkey made for your site is useless
   anywhere else.
-- A fresh challenge for every ceremony, kept in a signed two-minute
-  cookie and accepted once.
+- A fresh challenge for every registration and every sign-in, kept in a
+  signed cookie that lasts two minutes, and accepted once.
 - That the user was present, and verified (fingerprint, face, PIN) when
   you set `user_verification => required`.
-- The signature, with the key stored at registration, and the counter,
-  which refuses a cloned security key.
+- The signature, checked with the key stored at registration, and the
+  counter, which lets Livery refuse a cloned security key.
 - On registration, the attestation: `none` (what synced passkeys send)
   or `packed`. Set `attestation_roots` to the CA certificates of the
   security keys you accept to require a verified `packed` chain; any
@@ -117,7 +118,7 @@ your site. A successful sign-in sets the session cookie, which
 
 ## Notes
 
-- Keep `rp_id` your registrable domain (`app.example`), and list every
+- Set `rp_id` to your registrable domain (`app.example`), and list every
   origin that serves the page in `origins`. A passkey made under one RP
   ID does not work under another.
 - Passkeys synced between devices (Apple, Google, password managers)

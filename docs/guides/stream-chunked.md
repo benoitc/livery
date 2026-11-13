@@ -1,9 +1,8 @@
 # How to return a streaming response
 
 `livery_resp:stream/3` takes a status, headers, and a producer fun
-that drives chunk emission. You need it when you want to emit
-response body bytes incrementally rather than buffering the whole
-payload in memory.
+that sends the body in chunks. You need it when you want to send the
+response body piece by piece instead of holding all of it in memory.
 
 ## Stream from a file
 
@@ -30,13 +29,13 @@ emit_chunks(F, Emit) ->
     end.
 ```
 
-The producer runs in the per-request process. It returns when there
-is nothing more to emit.
+The producer runs in the request's process, and returns when it has
+nothing more to send.
 
 ## Stream from a message source
 
-The producer is free to `receive`. Subscribe to a publisher and
-forward events:
+The producer can `receive` messages. Here it subscribes to a
+publisher and forwards its events:
 
 ```erlang
 follow(_Req) ->
@@ -56,8 +55,9 @@ loop(Ref, Emit) ->
 
 ## Detect disconnect
 
-`Emit/1` returns the adapter's send result. On client disconnect
-the H1/H2/H3 adapters return `{error, closed}`. Break out:
+`Emit/1` returns what the adapter's send returned. When the client
+disconnects, the H1/H2/H3 adapters return `{error, closed}`. Stop
+there:
 
 ```erlang
 case Emit(Chunk) of
@@ -70,8 +70,8 @@ The test adapter always returns `ok`.
 
 ## Stream NDJSON
 
-`livery_resp:ndjson/2` does the JSON encoding and the `\n` framing
-for you:
+NDJSON (newline-delimited JSON) puts one JSON value per line.
+`livery_resp:ndjson/2` encodes each value and adds the `\n` for you:
 
 ```erlang
 livery_resp:ndjson(200, fun(Emit) ->
@@ -80,10 +80,10 @@ livery_resp:ndjson(200, fun(Emit) ->
 end).
 ```
 
-Each `Emit(Term)` calls `json:encode(Term)` and appends a literal
-`\n` to one chunk. Content-Type defaults to
-`application/x-ndjson`. For pre-encoded bytes, drop down to
-`stream/3`.
+Each `Emit(Term)` calls `json:encode(Term)` and sends the result with
+a `\n` after it, as one chunk. Content-Type defaults to
+`application/x-ndjson`. If your bytes are already encoded, use
+`stream/3` instead.
 
 ## See also
 

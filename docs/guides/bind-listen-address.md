@@ -1,8 +1,8 @@
 # How to bind to a specific address or IPv6
 
-By default a listener binds the IPv4 wildcard, accepting connections on
-every interface. You need these options when you want to pin a listener
-to one address, or serve over IPv6.
+By default a listener binds the IPv4 wildcard address, so it accepts
+connections on every interface. You need these options when you want to
+tie a listener to one address, or serve over IPv6.
 
 ## Set the bind options
 
@@ -31,7 +31,8 @@ Each key in `start_service/1` is one adapter serving one protocol:
 cleartext and TLS still means listing both keys.
 
 The transport shown is the default per key, but `http` and `https` take
-a `transport` override. The useful one is **h2c**, HTTP/2 over cleartext
+a `transport` override. The one you are most likely to need is **h2c**,
+HTTP/2 over cleartext
 (no TLS): it is the `https` adapter with `transport => tcp` and no
 `cert`/`key`.
 
@@ -43,7 +44,7 @@ https => #{port => 8080, ip => Addr, transport => tcp}
 You can likewise run HTTP/1.1 over TLS by giving the `http` map a
 `transport => ssl` with `cert`/`key`. Add `alt_svc => advertise` to the
 service map to put an `Alt-Svc` header on the H1 and H2 responses so
-capable clients can upgrade to H3.
+clients that support H3 can switch to it.
 
 ### Serve HTTP/2 and HTTP/1.1 on one TLS port
 
@@ -80,7 +81,7 @@ same in both.
 
 **On its own**, with `livery:start_listener/2`. You pass the adapter
 module, its options, and the `stack` and `handler` yourself. You get back
-the listener handle and you own its lifecycle:
+the listener handle, and you start and stop it yourself:
 
 ```erlang
 {ok, Ref} = livery:start_listener(livery_h1, #{
@@ -99,7 +100,7 @@ adapters for you, one per protocol key, sharing one `router` (or
 supervising process, so you also get `livery_service:which_listeners/1`
 and graceful `livery:drain/2`. This is the usual choice.
 
-The map can hold any subset of the keys, including just one, so
+The map can hold any subset of the keys, even a single one, so
 `start_service/1` is also the managed way to run a *single* adapter. The
 difference from `start_listener/2` is not the number of adapters: it is
 that the service supervises them and shares the router and stack, whereas
@@ -139,14 +140,16 @@ one service).
 
 ### Custom adapters
 
-`start_service/1` and `livery:start_listener/2` manage only the three
+`start_service/1` and `livery:start_listener/2` manage only the
 built-in adapters: `start_service/1` maps `http`/`https`/`http3` to
-`livery_h1`/`livery_h2`/`livery_h3`, and `start_listener/2` accepts those
-three modules (anything else returns `{error, unknown_adapter}`).
+`livery_h1`/`livery_h2`/`livery_h3` (an `https` key with
+`alpn => [h2, http1]` uses `livery_h1h2`, one TLS port for HTTP/2 and
+HTTP/1.1), and `start_listener/2` accepts those three modules plus
+`livery_h1h2` (anything else returns `{error, unknown_adapter}`).
 
 A custom adapter, any module implementing the `livery_adapter` behaviour,
 is not registered with either entry point. You start it through its own
-start function, and it owns its listener and lifecycle:
+start function, and it starts and stops its own listener:
 
 ```erlang
 %% A custom adapter exposes its own start; it is not passed to
@@ -159,7 +162,8 @@ start function, and it owns its listener and lifecycle:
 }).
 ```
 
-The bind options are a convention, not magic: a custom adapter honours
+The bind options are a convention that Livery does not enforce: a custom
+adapter honours
 `ip`/`inet6` by running them through `livery_inet:socket_addr_opts/1`
 (the same helper the built-ins use) and handing the result to its wire
 library. See [Adapters](../concepts/adapters.md) for the behaviour and
@@ -237,9 +241,9 @@ for each request:
   single adapter's `start/1` you pass the `handler` yourself. See
   [Routing](../concepts/routing.md).
 
-- `stack` is the middleware stack: an ordered list of cross-cutting
-  steps (request id, logging, body limit, auth) that run around the
-  handler. `[]` means none. For example:
+- `stack` is the middleware stack: an ordered list of steps that every
+  request goes through (request id, logging, body limit, auth), around
+  the handler. `[]` means none. For example:
 
   ```erlang
   Stack = [{livery_request_id, undefined}, {livery_access_log, #{}}].
@@ -269,8 +273,8 @@ the same port.
 
 There is nothing extra to configure. WebSockets (HTTP Upgrade on
 HTTP/1.1, extended CONNECT on HTTP/2 and HTTP/3) and WebTransport
-upgrade in place on the adapter's existing stream, so they inherit the
-listener's bind address and family. Bind the listener to IPv6 and a
+take over the adapter's existing stream, so they use the listener's
+bind address and family. Bind the listener to IPv6 and a
 `wss://[::1]/...` client connects over IPv6.
 
 ## Notes
@@ -279,9 +283,9 @@ listener's bind address and family. Bind the listener to IPv6 and a
   everywhere by `livery_inet:socket_addr_opts/1`: an IPv6 `ip` tuple
   or `inet6 => true` selects the `inet6` family, and `ip` sets the
   bind address.
-- For HTTP/3 the options fold into the QUIC listener's
+- For HTTP/3 the options are added to the QUIC listener's
   `extra_socket_opts`; any `extra_socket_opts` you set yourself are
-  preserved.
+  kept.
 - `livery_service:which_listeners/1` reports the bound ports, as a list
   per protocol. One port can appear under two protocols (an `alpn`
   listener), and one protocol under two ports (a cleartext `http`

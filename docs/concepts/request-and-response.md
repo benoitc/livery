@@ -18,7 +18,7 @@ greet(Req) ->
 ## Requests are values
 
 A request is an immutable `#livery_req{}` record. You read it through
-`livery_req` accessors and, in middleware, derive a new value with the
+`livery_req` accessors and, in middleware, build a new value with the
 setters and pass it on with `Next(Req1)`. The fields:
 
 | Field | Type | Source |
@@ -46,7 +46,7 @@ Accept = livery_req:header(<<"accept">>, Req),         %% undefined if absent
 Page   = livery_ext:query(<<"page">>, Req).            %% query string param
 ```
 
-`meta` is your extension point. Use `livery_req:set_meta/3` and
+`meta` is where you add your own values. Use `livery_req:set_meta/3` and
 `livery_req:meta/2,3` to carry values without growing the record (see
 "Threading values" below).
 
@@ -73,20 +73,21 @@ read_json(Req) ->
     try {ok, json:decode(Bin)} catch _:_ -> {error, invalid_json} end.
 ```
 
-For huge bodies you can stream rather than buffer; see
+For very large bodies you can read in pieces instead of holding the
+whole body in memory; see
 [Streaming and backpressure](streaming-and-backpressure.md).
 
 ## Responses are values
 
 A response is an immutable `#livery_resp{}`. You build one with a
 `livery_resp` constructor and, if needed, adjust it with the setters. The
-constructor encodes the body variant, and `livery:emit/3` walks that
-variant into adapter calls:
+constructor picks the kind of body (the body variant), and `livery:emit/3`
+turns it into calls to the adapter:
 
 | Body variant | Built by | Emission |
 |---|---|---|
 | `empty` | `empty/1` | one `send_headers`, stream ended |
-| `{full, IoData}` | `json/2`, `text/2`, `html/2` | headers + body (coalesced where possible) |
+| `{full, IoData}` | `json/2`, `text/2`, `html/2` | headers + body (sent together where possible) |
 | `{chunked, Producer}` | `stream/3` | headers + repeated `send_data` |
 | `{sse, Producer}` | `sse/2,3` | as chunked, with SSE framing |
 | `{file, Path, Range}` | `file/2,3` | `sendfile` where supported |
@@ -96,7 +97,7 @@ variant into adapter calls:
 `{upgrade, _, _}` body it builds. Upgrade with `livery_ws:upgrade/3` or
 `livery_wt:upgrade/3`.
 
-**Which constructor, when:**
+**Which constructor to use:**
 
 | Situation | Use |
 |---|---|
@@ -109,8 +110,8 @@ variant into adapter calls:
 | a file on disk | `livery_resp:file/2` |
 | a live or unbounded body | `stream/3`, `sse/2`, `ndjson/2` |
 
-A created-resource reply, lifting the location into a variable (a binary
-with an embedded comma would otherwise read oddly):
+A reply for a created resource. The location goes in its own variable,
+because a binary with commas inside the call would be hard to read:
 
 ```erlang
 create(Req) ->
@@ -122,14 +123,15 @@ create(Req) ->
 ```
 
 Headers are lowercased on construction and on `with_header/3` /
-`append_header/3`, so later lookups are case-direct.
+`append_header/3`, so later lookups compare names as they are, with no
+case folding.
 
 ## Threading values from middleware to handler
 
 When a middleware computes something the handler needs (the
 authenticated user, a parsed body, a trace id), it stores it in `meta`
-and the handler reads it back. Nothing mutates; each stage passes a new
-request forward.
+and the handler reads it back. Nothing is changed in place: each step
+passes a new request on.
 
 ```erlang
 %% in a middleware's call/3
@@ -145,13 +147,13 @@ profile(Req) ->
 
 ## Config vs meta
 
-These two look similar but do opposite jobs, so keep them straight:
+These two look similar but do opposite jobs, so do not mix them up:
 
 - **`config`** is service-wide and set once at startup: a DB pool, a
   cache, settings. The same value for every request, read-only, via
   `livery_req:config/1`. See
   [Share config across handlers](../guides/share-config.md).
-- **`meta`** is per-request scratch a middleware writes for this one
+- **`meta`** is per-request data a middleware writes for this one
   request: the authenticated user, a trace id, a parsed body, via
   `livery_req:set_meta/3` and `meta/2`.
 
@@ -160,8 +162,9 @@ If you find yourself putting a database pool in `meta`, you want
 
 ## Extractors
 
-`livery_ext` is a thin typed layer over the accessors. It returns a value
-or `{error, Reason}`, so you can pattern-match the good case:
+`livery_ext` is a thin layer over the accessors that gives you typed
+values. It returns a value or `{error, Reason}`, so you can match on the
+success case:
 
 | Extractor | Returns |
 |---|---|

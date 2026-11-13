@@ -3,15 +3,15 @@
 This page follows one request from the moment it lands on a listener to
 the moment its response is on the wire. Read it when you want to know
 where your code runs, or when something about timing or crashes
-surprises you. The path explains the two things that catch people coming
-from other frameworks: why a handler may block freely, and why a handler
-crash never takes the server down.
+surprises you. Following it explains two things that puzzle people
+coming from other frameworks: why a handler may block freely, and why a
+handler crash never takes the server down.
 
 The short version: **every request gets its own process.** The adapter
 spawns a worker, the worker runs your middleware and handler, and it
 writes the response back through the adapter. The listener process is
 never the one running your code, so a slow or crashing handler cannot
-stall or sink it.
+stall it or bring it down.
 
 ## Sequence
 
@@ -38,10 +38,14 @@ client                  adapter                 worker              handler
 ## Steps in detail
 
 1. The wire library decodes a request and calls the adapter's inbound
-   callback with the method, path, headers, and a stream handle.
+   callback, in a process of its own for that request, with the method,
+   path, headers, and a stream handle.
 2. The adapter builds an initial request value and calls
+   `livery_translator:serve/2`, which calls
    `livery_req_sup:start_request/1` with the adapter, stream, request,
-   middleware stack, and handler.
+   middleware stack, and handler. The process the wire library gave this
+   request then becomes its translator: it passes the body on to the
+   worker until the worker exits.
 3. `start_request/1` admits the request against the concurrency cap and,
    if there is room, spawns a `livery_req_proc` worker directly with
    `proc_lib:spawn` (not a supervised child; see the note below). The
@@ -57,7 +61,8 @@ client                  adapter                 worker              handler
    normally, so the failure stays contained.
 
 The worker doing the dispatch is `livery_req_proc`; the entry point is
-`run/1`. At its heart, inside the error handling and the emit hooks:
+`run/1`. Without the error handling and the emit hooks around it, it
+does this:
 
 ```erlang
 Resp = livery:dispatch(Stack, Handler, Req),
@@ -66,7 +71,7 @@ livery:emit(Adapter, Stream, Resp)
 
 ## Body messages
 
-The body protocol on the worker's mailbox:
+The body reaches the worker's mailbox as these messages:
 
 ```text
 {livery_body, Ref, {data, IoData}}
@@ -77,16 +82,16 @@ The body protocol on the worker's mailbox:
 
 You do not match these by hand. The request carries a reader, and
 `livery_body:read/2` (one chunk) or `livery_body:read_all/1` (the whole
-body) drains them for you. Messages with other tags are left untouched,
-which is exactly why a streaming handler can `receive` its own
+body) reads them for you. Messages with other tags are left alone, which
+is why a streaming handler can `receive` its own
 application messages in the same loop. See
 [Streaming and backpressure](streaming-and-backpressure.md).
 
 ## Why you can block in a handler
 
 Because the handler owns its process, you may call `receive`, sleep, wait
-on a `gen_server`, or loop for as long as the request lives, without a
-yield or a callback in sight. This is what makes the streaming producer
+on a `gen_server`, or loop for as long as the request lives, with no
+callback to register and nothing to yield to. This is what makes the streaming producer
 in the previous page a plain recursive function. The listener keeps
 accepting new connections the whole time; it handed your request to its
 own worker and moved on.
@@ -100,24 +105,24 @@ notifies the worker. Two things happen: the worker is sent a
 `livery_req:disconnect_tag/0`) so a handler parked in a `receive` wakes
 up, and any callbacks registered with `livery_req:on_disconnect/2` run. A
 handler that is mid-`send_data` instead sees `{error, closed}` from the
-next write. Either signal is your cue to stop and clean up.
+next write. Either one tells you to stop and clean up.
 
 ## Graceful shutdown
 
 `livery_req_sup` keeps a lock-free count of in-flight requests in a
-`counters` array: it bumps the count when a worker is admitted and drops
-it when the worker exits (it monitors each one, so even a killed worker
+`counters` array: it adds one when a worker is admitted and takes one
+off when the worker exits (it monitors each one, so even a killed worker
 is accounted for). `livery_drain:in_flight/0` reads that count.
 
 Draining uses it: stop the listeners from accepting new connections, wait
-for the in-flight count to reach zero within a window, then stop the
-service. See [Shut down gracefully](../guides/graceful-shutdown.md).
+for the in-flight count to reach zero within a time limit, then stop
+the service. See [Shut down gracefully](../guides/graceful-shutdown.md).
 
 > **Note:** earlier versions ran each worker as a supervised child and
-> counted in-flight requests as the supervisor's active children. That
-> single supervisor became a serialization point on the hot path, so the
-> worker is now spawned directly and the count lives in a `counters` ref.
-> The externally visible behaviour (drain, the `500`-on-crash mapping) is
+> counted in-flight requests as the supervisor's active children. Every
+> request then had to go through that one supervisor, one at a time, so
+> the worker is now spawned directly and the count lives in a `counters`
+> ref. What you can see from outside (drain, the `500` on a crash) is
 > unchanged.
 
 ## See also

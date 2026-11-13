@@ -17,7 +17,7 @@ end.
 
 - Reads the `Authorization` header (case-insensitive).
 - Accepts `Bearer `, `bearer `, and `BEARER ` prefixes (RFC 6750
-  §2.1 makes the scheme case-insensitive).
+  section 2.1 makes the scheme case-insensitive).
 - Returns the token bytes after the prefix, or `undefined` when the
   header is absent or uses another scheme.
 
@@ -49,7 +49,7 @@ Place it in the stack after `livery_request_id` and
 ## Handle non-bearer schemes
 
 `livery_ext:bearer_token/1` only matches the bearer scheme. For Basic
-auth, read the header directly and decode:
+auth, read the header yourself and decode it:
 
 ```erlang
 case livery_req:header(<<"authorization">>, Req) of

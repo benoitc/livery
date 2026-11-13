@@ -2,7 +2,7 @@
 
 `livery_compress` is a middleware that compresses response bodies when
 the client supports it. You need it when you want gzip or deflate
-without touching every handler.
+without changing every handler.
 
 ## Add it to the stack
 
@@ -19,8 +19,8 @@ It reads the request `Accept-Encoding`, picks a codec the client
 accepts, compresses the response body, and sets `Content-Encoding` plus
 `Vary: Accept-Encoding`. A client that sends no `Accept-Encoding` (or
 none the server has) gets the response uncompressed, so any HTTP client
-works: those that advertise gzip decode it transparently, the rest get
-identity. A client that refuses unencoded content (`identity;q=0`, or
+works: those that announce gzip decode it on their own, and the others
+get the body as is (`identity`). A client that refuses unencoded content (`identity;q=0`, or
 `*;q=0` without `identity`) and accepts none of the codecs you have gets
 `406 Not Acceptable`.
 
@@ -32,10 +32,10 @@ the compressed bytes. See [Add HTTP caching](http-caching.md).
 
 ## Control what gets compressed
 
-Eligible responses are `{full, _}` bodies at least `min_size` bytes and
-`{chunked, _}` streams, with a compressible `Content-Type` and no
-existing `Content-Encoding`. SSE, file, empty, and upgrade responses
-pass through untouched.
+Livery compresses `{full, _}` bodies of at least `min_size` bytes and
+`{chunked, _}` streams, when they have a compressible `Content-Type`
+and no `Content-Encoding` yet. SSE, file, empty and upgrade responses
+go through unchanged.
 
 ```erlang
 {livery_compress, #{
@@ -63,10 +63,10 @@ Control that order, or limit the codecs, with `codecs`:
 `livery_compress` negotiates over `livery_codec:registered()`, which is
 `[livery_codec_gzip, livery_codec_deflate]` plus any codec a separate
 app registered. A codec app implements the `livery_codec` behaviour and
-calls `livery_codec:register(Module)` at its own start; it is then
-negotiated automatically (e.g. a future `livery_brotli` advertising
-`br`). The built-ins are always present and cannot be displaced by
-registration.
+calls `livery_codec:register(Module)` when it starts; from then on the
+codec takes part in the negotiation (for example a future
+`livery_brotli` offering `br`). The built-in codecs are always there,
+and registering another codec cannot replace them.
 
 ## See also
 

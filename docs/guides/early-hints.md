@@ -3,9 +3,9 @@
 `livery_req:inform/3` sends an interim (1xx) response before your
 real one. The main use is `103 Early Hints`: you tell the browser
 which assets the page will need while your handler is still building
-it, so stylesheets and scripts start downloading during your own
-processing time. Use it when a response takes real work (a database
-query, an upstream call) and the asset list is known up front.
+it, so stylesheets and scripts start downloading while your handler
+works. Use it when a response takes real work (a database query, an
+upstream call) and you know the asset list from the start.
 
 ## Send hints, then respond
 
@@ -22,13 +22,13 @@ page(Req) ->
     livery_resp:html(200, Body).
 ```
 
-The interim response goes out immediately; the final `200` follows
-as usual and is completely independent, so repeat any headers that
-matter there (the `103` block is advisory only).
+The interim response goes out at once. The final `200` follows as
+usual and takes nothing from it, so repeat there any headers that
+matter (the `103` headers are only hints).
 
 ## Ignore the return value
 
-Hints are best-effort. `inform/3` returns `ok` when the interim
+Hints are sent when they can be. `inform/3` returns `ok` when the interim
 response was written, or `{error, Reason}` when it could not be:
 
 - HTTP/1.1, HTTP/2 and HTTP/3 send it on the wire.
@@ -40,10 +40,10 @@ pattern; a page that loads without hints is still a page.
 
 ## Notes
 
-- `101` is reserved for the upgrade machinery
-  (`livery_ws:upgrade/3`) and rejected.
+- `101` is kept for upgrades (`livery_ws:upgrade/3`) and refused
+  here.
 - Adapters report support in `capabilities/1` as
   `informational => boolean()` if you need to branch.
-- Middleware only sees the final response; interim responses bypass
-  the response pipeline by design (nothing should compress or cache
-  a `103`).
+- Middleware only sees the final response. Interim responses skip
+  the middleware on purpose (nothing should compress or cache a
+  `103`).

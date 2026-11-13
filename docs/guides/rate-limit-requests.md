@@ -1,15 +1,15 @@
 # How to rate-limit requests
 
-`livery_ratelimit` throttles how fast each client may call the API and
-answers `429 Too Many Requests` once a client exceeds its allowance.
+`livery_ratelimit` limits how often each client may call the API and
+answers `429 Too Many Requests` once a client goes over its allowance.
 You need it to protect an endpoint from being called faster than it
 can serve.
 
 ## Add it to the stack
 
-Add `livery_ratelimit` with the `limiter/2,3` factory. Each client
-gets a token bucket of `Capacity` tokens that refills at
-`RefillPerSec`:
+Add `livery_ratelimit` with a state built by `limiter/2,3`. Each client
+gets a token bucket: it holds up to `Capacity` tokens and gains
+`RefillPerSec` tokens every second:
 
 ```erlang
 Stack = [
@@ -17,16 +17,16 @@ Stack = [
 ].
 ```
 
-A request consumes a token; an empty bucket sheds `429` (the handler
-is not called). "N requests per minute" maps to `limiter(N, N/60)`
-(burst N, sustained N/60).
+Each request takes one token. When the bucket is empty, the request
+gets a `429` and the handler is not called. "N requests per minute" is
+`limiter(N, N/60)` (bursts of up to N, then N/60 per second).
 
 ## Identify clients
 
-The client IP is NOT available (the wire libraries do not surface the
-peer address), so the default key is the Authorization bearer token
-(`livery_ext:bearer_token/1`). A request with no token is NOT limited.
-Provide your own `key` fun to throttle by an API-key header or
+By default the key is the bearer token from the Authorization header
+(`livery_ext:bearer_token/1`). A request without a token is not
+limited at all. Give your own `key` fun to limit by an API-key header,
+by the client address (`livery_req:peer/1`, turned into a binary), or
 anything else:
 
 ```erlang
@@ -35,23 +35,25 @@ livery_ratelimit:limiter(60, 1, #{
 })
 ```
 
-A `key` fun that returns `undefined` skips limiting for that request.
-Keys are SHA-256 hashed before storage, so raw tokens are never kept
-in memory.
+When your `key` fun returns `undefined`, that request is not limited.
+Keys are hashed with SHA-256 before they are stored, so raw tokens
+never stay in memory.
 
-The bearer-token default gives per-credential quotas, not flood
-protection: a client that rotates tokens gets a fresh bucket each
-time. For flood protection, key on an identity the client cannot
-freely rotate (an authenticated user id, or a forwarded-IP header you
-trust because you sit behind a known proxy). The store also caps its
-total key count (`ratelimit_max_keys`, default 1,000,000) and reaps
-idle buckets every minute, so a distinct-key flood bounds memory
-regardless of the key.
+Keying on the bearer token gives each credential its own quota, but it
+does not protect you from a flood: a client that keeps changing tokens
+gets a new bucket each time. To protect against floods, key on an
+identity the client cannot change at will (an authenticated user id,
+or a forwarded-IP header you trust because you sit behind a known
+proxy). The store also limits how many keys it holds
+(`ratelimit_max_keys`, default 1,000,000) and removes idle buckets
+every minute, so a flood of different keys cannot grow memory without
+bound, whatever you key on.
 
 ## Tune headers and options
 
-Allowed responses carry `RateLimit-Limit`, `RateLimit-Remaining`, and
-`RateLimit-Reset`; a `429` adds `Retry-After`. Tune with:
+Responses to requests that get through carry `RateLimit-Limit`,
+`RateLimit-Remaining`, and `RateLimit-Reset`; a `429` adds
+`Retry-After`. Change them with these options:
 
 ```erlang
 livery_ratelimit:limiter(100, 10, #{
@@ -62,21 +64,21 @@ livery_ratelimit:limiter(100, 10, #{
 })
 ```
 
-Each `limiter/2,3` call allocates an isolated keyspace, so a global
-limit and tighter per-route limits do not interfere. Pass an explicit
-`name` to deliberately share one budget across several stacks.
+Each `limiter/2,3` call gets its own set of keys, so a global limit
+and tighter per-route limits do not affect each other. Pass the same
+`name` when you want several stacks to share one budget.
 
 ## Notes
 
-- The token bucket is approximate-free under concurrency: the consume
-  is a lock-free compare-and-swap, so parallel requests for the same
-  key never over-admit.
-- `RefillPerSec => 0` is a pure fixed quota (no refill); those buckets
-  are kept until the node restarts (they cannot be safely reclaimed
-  without granting fresh quota).
-- Per-key state lives in the supervised `livery_ratelimit_store` ETS
-  table; idle buckets that have fully refilled are reclaimed
-  automatically.
+- The count stays exact when requests run in parallel: taking a token
+  is a single compare-and-swap with no lock, so concurrent requests
+  for the same key never let more through than the bucket allows.
+- `RefillPerSec => 0` is a fixed quota that never refills. Those
+  buckets are kept until the node restarts, because removing one would
+  give the client a fresh quota.
+- The state for each key lives in the `livery_ratelimit_store` ETS
+  table, which is supervised. Idle buckets that have refilled
+  completely are removed on their own.
 
 ## See also
 

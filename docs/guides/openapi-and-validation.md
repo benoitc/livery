@@ -1,15 +1,15 @@
 # How to generate OpenAPI docs and validate requests
 
-Livery can turn your route metadata into an OpenAPI 3.2 spec, serve a
-browsable docs page from it, and reject malformed request bodies. You
-need this when you want a machine-readable contract for your routes and
-automatic validation against it.
+Livery can build an OpenAPI 3.2 spec from your route metadata, serve a
+documentation page from it, and refuse request bodies that do not match
+a schema. You need this when you want a description of your routes that
+tools can read, and requests checked against it.
 
 ## Generate the spec
 
 `livery_openapi:build/1` turns route metadata into an OpenAPI 3.2
-document. Livery path templates (`:param`, `*wildcard`) become `{param}`
-and gain synthesised path parameters:
+document. Livery path templates (`:param`, `*wildcard`) become `{param}`,
+and Livery adds the matching path parameters for you:
 
 ```erlang
 Doc = livery_openapi:build(#{
@@ -31,8 +31,9 @@ Serve it as JSON with `livery_openapi:handler/1`, mounted at
 
 ## Serve a docs UI
 
-Both UIs are self-contained HTML pages that load the spec from a URL; the
-JS bundles come from a CDN, so no static files are needed. Pick one:
+Each UI is a single HTML page that loads the spec from a URL. Its
+JavaScript comes from a CDN, so you do not serve any static files. Pick
+one:
 
 ```erlang
 %% Redoc
@@ -42,12 +43,14 @@ JS bundles come from a CDN, so no static files are needed. Pick one:
 {<<"GET">>, <<"/docs">>, livery_openapi:swagger_ui_handler()}
 ```
 
-Pass a custom spec URL to either: `redoc_handler(<<"/v2/openapi.json">>)`.
+To load the spec from another URL, pass it to either handler:
+`redoc_handler(<<"/v2/openapi.json">>)`.
 
 ## Validate request bodies
 
-`livery_openapi_validate` rejects bodies that do not match a schema with
-`422`, and stores the decoded body under `meta(body, _)` on success:
+`livery_openapi_validate` answers `422` when a body does not match the
+schema. When it matches, the decoded body is stored under
+`meta(body, _)`:
 
 ```erlang
 Schema = #{
@@ -63,12 +66,12 @@ Schema = #{
 Stack = [{livery_openapi_validate, #{body_schema => Schema}}],
 ```
 
-Supported keywords cover `type` (single or a list), `enum`, `const`, the
+The validator knows `type` (single or a list), `enum`, `const`, the
 numeric bounds (`minimum`/`maximum`/`exclusive*`/`multipleOf`), string
 `minLength`/`maxLength`/`pattern`, object
 `required`/`properties`/`additionalProperties`/`min`/`maxProperties`,
-array `items`/`min`/`maxItems`/`uniqueItems`, and the
-`allOf`/`anyOf`/`oneOf` combinators. A `422` body lists each failure as
+array `items`/`min`/`maxItems`/`uniqueItems`, and
+`allOf`/`anyOf`/`oneOf` to combine schemas. A `422` body lists each failure as
 `{path, error}`.
 
 ## See also

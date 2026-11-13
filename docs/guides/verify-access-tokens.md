@@ -65,7 +65,7 @@ the handler sees no user; a bad token is still refused.
 
 ## Require a stronger or more recent sign-in
 
-Some routes deserve more than a valid token: a payment, a change of
+Some routes need more than a valid token: a payment, a change of
 email, an admin action. Ask for a sign-in method (`acr_values`, as your
 provider names them) or a recent sign-in (`max_age`, in seconds) on the
 route's own stack:
@@ -133,8 +133,8 @@ end.
   agree with the token. RSA keys under 2048 bits are refused.
 - A token naming a key the cached set does not have makes Livery fetch
   the set again, at most once every 30 seconds
-  (`min_refresh_interval`), so rotation works and made-up key ids do
-  not flood your issuer.
+  (`min_refresh_interval`), so key rotation works, and tokens with
+  made-up key ids cannot flood your issuer with requests.
 - `scope` is read from the space-separated `scope` claim and from the
   `scp` list some issuers send instead.
 - Allow for clock skew with `leeway`, in seconds.

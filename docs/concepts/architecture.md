@@ -2,10 +2,11 @@
 
 This page explains the overall shape of Livery: how the pieces fit
 together and why they are split the way they are. Read it when you
-want a mental model of where your code runs before you dive into any
-single part. Livery is one OTP application that sits on top of three
-external wire libraries and exposes one developer-facing surface, so
-you write your handlers once and they serve every protocol.
+want a picture of where your code runs before you look at any single
+part. Livery is one OTP application on top of external wire libraries
+(three for HTTP, plus `ws` for WebSocket), with one API for you to
+write against, so you write your
+handlers once and they serve every protocol.
 
 ```
                  ┌─────────────────────┐
@@ -31,11 +32,11 @@ you write your handlers once and they serve every protocol.
 ## The two layers
 
 **Wire layer.** `h1`, `h2`, `quic`, `ws` are independent hex
-packages. They own framing, HPACK, QPACK, QUIC state, TLS, flow
+packages. They handle framing, HPACK, QPACK, QUIC state, TLS, flow
 control, and the WebSocket codec. Livery does not reimplement any
 of this.
 
-**Developer layer.** Livery owns the request value, response
+**Developer layer.** Livery provides the request value, response
 value, router, middleware, extractors, body reader, per-request
 process, service runtime, observability, auth, OpenAPI, MCP, and
 WebTransport integration.
@@ -45,22 +46,23 @@ WebTransport integration.
 `livery:start_service/1` brings up H3 on UDP, H2 on TLS,
 and H1 on TCP together, under one `livery_service` process. All three
 feed into the same router and the same middleware stack. Responses on H1 and H2 carry
-`Alt-Svc: h3=":443"` so clients can race and upgrade.
+`Alt-Svc: h3=":443"` so clients can switch to H3 on their next
+request.
 
-Adapters are translators:
+Adapters only translate between Livery and the wire library:
 
 | Adapter callback | Job |
 |---|---|
 | `start/3` | hand a listener spec to the wire library |
-| `send_headers/4` | emit status + headers (with `end_stream` hint) |
-| `send_data/3` | emit body bytes |
-| `send_trailers/2` | emit trailers and close the send half |
+| `send_headers/4` | send status and headers (with an `end_stream` hint) |
+| `send_data/3` | send body bytes |
+| `send_trailers/2` | send trailers and close the sending side of the stream |
 | `reset/2` | abort a stream with a protocol-specific reason |
 | `peer_info/1` | report peer address, TLS info, ALPN |
 | `capabilities/1` | report `trailers`, `extended_connect`, `datagrams`, `capsules`, `informational` |
 
-No state machine, no buffering, no framing. The adapter answers
-"how do I make this engine emit headers".
+No state machine, no buffering, no framing. The adapter answers one
+question: how do I make this library send headers?
 
 ## Per-request process
 
@@ -73,20 +75,21 @@ into messages for it until the worker exits. The worker:
 1. Owns the body reference and receives `{livery_body, Ref, _}`
    messages from the adapter.
 2. Runs the middleware stack and handler via `livery:dispatch/3`.
-3. Walks the response variant via `livery:emit/3` into the
-   adapter's `send_*` callbacks.
+3. Passes the response to `livery:emit/3`, which sends it through
+   the adapter's `send_*` callbacks according to its body type.
 4. Exits when done.
 
 The listener process is never blocked on a slow handler: it handed the
-request to its own worker and moved on. Crashes are mapped to `500` and
+request to its own worker and moved on. A crash becomes a `500` and
 the worker exits normally. The [request lifecycle](request-lifecycle.md)
 page follows this path step by step.
 
 ## What this enables
 
 - Handlers see one request value regardless of protocol.
-- Bug fixes in framing or congestion control land in `h1`/`h2`/`quic`
-  as dep bumps, not Livery patches.
+- Fixes to framing or congestion control go into `h1`/`h2`/`quic`;
+  Livery picks them up by updating the dependency, not by patching
+  its own code.
 - A future protocol needs only a new adapter implementing the same
   callbacks; the router, middleware, and handlers do not change.
 
@@ -96,9 +99,9 @@ Livery was announced, with 0.2.0, around five rules:
 
 1. **Values, not handles.** `Req` and `Resp` are plain records, easy to
    pass between processes and to test.
-2. **Middleware is a continuation.** `call(Req, Next, State) -> Resp`;
-   wrapping `Next` in a try/catch, a timeout or a span is just calling
-   it inside your own code.
+2. **Middleware is a continuation.** `call(Req, Next, State) -> Resp`,
+   where `Next` is the rest of the pipeline. To wrap it in a
+   try/catch, a timeout or a span, you call it inside your own code.
 3. **Protocol neutrality.** A handler never knows whether it is on H1,
    H2 or H3; differences show up only through capabilities.
 4. **Thin adapters.** The wire libraries own the protocols.
@@ -125,8 +128,8 @@ adapters, so body limits and disconnects behave the same everywhere.
 
 **An admission counter, not a supervisor.** `livery_req_sup` is a
 `gen_server` that counts requests in flight. Workers are started in the
-calling process with `proc_lib:spawn`, so starting one is never
-serialized through a single process, and the counter goes down on the
+calling process with `proc_lib:spawn`, so starting one never has to
+wait its turn behind a single process, and the counter goes down on the
 worker's `DOWN`, so even a killed worker is accounted for.
 
 **Who owns what.** Listeners belong to the wire libraries, under their
@@ -140,8 +143,8 @@ stores below.
 implementing it; Livery checks with `livery_adapter:implements/3`, never
 with a list of adapters, so an adapter written outside Livery gets Early
 Hints, WebSocket and WebTransport the same way (rule 3). An upgrade
-answers status `101` on every protocol, the protocol-neutral meaning of
-"this stream is now a WebSocket", even though HTTP/2 and HTTP/3 send
+answers status `101` on every protocol, Livery's way of saying "this
+stream is now a WebSocket" whatever the protocol, even though HTTP/2 and HTTP/3 send
 `200` to the extended CONNECT.
 
 **What the test adapter proves.** `livery_test_adapter` runs your stack

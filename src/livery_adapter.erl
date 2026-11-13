@@ -1,7 +1,8 @@
 -module(livery_adapter).
 -moduledoc """
-Internal behaviour implemented by `livery_h1`, `livery_h2`,
-`livery_h3`, and `livery_test_adapter`.
+Behaviour implemented by `livery_h1`, `livery_h2`, `livery_h3`, and
+`livery_test_adapter`. An adapter written outside Livery implements it
+the same way.
 
 Adapters translate engine events into `#livery_req{}` values and
 drive the response back onto the wire. They own no state machines;
@@ -16,31 +17,40 @@ here.
 
 ## Callbacks
 
-- `start(Name, ListenSpec, Opts) -> {ok, Listener} | {error, _}` —
+- `start(Name, ListenSpec, Opts) -> {ok, Listener} | {error, _}`:
   start a listener for this adapter.
-- `stop(Listener) -> ok` — stop a listener cleanly.
-- `send_headers(Stream, Status, Headers, SendOpts) -> SendResult` —
+- `stop(Listener) -> ok`: stop a listener cleanly.
+- `send_headers(Stream, Status, Headers, SendOpts) -> SendResult`:
   emit response headers. `SendOpts` may carry
   `end_stream => true` when the response has no body.
-- `send_data(Stream, IoData, SendOpts) -> SendResult` — emit body
+- `send_data(Stream, IoData, SendOpts) -> SendResult`: emit body
   bytes. `end_stream => true` closes the send half;
   `flush => true` hints the adapter to push immediately rather
   than batch.
-- `send_trailers(Stream, Trailers) -> SendResult` — emit trailers
+- `send_trailers(Stream, Trailers) -> SendResult`: emit trailers
   (and implicitly close the send half).
-- `send_informational(Stream, Status, Headers) -> SendResult` —
+- `send_informational(Stream, Status, Headers) -> SendResult`:
   optional: emit an interim (1xx) response, e.g. 103 Early Hints,
   ahead of the final response. May be called several times per
   stream. Adapters that cannot (or do not) implement it are
   reported as `informational => false` in `capabilities/1`, and
   `livery_req:inform/3` returns `{error, unsupported}`.
-- `reset(Stream, Reason) -> ok` — reset a stream with a
+- `accept_ws(Stream, Req, HandlerMod, Opts) -> {ok, Pid} | {error, _}`:
+  optional: hand the stream to a WebSocket session. `livery_ws:upgrade/3`
+  answers `501` on an adapter that does not implement it.
+- `accept_wt(Stream, Req, HandlerMod, Opts) -> {ok, Pid} | {error, _}`:
+  optional: hand the stream to a WebTransport session.
+  `livery_wt:upgrade/3` answers `501` on an adapter that does not
+  implement it.
+- `reset(Stream, Reason) -> ok`: reset a stream with a
   protocol-specific reason.
-- `peer_info(Stream) -> peer_info()` — return peer/TLS info for a
+- `peer_info(Stream) -> peer_info()`: return peer/TLS info for a
   stream.
-- `capabilities(Listener) -> capabilities()` — return the
+- `capabilities(Listener) -> capabilities()`: return the
   capability bitmap of a listener.
 """.
+
+-export([implements/3]).
 
 -export_type([
     listener/0,
@@ -133,4 +143,27 @@ here.
 ) ->
     send_result().
 
--optional_callbacks([send_full/5, send_informational/3]).
+%% Optional: hand the stream to a WebSocket session (`livery_ws:upgrade/3').
+-callback accept_ws(stream(), livery_req:req(), module(), term()) ->
+    {ok, pid()} | {error, term()}.
+
+%% Optional: hand the stream to a WebTransport session
+%% (`livery_wt:upgrade/3').
+-callback accept_wt(stream(), livery_req:req(), module(), term()) ->
+    {ok, pid()} | {error, term()}.
+
+-optional_callbacks([send_full/5, send_informational/3, accept_ws/4, accept_wt/4]).
+
+-doc """
+Whether `Adapter` implements the optional callback `Fun/Arity`.
+
+Optional features (`send_full/5`, `send_informational/3`, `accept_ws/4`,
+`accept_wt/4`) are offered by implementing the callback; callers check
+here instead of keeping a list of adapters.
+""".
+-spec implements(module() | undefined, atom(), arity()) -> boolean().
+implements(undefined, _Fun, _Arity) ->
+    false;
+implements(Adapter, Fun, Arity) when is_atom(Adapter) ->
+    _ = code:ensure_loaded(Adapter),
+    erlang:function_exported(Adapter, Fun, Arity).

@@ -19,7 +19,8 @@ my_wt_route(Req) ->
 (from `erlang-webtransport`).
 
 WebTransport runs only over H2 (extended CONNECT, RFC 9220-style)
-and H3. Calling `upgrade/3` on H1 returns `501 Not Implemented`.
+and H3. Calling `upgrade/3` on an adapter that does not implement
+`accept_wt/4` (H1) returns `501 Not Implemented`.
 
 The listener must advertise the WebTransport settings. Merge
 `webtransport:h3_settings/0` (or `h2_settings/0`) into the listener
@@ -60,14 +61,14 @@ when the handshake is rejected.
     livery_resp:resp().
 upgrade(Req, HandlerMod, Opts) ->
     Adapter = livery_req:adapter(Req),
-    case adapter_transport(Adapter) of
-        undefined ->
+    case livery_adapter:implements(Adapter, accept_wt, 4) of
+        false ->
             livery_resp:text(
                 501,
                 <<"WebTransport not supported on this protocol">>
             );
-        Transport ->
-            case Adapter:accept_wt(Transport, Req, HandlerMod, Opts) of
+        true ->
+            case Adapter:accept_wt(livery_req:stream(Req), Req, HandlerMod, Opts) of
                 {ok, _Session} ->
                     #livery_resp{status = 200, body = taken_over};
                 {error, not_connect_method} ->
@@ -84,11 +85,6 @@ upgrade(Req, HandlerMod, Opts) ->
                     )
             end
     end.
-
--spec adapter_transport(module()) -> h2 | h3 | undefined.
-adapter_transport(livery_h2) -> h2;
-adapter_transport(livery_h3) -> h3;
-adapter_transport(_) -> undefined.
 
 -spec format_reason(term()) -> iodata().
 format_reason(B) when is_binary(B) -> B;

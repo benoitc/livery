@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `livery_a2a:router/2` takes `max_body_bytes` and `body_timeout_ms`, the
   same request body limits `livery_mcp` already has.
 
+### Changed
+
+- An adapter written outside Livery can now offer WebSocket and
+  WebTransport: `livery_ws:upgrade/3` and `livery_wt:upgrade/3` use any
+  adapter that implements `accept_ws/4` or `accept_wt/4`, now optional
+  callbacks of `livery_adapter`, instead of a fixed list of Livery's own
+  adapters. `accept_wt/4` takes the stream as its first argument, like
+  `accept_ws/4`.
+
+### Deprecated
+
+- `livery_resp:upgrade/2`. No adapter ever acted on the response it
+  builds; use `livery_ws:upgrade/3` or `livery_wt:upgrade/3`.
+
 ### Fixed
 
 - An A2A request whose body was too large, too slow or cut off reached

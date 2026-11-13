@@ -34,13 +34,22 @@ An adapter implements the `livery_adapter` behaviour:
 -callback send_trailers(Stream, Trailers) -> SendResult.
 -callback reset(Stream, Reason) -> ok.
 -callback peer_info(Stream) -> #{peer, tls, alpn}.
--callback capabilities(Listener) -> #{trailers, extended_connect, datagrams, capsules}.
+-callback capabilities(Listener) -> #{trailers, extended_connect, datagrams,
+                                      capsules, informational}.
+
+%% Optional
+-callback send_full(Stream, Status, Headers, IoData, SendOpts) -> SendResult.
+-callback send_informational(Stream, Status, Headers) -> SendResult.
+-callback accept_ws(Stream, Req, HandlerMod, Opts) -> {ok, Pid} | {error, Reason}.
+-callback accept_wt(Stream, Req, HandlerMod, Opts) -> {ok, Pid} | {error, Reason}.
 ```
 
 `SendOpts` is `#{end_stream => boolean(), flush => boolean()}`.
-`SendResult` is `ok | {error, closed | flow | term()}`. There is an
-optional `send_full/5` an adapter may export to coalesce headers and body
-into one write; `livery:emit/3` uses it when present.
+`SendResult` is `ok | {error, closed | flow | term()}`. `send_full/5`
+coalesces headers and body into one write, and `livery:emit/3` uses it
+when present. `send_informational/3` sends a 1xx (`livery_req:inform/3`).
+`accept_ws/4` and `accept_wt/4` hand the stream to a WebSocket or
+WebTransport session (`livery_ws:upgrade/3`, `livery_wt:upgrade/3`).
 
 ## Adapters that ship
 
@@ -128,6 +137,13 @@ Call `capabilities/1` on the concrete adapter module the request arrived
 on (`livery_req:adapter/1`), not on `livery_adapter`. `trailers` and
 `extended_connect` are protocol-specific; `datagrams` and `capsules`
 apply to WebTransport on H3.
+
+Some features are optional callbacks instead: `send_full/5`,
+`send_informational/3`, `accept_ws/4` and `accept_wt/4`. An adapter
+offers one by implementing it, and Livery checks with
+`livery_adapter:implements/3`, never with a list of adapters. That is
+how an adapter written outside Livery gets Early Hints, WebSocket or
+WebTransport.
 
 ## Listen address
 

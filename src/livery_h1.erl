@@ -461,6 +461,9 @@ conn_base(Opts, Stack, Handler, Transport, Alpn) ->
         %% that, silently capping any `max_body' above 8 MiB. Requires
         %% erlang_h1 >= 0.7.1, which forwards max_body_size from server opts.
         max_body_size => infinity,
+        %% Read the socket only as fast as the handler reads the body:
+        %% livery_translator gives the credit back with h1:consume/3.
+        flow_control => manual,
         handler => make_handler_fun(
             Stack, Handler, MaxBody, maps:get(config, Opts, undefined), Transport, Alpn
         )
@@ -526,9 +529,12 @@ serve_request(Conn, StreamId, Method, Path, Headers, Ctx) ->
             key => StreamId,
             classify => fun classify/1,
             conn => Conn,
-            %% erlang_h1 has no receive flow control yet (no h1:consume/3),
-            %% so a slow handler relies on TCP buffers alone.
-            credit => none,
+            %% The server runs with `flow_control => manual': h1 stops reading
+            %% the socket once its window is full, and resumes as the
+            %% handler reads.
+            credit => fun(Bytes) ->
+                closed_guard(fun() -> h1:consume(Conn, StreamId, Bytes) end)
+            end,
             %% Nothing to tell the client: h1's early-response drain reads
             %% and discards the rest of the body before closing, so the
             %% client reads the response instead of a reset.

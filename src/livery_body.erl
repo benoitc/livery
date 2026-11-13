@@ -22,9 +22,8 @@ back for every chunk `read/2` hands out, by sending
 `{livery_body_demand, Ref, Bytes}` to the source. The adapter turns it
 into its wire library's flow control, so a handler that reads slowly
 holds the client back to one flow window instead of letting the body
-pile up in its mailbox. Nothing is needed in handler code. HTTP/2 and
-HTTP/3 do this; HTTP/1.1 relies on TCP buffers until `erlang_h1` offers
-the same.
+pile up in its mailbox. Nothing is needed in handler code. HTTP/1.1,
+HTTP/2 and HTTP/3 all do this.
 """.
 
 -export([

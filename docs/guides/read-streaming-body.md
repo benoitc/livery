@@ -55,9 +55,9 @@ Combine with `livery_body_limit` (buffered only today) or call
 ## Backpressure
 
 Nothing to do: each chunk `livery_body:read/2` returns gives its flow
-control credit back, so on HTTP/2 and HTTP/3 a client sends only one
-flow window ahead of what you have read. Read at the pace you can
-process. HTTP/1.1 relies on TCP buffers for now.
+control credit back, so a client sends only one flow window ahead of
+what you have read, on every protocol. Read at the pace you can
+process.
 `livery_body:signal_demand/2` is deprecated: `read/2` already does its
 job.
 

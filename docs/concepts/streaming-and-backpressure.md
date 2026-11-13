@@ -169,14 +169,13 @@ its result. `ok` means proceed, `{error, flow}` means wait a moment and
 retry, `{error, closed}` or `{error, send_timeout}` means give up.
 
 **Inbound.** You do nothing: every chunk `livery_body:read/2` hands you
-gives its credit back to the wire library. On HTTP/2 and HTTP/3 the
-client can send one flow window ahead of what your handler has read
-(64 KiB per stream on HTTP/2 by default, 512 KiB on HTTP/3), then waits.
-A handler that reads slowly holds the client back instead of letting the
+gives its credit back to the wire library. The client can send one
+flow window ahead of what your handler has read (64 KiB on HTTP/1.1 and
+per stream on HTTP/2 by default, 512 KiB on HTTP/3), then waits. A
+handler that reads slowly holds the client back instead of letting the
 body pile up in memory. If your handler answers without reading the
 whole body, the client is told to stop sending the rest once the
-response is out. HTTP/1.1 relies on TCP buffers alone for now:
-`erlang_h1` has no receive flow control yet.
+response is out (on HTTP/1.1 the connection drains it, then closes).
 
 ## Failure modes
 

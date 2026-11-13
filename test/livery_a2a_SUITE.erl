@@ -18,7 +18,10 @@
     not_found_and_method_not_allowed/1,
     disconnect_mid_stream/1,
     auth_via_livery/1,
-    nested_prefix/1
+    nested_prefix/1,
+    listener_max_body_is_413/1,
+    max_body_bytes_is_413/1,
+    stalled_body_is_408/1
 ]).
 %% livery middleware and logger handler callbacks used by the suite
 -export([call/3, log/2]).
@@ -30,7 +33,10 @@ all() ->
         not_found_and_method_not_allowed,
         disconnect_mid_stream,
         auth_via_livery,
-        nested_prefix
+        nested_prefix,
+        listener_max_body_is_413,
+        max_body_bytes_is_413,
+        stalled_body_is_408
     ].
 
 groups() ->
@@ -74,6 +80,9 @@ end_per_testcase(_Case, _Config) ->
 %% an ephemeral port serving RouterFun(Server), then rewrites the card
 %% so its interfaces point at the bound port.
 start_stack(ServerOpts, RouterFun) ->
+    start_stack(ServerOpts, #{}, RouterFun).
+
+start_stack(ServerOpts, HttpOpts, RouterFun) ->
     Base = maps:get(base_path, ServerOpts, <<"/a2a">>),
     {ok, Server} = barrel_a2a_server:start(
         livery_a2a_test_agent:card(),
@@ -89,7 +98,7 @@ start_stack(ServerOpts, RouterFun) ->
         )
     ),
     {ok, Service} = livery:start_service(#{
-        http => #{port => 0},
+        http => HttpOpts#{port => 0},
         router => RouterFun(Server)
     }),
     true = unlink(Service),
@@ -352,9 +361,62 @@ nested_prefix(_Config) ->
         stop_stack(Stack)
     end.
 
+%% A body over the listener's `max_body' is refused with 413. It must
+%% not reach the agent as an empty request.
+listener_max_body_is_413(_Config) ->
+    Stack = start_stack(#{}, #{max_body => 64}, fun(Server) -> livery_a2a:router(Server) end),
+    try
+        ?assertMatch({ok, 413, _, _}, post_large(Stack))
+    after
+        stop_stack(Stack)
+    end.
+
+%% The bridge's own `max_body_bytes' answers 413 too.
+max_body_bytes_is_413(_Config) ->
+    Stack = start_stack(#{}, fun(Server) ->
+        livery_a2a:router(Server, #{max_body_bytes => 64})
+    end),
+    try
+        ?assertMatch({ok, 413, _, _}, post_large(Stack))
+    after
+        stop_stack(Stack)
+    end.
+
+%% A client that stops sending its body gets 408 once `body_timeout_ms'
+%% passes without a chunk.
+stalled_body_is_408(_Config) ->
+    Stack = start_stack(#{}, fun(Server) ->
+        livery_a2a:router(Server, #{body_timeout_ms => 200})
+    end),
+    #{port := Port} = Stack,
+    {ok, Sock} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}]),
+    try
+        ok = gen_tcp:send(Sock, [
+            <<"POST /a2a/jsonrpc HTTP/1.1\r\nhost: 127.0.0.1\r\n">>,
+            <<"content-type: application/json\r\na2a-version: 1.0\r\n">>,
+            <<"content-length: 100\r\n\r\n">>,
+            binary:copy(<<"x">>, 10)
+        ]),
+        {ok, Reply} = gen_tcp:recv(Sock, 0, 5000),
+        ?assertMatch(<<"HTTP/1.1 408", _/binary>>, Reply)
+    after
+        gen_tcp:close(Sock),
+        stop_stack(Stack)
+    end.
+
 %%--------------------------------------------------------------------
 %% Helpers
 %%--------------------------------------------------------------------
+
+%% A well-formed JSON-RPC request of a few hundred bytes.
+post_large(#{url := Url, base := Base}) ->
+    Body = json:encode(#{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"id">> => 1,
+        <<"method">> => <<"SendMessage">>,
+        <<"params">> => #{<<"pad">> => binary:copy(<<"x">>, 300)}
+    }),
+    hackney:request(post, <<Url/binary, Base/binary, "/jsonrpc">>, json_headers(), Body, [with_body]).
 
 json_headers() ->
     [{<<"a2a-version">>, <<"1.0">>}, {<<"content-type">>, <<"application/json">>}].

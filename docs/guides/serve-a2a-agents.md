@@ -152,6 +152,21 @@ is built:
 A bad value raises `{invalid_engine_option, Key, Value}` from
 `router/2`.
 
+Two more options bound the request body before the engine sees it, the
+same ones `livery_mcp` takes:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `max_body_bytes` | 16 MiB | Largest body accepted; `413` past it |
+| `body_timeout_ms` | `60000` | Longest wait for one body chunk; `408` past it |
+
+```erlang
+livery_a2a:router(Server, #{max_body_bytes => 1048576, body_timeout_ms => 15000})
+```
+
+The listener's own `max_body` is answered with `413` as well, and a
+body cut off in the middle with `400`.
+
 ## Notes
 
 - The handler writes the response straight to the wire and returns

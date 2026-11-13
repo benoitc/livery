@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `livery_a2a:router/2` takes `max_body_bytes` and `body_timeout_ms`, the
+  same request body limits `livery_mcp` already has.
+
+### Fixed
+
+- An A2A request whose body was too large, too slow or cut off reached
+  the agent as an empty request, so the client got a JSON parse error
+  instead of the real reason. It is now refused before the agent sees
+  it: `413` when the body is over the limit, including the listener's
+  `max_body`, which A2A did not respect, `408` when it stalls, `400` when
+  it ends early. MCP already behaved this way, and both now share the
+  same code. A2A now waits up to 60 seconds for each body chunk, as MCP
+  does, instead of 30.
+
 ## [0.12.1] - 2026-11-11
 
 Moves the MCP and A2A support to barrel_mcp 4.5.0 and barrel_a2a 0.3.0,

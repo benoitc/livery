@@ -116,9 +116,10 @@ OpenID Foundation's rules for high-security APIs).
   provider asks the user to confirm; `keep_id_token => true` keeps it in
   the session for that, at the cost of a larger cookie.
   `provider_logout => false` signs out of your app only.
-- Being told about a sign-out that happened at the provider (back-channel
-  or front-channel logout) is not supported: sessions live in cookies,
-  so there is nothing on the server to end.
+- To end sessions when the user signs out at the provider, or to sign a
+  user out of every device, add a session store and a back-channel
+  logout route: see [End sessions from the server](end-sessions.md).
+  Front-channel logout is not supported.
 - Pass `client_auth => private_key_jwt` and `private_key` instead of
   `client_secret` to authenticate with a key, as in
   [Call an API with OAuth](call-apis-with-oauth.md).
@@ -128,4 +129,5 @@ OpenID Foundation's rules for high-security APIs).
 ## See also
 
 - Reference: `livery_auth_login`, `livery_auth_session`, `livery_auth_oidc`
+- Guide: [End sessions from the server](end-sessions.md)
 - Guide: [Use signed session cookies](session-cookies.md)

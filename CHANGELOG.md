@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sessions can now be ended before their cookie expires. Give the
+  session options a store and each sign-in is recorded on the server;
+  you can then sign a user out of every device, for example when you
+  deactivate their account, and logging out ends the session for good.
+  A default in-memory store is included, and you can plug your own to
+  share sessions across nodes. Turning the store on signs everyone out
+  once, since older cookies carry no session id.
+- The identity provider can now end sessions when the user logs out
+  there (OpenID Connect Back-Channel Logout 1.0). Set a back-channel
+  logout path and register it with the provider; Livery checks the
+  logout token the provider sends and ends the matching sessions, and
+  can call your code to close anything else the user has open.
+
 ### Changed
 
 - Moves to h2 0.18.0, quic 3.1.0, webtransport 0.5.11 and hackney

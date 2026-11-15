@@ -45,6 +45,7 @@ Recipes. Each guide takes one task and shows how to do it.
 - [Extract a bearer token](guides/bearer-tokens.md)
 - [Verify opaque tokens with introspection](guides/token-introspection.md)
 - [Use signed session cookies](guides/session-cookies.md)
+- [End sessions from the server](guides/end-sessions.md)
 - [Read a streaming request body](guides/read-streaming-body.md)
 
 **Writing responses**

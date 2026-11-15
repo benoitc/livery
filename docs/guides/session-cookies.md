@@ -63,6 +63,22 @@ logout(_Req) ->
     livery_resp:with_header(K, V, R).
 ```
 
+## End a session before it expires
+
+A signed cookie stays valid until it expires. To be able to end
+sessions early (sign a user out everywhere, follow a logout at the
+identity provider), add a `store` and a `max_age` to the options and
+open sessions with `livery_auth_session:create/3`:
+
+```erlang
+Opts = #{secret => Secret, max_age => 3600, store => livery_auth_session_ets},
+{ok, Value} = livery_auth_session:create(#{<<"uid">> => 42},
+                                         #{iss => <<"my-app">>, sub => <<"42">>},
+                                         Opts).
+```
+
+[End sessions from the server](end-sessions.md) shows the rest.
+
 ## Notes
 
 - Use a long, random `secret` and keep it out of source control.
@@ -76,3 +92,4 @@ logout(_Req) ->
 
 - Reference: `livery_auth_session`, `livery_ext`
 - Guide: [Extract a bearer token](bearer-tokens.md)
+- Guide: [End sessions from the server](end-sessions.md)

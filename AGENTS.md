@@ -192,6 +192,7 @@ What Livery implements itself. Wire framing (RFC 9112, 9113, 9114, 9000,
 | RFC 8949 CBOR | strict decoder for attestation objects and COSE keys | `livery_cbor` |
 | RFC 9052, 9053 COSE (RFC 8812, RFC 9864 algorithms) | COSE public keys and WebAuthn signatures | `livery_auth_cose` |
 | OpenID Connect RP-Initiated Logout 1.0 | logout redirect to `end_session_endpoint` | `livery_auth_login` |
+| OpenID Connect Back-Channel Logout 1.0 | logout token checks, ending sessions by `sid` or `sub` | `livery_auth_backchannel`, `livery_auth_session_store`, `livery_auth_session_ets` |
 | RFC 9728 protected resource metadata | metadata document, `resource_metadata` challenge parameter | `livery_auth_resource`, `livery_auth_challenge` |
 | OpenID Connect Discovery 1.0 | provider metadata | `livery_auth_oidc` |
 | OpenAPI 3.2, JSON Schema (subset) | document generation, request validation | `livery_openapi`, `livery_openapi_validate` |

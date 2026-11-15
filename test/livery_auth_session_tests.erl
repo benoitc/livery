@@ -199,3 +199,114 @@ purpose_cookie_is_not_a_session_test() ->
         Stack, handler(), #{headers => [{<<"cookie">>, <<"session=", Cookie/binary>>}]}
     ),
     ?assertEqual(401, livery_test_adapter:status(Cap)).
+
+%%====================================================================
+%% Server-side sessions: a store lets a session be ended early
+%%====================================================================
+
+-define(ISS, <<"https://id.example">>).
+
+store_opts() ->
+    #{secret => ?SECRET, max_age => 3600, store => livery_auth_session_ets}.
+
+store_test_() ->
+    {setup,
+        fun() ->
+            {ok, Apps} = application:ensure_all_started(livery),
+            Apps
+        end,
+        fun(Apps) -> [application:stop(A) || A <- lists:reverse(Apps)] end, [
+            {"create without a store is sign", fun create_without_store/0},
+            {"create with a store needs max_age", fun create_needs_max_age/0},
+            {"a recorded session passes", fun recorded_session_passes/0},
+            {"a revoked session is refused and cleared", fun revoked_session_refused/0},
+            {"revoke_user ends every session of the user", fun revoke_user_ends_all/0},
+            {"a cookie without a session id is refused", fun cookie_without_sid_refused/0},
+            {"end_session revokes the request's session", fun end_session_revokes/0},
+            {"a full store refuses the session", fun full_store_refuses/0}
+        ]}.
+
+with_cookie(Value) ->
+    #{headers => [{<<"cookie">>, <<"session=", Value/binary>>}]}.
+
+run_with_store(Value) ->
+    livery_test_adapter:run([{livery_auth_session, store_opts()}], handler(), with_cookie(Value)).
+
+open(Sub) ->
+    {ok, Value} = livery_auth_session:create(
+        #{<<"uid">> => 1}, #{iss => ?ISS, sub => Sub}, store_opts()
+    ),
+    Value.
+
+sid(Value) ->
+    {ok, #{<<"livery_sid">> := Sid}} = livery_auth_session:verify(Value, store_opts()),
+    Sid.
+
+create_without_store() ->
+    Opts = #{secret => ?SECRET},
+    {ok, Value} = livery_auth_session:create(
+        #{<<"uid">> => 1}, #{iss => ?ISS, sub => <<"a">>}, Opts
+    ),
+    ?assertEqual({ok, #{<<"uid">> => 1}}, livery_auth_session:verify(Value, Opts)).
+
+create_needs_max_age() ->
+    ?assertError(
+        {missing_option, max_age},
+        livery_auth_session:create(
+            #{}, #{iss => ?ISS, sub => <<"a">>}, maps:remove(max_age, store_opts())
+        )
+    ).
+
+recorded_session_passes() ->
+    Cap = run_with_store(open(<<"alice">>)),
+    ?assertEqual(200, livery_test_adapter:status(Cap)),
+    ?assertEqual(<<"1">>, livery_test_adapter:body(Cap)).
+
+revoked_session_refused() ->
+    Value = open(<<"alice">>),
+    ok = livery_auth_session:revoke(sid(Value), store_opts()),
+    Cap = run_with_store(Value),
+    ?assertEqual(401, livery_test_adapter:status(Cap)),
+    ?assertEqual(
+        <<"session=; Path=/; Max-Age=0">>, livery_test_adapter:header(<<"set-cookie">>, Cap)
+    ).
+
+revoke_user_ends_all() ->
+    A1 = open(<<"bob">>),
+    A2 = open(<<"bob">>),
+    Other = open(<<"carol">>),
+    ok = livery_auth_session:revoke_user(?ISS, <<"bob">>, store_opts()),
+    ?assertEqual(
+        [401, 401, 200],
+        [livery_test_adapter:status(run_with_store(V)) || V <- [A1, A2, Other]]
+    ).
+
+cookie_without_sid_refused() ->
+    Old = livery_auth_session:sign(#{<<"uid">> => 1}, store_opts()),
+    ?assertEqual(401, livery_test_adapter:status(run_with_store(Old))).
+
+end_session_revokes() ->
+    Value = open(<<"dave">>),
+    Req = req_with_cookie(<<"session=", Value/binary>>),
+    ok = livery_auth_session:end_session(Req, store_opts()),
+    ?assertEqual(invalid, livery_auth_session_ets:check(undefined, sid(Value))),
+    ?assertEqual(ok, livery_auth_session:end_session(Req, #{secret => ?SECRET})).
+
+full_store_refuses() ->
+    application:set_env(livery, session_max, 0),
+    try
+        ?assertEqual(
+            {error, full},
+            livery_auth_session:create(#{}, #{iss => ?ISS, sub => <<"e">>}, store_opts())
+        )
+    after
+        application:unset_env(livery, session_max)
+    end.
+
+%% Without a store the middleware never looks for a session id.
+no_store_unchanged_test() ->
+    Cookie = livery_auth_session:sign(#{<<"uid">> => 3}, #{secret => ?SECRET}),
+    Cap = livery_test_adapter:run(
+        [{livery_auth_session, #{secret => ?SECRET}}], handler(), with_cookie(Cookie)
+    ),
+    ?assertEqual(<<"3">>, livery_test_adapter:body(Cap)).

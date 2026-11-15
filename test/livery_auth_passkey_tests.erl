@@ -24,7 +24,8 @@ passkey_test_() ->
             {"a credential id is registered once", fun duplicate_refused/0},
             {"a store's own refusal of a duplicate", fun store_refuses_duplicate/0},
             {"sign-in needs the user handle", fun user_handle_required/0},
-            {"a challenge cookie is not a session", fun challenge_not_session/0}
+            {"a challenge cookie is not a session", fun challenge_not_session/0},
+            {"a session store records the sign-in", fun store_records_sign_in/0}
         ]}.
 
 %%====================================================================
@@ -237,3 +238,19 @@ challenge_not_session() ->
         #{headers => [{<<"cookie">>, <<"session=", Value/binary>>}]}
     ),
     ?assertEqual(401, livery_test_adapter:status(Cap)).
+
+store_records_sign_in() ->
+    Tab = ets:new(creds, [public]),
+    {_Opts, Cred} = registered(Tab),
+    Session = #{secret => ?SECRET, max_age => 600, store => livery_auth_session_ets},
+    Opts = (opts(Tab, undefined))#{session => Session},
+    {200, Options, Set} = post(Opts, <<"login/options">>, [], #{}),
+    Assertion = ?A:assert(Cred, 1, #{
+        challenge => challenge(Options), user_handle => <<"user-alice">>
+    }),
+    {200, _, Out} = post(Opts, <<"login">>, [cookie(<<"session_passkey">>, Set)], Assertion),
+    <<"session=", Value/binary>> = cookie(<<"session">>, Out),
+    {ok, #{<<"livery_sid">> := Sid}} = livery_auth_session:verify(Value, Session),
+    ?assertEqual(valid, livery_auth_session_ets:check(undefined, Sid)),
+    ok = livery_auth_session:revoke_user(<<"example.com">>, ?A:b64(<<"user-alice">>), Session),
+    ?assertEqual(invalid, livery_auth_session_ets:check(undefined, Sid)).

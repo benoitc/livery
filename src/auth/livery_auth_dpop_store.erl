@@ -1,7 +1,8 @@
 -module(livery_auth_dpop_store).
 -moduledoc """
-Single-use store for DPoP proofs (RFC 9449 section 11.1) and passkey
-challenges (`livery_auth_passkey`).
+Single-use store for DPoP proofs (RFC 9449 section 11.1), passkey
+challenges (`livery_auth_passkey`) and logout token ids
+(`livery_auth_backchannel`).
 
 A supervised gen_server that owns one public named ETS table of proof
 identifiers and drops them once they are too old to be accepted

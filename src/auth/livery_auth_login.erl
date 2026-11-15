@@ -64,17 +64,35 @@ revokes it, and `livery_auth_session:revoke_user/3` ends every session
 of a user. If the store refuses a new session, the callback answers
 `503`.
 
+To end sessions when the user logs out at the provider (OpenID Connect
+Back-Channel Logout 1.0), set `backchannel_logout_path` (for example
+`/auth/backchannel-logout`) and register that URL with the provider.
+`routes/1` then adds a POST route for it, limited to 16 KiB bodies and,
+per peer address, 100 requests in a burst and 10 a second
+(`backchannel_rate` takes another `livery_ratelimit` state, or `false`).
+It needs a session `store` or an `on_logout => fun((Iss, Sub, Sid) ->
+any())`, or both; see `livery_auth_backchannel` for the checks and the
+other options. Front-channel logout is not supported.
+
 Deviations: `at_hash` is not checked for Ed448 ID tokens, since OpenID
 Connect does not say which hash goes with that curve. See AGENTS.md,
 Known deviations.
 """.
 
 -export([routes/1, login/1, callback/1, logout/1]).
+-export([keys/2, algorithms/1]).
 
 -define(STATE_COOKIE_AGE, 600).
 
--doc "The login, callback and logout routes, for `livery_router:compile/1`.".
--spec routes(map()) -> [{binary(), binary(), livery_middleware:handler()}].
+-doc """
+The login, callback and logout routes, for `livery_router:compile/1`,
+and the back-channel logout route when `backchannel_logout_path` is set.
+""".
+-spec routes(map()) ->
+    [
+        {binary(), binary(), livery_middleware:handler()}
+        | {binary(), binary(), livery_middleware:handler(), map()}
+    ].
 routes(Opts) ->
     Logout = logout(Opts),
     [
@@ -82,7 +100,35 @@ routes(Opts) ->
         {<<"GET">>, callback_path(Opts), callback(Opts)},
         {<<"GET">>, logout_path(Opts), Logout},
         {<<"POST">>, logout_path(Opts), Logout}
-    ].
+    ] ++ backchannel_route(Opts).
+
+%% The provider is the only expected caller, but the route is public:
+%% bound the body and the request rate per peer address. A provider
+%% logging many users out at once sends bursts, hence the generous rate.
+backchannel_route(#{backchannel_logout_path := Path} = Opts) ->
+    case {maps:is_key(store, maps:get(session, Opts)), maps:is_key(on_logout, Opts)} of
+        {false, false} -> error({missing_option, store_or_on_logout});
+        _ -> ok
+    end,
+    Rate =
+        case maps:get(backchannel_rate, Opts, default) of
+            default ->
+                [{livery_ratelimit, livery_ratelimit:limiter(100, 10, #{key => fun peer/1})}];
+            false ->
+                [];
+            Limiter ->
+                [{livery_ratelimit, Limiter}]
+        end,
+    Stack = [{livery_body_limit, #{max => 16384}} | Rate],
+    [{<<"POST">>, Path, livery_auth_backchannel:handler(Opts), #{middleware => Stack}}];
+backchannel_route(_Opts) ->
+    [].
+
+peer(Req) ->
+    case livery_req:peer(Req) of
+        {Ip, _Port} -> list_to_binary(inet:ntoa(Ip));
+        undefined -> undefined
+    end.
 
 %%====================================================================
 %% Login
@@ -399,6 +445,8 @@ at_hash_alg(IdToken) ->
         _ -> skip
     end.
 
+-doc false.
+-spec keys(map(), map()) -> {ok, [livery_auth:jwk()]} | {error, term()}.
 keys(_Provider, #{keys := Keys}) ->
     {ok, Keys};
 keys(#{<<"jwks_uri">> := Uri}, Opts) ->
@@ -406,6 +454,8 @@ keys(#{<<"jwks_uri">> := Uri}, Opts) ->
 keys(_Provider, _Opts) ->
     {error, no_jwks_uri}.
 
+-doc false.
+-spec algorithms(map()) -> [binary()].
 algorithms(#{<<"id_token_signing_alg_values_supported">> := Advertised}) when is_list(Advertised) ->
     [A || A <- livery_auth_jose:algorithms(), lists:member(A, Advertised)];
 algorithms(_Provider) ->

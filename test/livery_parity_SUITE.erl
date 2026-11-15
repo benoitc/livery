@@ -53,6 +53,7 @@
     static_file/1,
     health_live/1,
     metrics_export/1,
+    oidc_backchannel_logout/1,
     ipv6_loopback/1
 ]).
 
@@ -90,7 +91,8 @@ groups() ->
         conditional_get,
         static_file,
         health_live,
-        metrics_export
+        metrics_export,
+        oidc_backchannel_logout
     ],
     [
         {test_adapter, [parallel], Shared ++ [response_with_trailers]},
@@ -704,6 +706,136 @@ ipv6_h3(Cert, Key) ->
         livery_h3:stop(L)
     end.
 
+%%====================================================================
+%% Sign in with OpenID Connect, then the provider logs the user out
+%% (OpenID Connect Back-Channel Logout 1.0): the session ends.
+%%====================================================================
+
+-define(OP, <<"https://id.example">>).
+-define(OP_CLIENT, <<"my-app">>).
+
+oidc_backchannel_logout(Config) ->
+    {Key, Jwk} = livery_auth_jwt:keypair(<<"RS256">>, <<"op-key">>),
+    Sid = base64:encode(crypto:strong_rand_bytes(9)),
+    Session = #{
+        secret => <<"a long session secret">>,
+        max_age => 600,
+        secure => false,
+        store => livery_auth_session_ets
+    },
+    Provider = #{
+        <<"issuer">> => ?OP,
+        <<"authorization_endpoint">> => <<?OP/binary, "/authorize">>,
+        <<"token_endpoint">> => <<?OP/binary, "/token">>,
+        <<"id_token_signing_alg_values_supported">> => [<<"RS256">>]
+    },
+    Login = fun(IdToken) ->
+        #{
+            provider => Provider,
+            client_id => ?OP_CLIENT,
+            client_secret => <<"cs">>,
+            redirect_uri => <<"https://app.example/auth/callback">>,
+            session => Session,
+            keys => [Jwk],
+            backchannel_logout_path => <<"/auth/backchannel-logout">>,
+            adapter => livery_client_fun_adapter,
+            adapter_opts => #{
+                handler => fun(_Req) ->
+                    {200, [],
+                        json:encode(#{
+                            <<"access_token">> => <<"at">>,
+                            <<"token_type">> => <<"Bearer">>,
+                            <<"id_token">> => IdToken
+                        })}
+                end
+            }
+        }
+    end,
+    Now = os:system_time(second),
+    Mint = fun(Claims) ->
+        livery_auth_jwt:mint_raw(
+            Key, #{<<"alg">> => <<"RS256">>, <<"kid">> => <<"op-key">>}, Claims
+        )
+    end,
+
+    %% 1. Start the sign-in.
+    Started = drive(Config, [], livery_auth_login:login(Login(<<>>)), #{}),
+    ?assertEqual(302, status(Started)),
+    #{query := Q} = uri_string:parse(header(<<"location">>, Started)),
+    #{<<"state">> := State, <<"nonce">> := Nonce} = maps:from_list(uri_string:dissect_query(Q)),
+    [StateCookie] = [cookie_pair(C) || C <- set_cookies(Started)],
+
+    %% 2. The provider sends the browser back; the session is recorded.
+    IdToken = Mint(#{
+        <<"iss">> => ?OP,
+        <<"sub">> => <<"alice">>,
+        <<"aud">> => ?OP_CLIENT,
+        <<"exp">> => Now + 300,
+        <<"iat">> => Now,
+        <<"nonce">> => Nonce,
+        <<"sid">> => Sid
+    }),
+    Query = uri_string:compose_query([
+        {<<"state">>, State}, {<<"code">>, <<"c">>}, {<<"iss">>, ?OP}
+    ]),
+    Back = drive(Config, [], livery_auth_login:callback(Login(IdToken)), #{
+        path => iolist_to_binary([<<"/auth/callback?">>, Query]),
+        headers => [{<<"cookie">>, StateCookie}]
+    }),
+    ?assertEqual(302, status(Back)),
+    [SessionCookie] = [
+        cookie_pair(C)
+     || <<"session=", _/binary>> = C <- set_cookies(Back),
+        binary:match(C, <<"session=;">>) =:= nomatch
+    ],
+
+    %% 3. The session works.
+    Me = fun() ->
+        drive(
+            Config,
+            [{livery_auth_session, Session}],
+            fun(R) -> livery_resp:text(200, maps:get(<<"sub">>, livery_ext:session(R))) end,
+            #{headers => [{<<"cookie">>, SessionCookie}]}
+        )
+    end,
+    Before = Me(),
+    ?assertEqual({200, <<"alice">>}, {status(Before), body(Before)}),
+
+    %% 4. The provider logs the user out over the back channel.
+    [{_, _, Backchannel, #{middleware := Stack}}] = [
+        R
+     || {<<"POST">>, <<"/auth/backchannel-logout">>, _, _} = R <-
+            livery_auth_login:routes(Login(<<>>))
+    ],
+    LogoutToken = Mint(#{
+        <<"iss">> => ?OP,
+        <<"aud">> => ?OP_CLIENT,
+        <<"iat">> => Now,
+        <<"exp">> => Now + 120,
+        <<"jti">> => base64:encode(crypto:strong_rand_bytes(12)),
+        <<"events">> => #{<<"http://schemas.openid.net/event/backchannel-logout">> => #{}},
+        <<"sid">> => Sid
+    }),
+    Logout = drive(Config, Stack, Backchannel, #{
+        method => <<"POST">>,
+        path => <<"/auth/backchannel-logout">>,
+        headers => [{<<"content-type">>, <<"application/x-www-form-urlencoded">>}],
+        body => {buffered, uri_string:compose_query([{<<"logout_token">>, LogoutToken}])}
+    }),
+    ?assertEqual(200, status(Logout)),
+    ?assertEqual(<<"no-store">>, header(<<"cache-control">>, Logout)),
+
+    %% 5. The session is over.
+    After = Me(),
+    ?assertEqual(401, status(After)),
+    ?assertEqual([<<"session=; Path=/; Max-Age=0">>], set_cookies(After)).
+
+set_cookies(#response{headers = Hs}) ->
+    [V || {<<"set-cookie">>, V} <- Hs].
+
+cookie_pair(SetCookie) ->
+    hd(binary:split(SetCookie, <<";">>)).
+
 status(#response{status = S}) -> S.
 body(#response{body = B}) -> B.
 trailers(#response{trailers = T}) -> T.
@@ -718,7 +850,17 @@ header(Name, #response{headers = Hs}) ->
 %% Driver: test_adapter
 %%====================================================================
 
-drive_test_adapter(Stack, Handler, Spec) ->
+drive_test_adapter(Stack, Handler, Spec0) ->
+    Spec =
+        case maps:take(path, Spec0) of
+            error ->
+                Spec0;
+            {Path, Rest} ->
+                case binary:split(Path, <<"?">>) of
+                    [P, Q] -> Rest#{path => P, raw_query => Q};
+                    [P] -> Rest#{path => P}
+                end
+        end,
     Cap = livery_test_adapter:run(Stack, Handler, Spec),
     %% Crashes don't surface through run/3; for the crash test case
     %% we drive via the per-request worker so the 500 mapping kicks
@@ -751,7 +893,7 @@ drive_h1(Stack, Handler, Spec) ->
         Url = iolist_to_binary([
             <<"http://127.0.0.1:">>,
             integer_to_binary(Port),
-            <<"/">>
+            maps:get(path, Spec, <<"/">>)
         ]),
         Base =
             case byte_size(Body) of
@@ -800,12 +942,12 @@ drive_h2(Stack, Handler, Spec) ->
             {ok, StreamId} =
                 case HasBody of
                     false ->
-                        h2:request(Conn, Method, <<"/">>, Headers);
+                        h2:request(Conn, Method, maps:get(path, Spec, <<"/">>), Headers);
                     true ->
                         h2:request(
                             Conn,
                             Method,
-                            <<"/">>,
+                            maps:get(path, Spec, <<"/">>),
                             Headers ++ [{<<"content-length">>, integer_to_binary(byte_size(Body))}],
                             Body
                         )
@@ -876,7 +1018,7 @@ drive_h3(Cert, Key, Stack, Handler, Spec) ->
             Headers =
                 [
                     {<<":method">>, Method},
-                    {<<":path">>, <<"/">>},
+                    {<<":path">>, maps:get(path, Spec, <<"/">>)},
                     {<<":scheme">>, <<"https">>},
                     {<<":authority">>, <<"localhost">>}
                 ] ++ maps:get(headers, Spec, []),

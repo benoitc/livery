@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Moves to h2 0.18.0, quic 3.1.0, webtransport 0.5.11 and hackney
+  4.12.1. Over HTTP/3 a peer certificate is now refused when its
+  Extended Key Usage or Key Usage does not allow TLS authentication,
+  so a client certificate issued for another purpose no longer gets
+  through. An HTTP/2 graceful shutdown now waits for the requests
+  already accepted instead of cutting their responses off, and a slow
+  WebTransport reader holds its peer back to about one stream window
+  over HTTP/3.
+
 ## [0.13.0] - 2026-11-13
 
 Brings the runtime back in line with Livery's founding rules, which

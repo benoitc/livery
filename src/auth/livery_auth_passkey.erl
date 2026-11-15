@@ -39,6 +39,11 @@ Other options: `rp_id`, `rp_name`, `origins` and `session` (the
 `user_verification` and `resident_key` (`preferred` by default),
 `attestation_roots`, `allow_unattested`, `allow_cross_origin`,
 `top_origins`, `challenge_replay`, `prefix`.
+
+With a session `store` (see `livery_auth_session_store`), the session
+is recorded with `rp_id` as its issuer and the base64url user id as its
+subject, so `livery_auth_session:revoke_user(RpId, Sub, Session)` ends
+it. If the store refuses it, sign-in answers `503`.
 """.
 
 -export([routes/1]).
@@ -130,8 +135,18 @@ login_finish(Req, Opts) ->
 signed_in(User, Cred, Opts) ->
     OnLogin = maps:get(on_login, Opts, fun(#{id := Id}, _C) -> #{<<"sub">> => b64(Id)} end),
     Session = maps:get(session, Opts),
-    Value = livery_auth_session:sign(OnLogin(User, Cred), Session),
-    json(200, #{<<"ok">> => true}, [livery_auth_session:set_cookie_header(Value, Session)], Opts).
+    Who = #{iss => maps:get(rp_id, Opts), sub => b64(maps:get(id, User))},
+    case livery_auth_session:create(OnLogin(User, Cred), Who, Session) of
+        {ok, Value} ->
+            json(
+                200,
+                #{<<"ok">> => true},
+                [livery_auth_session:set_cookie_header(Value, Session)],
+                Opts
+            );
+        {error, _} ->
+            json(503, #{<<"error">> => <<"could not open the session">>}, [], Opts)
+    end.
 
 %%====================================================================
 %% Challenge cookie

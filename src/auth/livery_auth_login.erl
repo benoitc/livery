@@ -55,9 +55,14 @@ ID token as `id_token_hint` when the session holds one. Without the
 hint the provider asks the user to confirm; set `keep_id_token => true`
 to keep the ID token in the session (it makes the cookie larger), or
 `provider_logout => false` to end the session in this application
-only. Being told about a logout that happened at the provider
-(back-channel or front-channel logout) is not supported: sessions are
-cookies, with nothing on the server to end.
+only.
+
+Give the `session` options a `store` (see `livery_auth_session_store`)
+to keep a record of each session on the server. Sign-in then records
+the session under the ID token's `iss`, `sub` and `sid`, logging out
+revokes it, and `livery_auth_session:revoke_user/3` ends every session
+of a user. If the store refuses a new session, the callback answers
+`503`.
 
 Deviations: `at_hash` is not checked for Ed448 ID tokens, since OpenID
 Connect does not say which hash goes with that curve. See AGENTS.md,
@@ -418,11 +423,24 @@ signed_in(Claims, Token, Saved, Opts) ->
             true -> (OnLogin(Claims, Token))#{<<"id_token">> => maps:get(id_token, Token)};
             false -> OnLogin(Claims, Token)
         end,
-    Value = livery_auth_session:sign(Data, Session),
-    livery_resp:redirect(302, maps:get(<<"return_to">>, Saved), [
-        livery_auth_session:set_cookie_header(Value, Session),
-        clear_state_cookie(Opts)
-    ]).
+    case livery_auth_session:create(Data, who(Claims), Session) of
+        {ok, Value} ->
+            livery_resp:redirect(302, maps:get(<<"return_to">>, Saved), [
+                livery_auth_session:set_cookie_header(Value, Session),
+                clear_state_cookie(Opts)
+            ]);
+        {error, _} ->
+            refuse(503, <<"could not open the session, please try again">>, Opts)
+    end.
+
+%% Who the session belongs to, for a session store: the ID token's
+%% issuer and subject, and its `sid' so a back-channel logout naming
+%% that provider session finds it.
+who(#{<<"iss">> := Iss, <<"sub">> := Sub} = Claims) ->
+    case maps:get(<<"sid">>, Claims, undefined) of
+        PSid when is_binary(PSid) -> #{iss => Iss, sub => Sub, provider_sid => PSid};
+        _ -> #{iss => Iss, sub => Sub}
+    end.
 
 default_session(Claims, _Token) ->
     maps:with([<<"sub">>, <<"iss">>, <<"name">>, <<"email">>, <<"acr">>, <<"auth_time">>], Claims).
@@ -435,8 +453,10 @@ publishes an `end_session_endpoint`.
 logout(Opts) ->
     fun(Req) ->
         Session = maps:get(session, Opts),
+        Target = logout_target(Req, Opts),
+        ok = livery_auth_session:end_session(Req, Session),
         Clear = livery_auth_session:clear_cookie_header(Session),
-        livery_resp:redirect(302, logout_target(Req, Opts), [Clear])
+        livery_resp:redirect(302, Target, [Clear])
     end.
 
 logout_target(Req, Opts) ->

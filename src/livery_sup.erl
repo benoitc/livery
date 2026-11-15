@@ -4,7 +4,7 @@ Top-level Livery supervisor.
 
 Supervises `livery_req_sup`, the per-request worker registry and
 concurrency cap, and the ETS-table owners `livery_ratelimit_store`,
-`livery_auth_dpop_store`,
+`livery_auth_dpop_store`, `livery_auth_session_ets`,
 `livery_client_circuit_store`, `livery_client_balance_store` and
 `livery_client_token_store`.
 Listeners are owned by their wire libraries
@@ -27,6 +27,7 @@ init([]) ->
         worker(livery_req_sup),
         worker(livery_ratelimit_store),
         worker(livery_auth_dpop_store),
+        worker(livery_auth_session_ets),
         worker(livery_client_circuit_store),
         worker(livery_client_balance_store),
         worker(livery_client_token_store)

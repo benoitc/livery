@@ -600,3 +600,76 @@ state_cookie_is_not_a_session_test() ->
         #{headers => [{<<"cookie">>, <<"session=", Value/binary>>}]}
     ),
     ?assertEqual(401, livery_test_adapter:status(Cap)).
+
+%%====================================================================
+%% Session store: sign-in records the session, logout revokes it
+%%====================================================================
+
+store_session() ->
+    #{secret => ?SECRET, max_age => 600, store => livery_auth_session_ets}.
+
+store_opts(IdToken) ->
+    (opts(token_reply(IdToken)))#{session => store_session()}.
+
+%% Sign in with a session store; returns the session cookie value.
+stored_sign_in(Claims) ->
+    Login = start(<<>>),
+    Opts = store_opts(id_token(nonce(Login), Claims)),
+    {302, Cap} = callback(Login, ok_query(Login), Opts),
+    [Value] = [
+        hd(binary:split(C, <<";">>))
+     || {<<"set-cookie">>, <<"session=", C/binary>>} <- livery_test_adapter:headers(Cap)
+    ],
+    Value.
+
+stored_sid(Value) ->
+    {ok, #{<<"livery_sid">> := Sid}} = livery_auth_session:verify(Value, store_session()),
+    Sid.
+
+session_store_test_() ->
+    {setup,
+        fun() ->
+            {ok, Apps} = application:ensure_all_started(livery),
+            Apps
+        end,
+        fun(Apps) -> [application:stop(A) || A <- lists:reverse(Apps)] end, [
+            {"sign-in records the session", fun sign_in_records_session/0},
+            {"the provider's sid is recorded", fun provider_sid_recorded/0},
+            {"logout revokes the session", fun logout_revokes_session/0},
+            {"a full store answers 503", fun full_store_503/0}
+        ]}.
+
+sign_in_records_session() ->
+    Sid = stored_sid(stored_sign_in(#{})),
+    ?assertEqual(valid, livery_auth_session_ets:check(undefined, Sid)),
+    ok = livery_auth_session:revoke_user(?ISS, <<"alice">>, store_session()),
+    ?assertEqual(invalid, livery_auth_session_ets:check(undefined, Sid)).
+
+provider_sid_recorded() ->
+    Sid = stored_sid(stored_sign_in(#{<<"sid">> => <<"op-session-1">>})),
+    ok = livery_auth_session_ets:revoke_provider_session(undefined, ?ISS, <<"op-session-1">>),
+    ?assertEqual(invalid, livery_auth_session_ets:check(undefined, Sid)).
+
+logout_revokes_session() ->
+    Value = stored_sign_in(#{}),
+    Opts = store_opts(<<>>),
+    Cap = livery_test_adapter:run([], livery_auth_login:logout(Opts), #{
+        headers => [{<<"cookie">>, <<"session=", Value/binary>>}]
+    }),
+    ?assertEqual(302, livery_test_adapter:status(Cap)),
+    ?assertEqual(invalid, livery_auth_session_ets:check(undefined, stored_sid(Value))).
+
+full_store_503() ->
+    Login = start(<<>>),
+    Opts = store_opts(id_token(nonce(Login), #{})),
+    application:set_env(livery, session_max, 0),
+    try
+        {Status, Cap} = callback(Login, ok_query(Login), Opts),
+        ?assertEqual(503, Status),
+        ?assertEqual([], [
+            C
+         || {<<"set-cookie">>, <<"session=", C/binary>>} <- livery_test_adapter:headers(Cap)
+        ])
+    after
+        application:unset_env(livery, session_max)
+    end.

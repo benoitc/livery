@@ -41,15 +41,38 @@ login(Req) ->
     R = livery_resp:redirect(303, <<"/">>),
     livery_resp:with_header(element(1, Hdr), element(2, Hdr), R).
 ```
+
+To end sessions before their cookie expires (sign a user out
+everywhere, or follow a logout at the identity provider), give the
+options a `store` (see `livery_auth_session_store`) and a `max_age`,
+and open sessions with `create/3` instead of `sign/2`:
+
+```erlang
+Opts = #{secret => Secret, max_age => 8 * 3600, store => livery_auth_session_ets},
+{ok, Value} = livery_auth_session:create(#{<<"sub">> => Sub},
+                                         #{iss => Iss, sub => Sub}, Opts),
+%% later, when the account is deactivated
+ok = livery_auth_session:revoke_user(Iss, Sub, Opts).
+```
+
+With a store, each cookie carries a session id (`<<"livery_sid">>` in
+the payload) and the middleware checks it on every request: a session
+that was revoked, has expired or was never recorded is answered `401`
+and its cookie cleared. A cookie signed before the store was turned on
+has no id and is refused too, so turning the store on signs everyone
+out once. Without a store, nothing changes.
 """.
 -behaviour(livery_middleware).
 
 -export([call/3]).
 -export([sign/2, verify/2, set_cookie_header/2, clear_cookie_header/1]).
+-export([create/3, revoke/2, revoke_user/3, end_session/2]).
 
 -export_type([error_reason/0]).
 
 -type error_reason() :: malformed | bad_signature | expired.
+
+-define(SID, <<"livery_sid">>).
 
 %%====================================================================
 %% Middleware
@@ -67,7 +90,10 @@ call(Req, Next, State) ->
         Value ->
             case verify(Value, State) of
                 {ok, Data} ->
-                    Next(livery_req:set_meta(meta_key(State), Data, Req));
+                    case live(Data, State) of
+                        true -> Next(livery_req:set_meta(meta_key(State), Data, Req));
+                        false -> ended(State)
+                    end;
                 {error, _} ->
                     unauthorized()
             end
@@ -117,6 +143,67 @@ verify(Cookie, Opts) ->
         _ ->
             {error, malformed}
     end.
+
+%%====================================================================
+%% Server-side sessions
+%%====================================================================
+
+-doc """
+Open a session and return its signed cookie value.
+
+Without a `store` in `Opts`, this is `sign(Data, Opts)`. With one, it
+records a new session for `Who` (`iss` and `sub`, and the provider's
+own `provider_sid` when there is one) that lives `max_age` seconds,
+and signs `Data` with the session's id. `max_age` is required with a
+store. Returns the store's error when it refuses the session.
+""".
+-spec create(map(), #{iss := binary(), sub := binary(), provider_sid => binary()}, map()) ->
+    {ok, binary()} | {error, term()}.
+create(Data, Who, #{store := Store} = Opts) ->
+    MaxAge = max_age(Opts),
+    Sid = b64(crypto:strong_rand_bytes(16)),
+    Entry = #{
+        sid => Sid,
+        iss => maps:get(iss, Who),
+        sub => maps:get(sub, Who),
+        provider_sid => maps:get(provider_sid, Who, undefined),
+        expires_at => erlang:system_time(second) + MaxAge
+    },
+    case livery_auth_session_store:record(Store, Entry) of
+        ok -> {ok, sign(Data#{?SID => Sid}, Opts)};
+        {error, _} = E -> E
+    end;
+create(Data, _Who, Opts) ->
+    {ok, sign(Data, Opts)}.
+
+-doc "End the session `Sid` (the `<<\"livery_sid\">>` of its payload).".
+-spec revoke(binary(), map()) -> ok.
+revoke(Sid, Opts) ->
+    livery_auth_session_store:revoke(store(Opts), Sid).
+
+-doc "End every session of the user `Sub` signed in through the issuer `Iss`.".
+-spec revoke_user(binary(), binary(), map()) -> ok.
+revoke_user(Iss, Sub, Opts) ->
+    livery_auth_session_store:revoke_user(store(Opts), Iss, Sub).
+
+-doc """
+End the session whose cookie `Req` carries, if any. Does nothing
+without a `store`. The cookie itself is cleared with
+`clear_cookie_header/1`.
+""".
+-spec end_session(livery_req:req(), map()) -> ok.
+end_session(Req, #{store := _} = Opts) ->
+    case livery_ext:cookie(name(Opts), Req) of
+        undefined ->
+            ok;
+        Value ->
+            case verify(Value, Opts) of
+                {ok, #{?SID := Sid}} when is_binary(Sid) -> revoke(Sid, Opts);
+                _ -> ok
+            end
+    end;
+end_session(_Req, _Opts) ->
+    ok.
 
 %%====================================================================
 %% Set-Cookie builders
@@ -236,6 +323,28 @@ unb64(Bin) ->
     catch
         _:_ -> error
     end.
+
+-spec live(map(), map()) -> boolean().
+live(Data, #{store := Store}) ->
+    case Data of
+        #{?SID := Sid} when is_binary(Sid) -> livery_auth_session_store:check(Store, Sid) =:= valid;
+        _ -> false
+    end;
+live(_Data, _State) ->
+    true.
+
+-spec store(map()) -> livery_auth_session_store:store().
+store(#{store := Store}) -> Store;
+store(_Opts) -> error({missing_option, store}).
+
+-spec max_age(map()) -> pos_integer().
+max_age(#{max_age := MaxAge}) when is_integer(MaxAge), MaxAge > 0 -> MaxAge;
+max_age(_Opts) -> error({missing_option, max_age}).
+
+-spec ended(map()) -> livery_resp:resp().
+ended(State) ->
+    {Name, Value} = clear_cookie_header(State),
+    livery_resp:with_header(Name, Value, unauthorized()).
 
 -spec unauthorized() -> livery_resp:resp().
 unauthorized() ->

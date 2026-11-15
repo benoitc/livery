@@ -204,3 +204,12 @@ the client's set of idempotent methods it retries and in the CORS
 default allow-methods, and OpenAPI 3.2 output where a QUERY route
 emits a `query` operation. Covered by the parity SUITE (`query_with_body`) across H1/H2/H3 and by a QUERY
 search step in the e2e journey. See `docs/guides/query-method.md`.
+
+## OpenID Connect Front-Channel Logout
+
+Not started. Back-Channel Logout 1.0 is supported (`livery_auth_backchannel`,
+on top of the session store). Front-Channel Logout 1.0, where the provider
+loads a page of the application in a hidden frame to sign the user out, is
+not: it relies on third-party cookies, which many browsers block, so
+back-channel logout is the one to use. Revisit if a provider without
+back-channel support needs it.

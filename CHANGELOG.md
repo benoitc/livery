@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-15
+
+Sessions can now be ended from the server: sign a user out of every
+device, or let the identity provider end their sessions when they log
+out there (OpenID Connect Back-Channel Logout 1.0). It moves to h2
+0.18.0, quic 3.1.0, webtransport 0.5.11 and hackney 4.12.1. Before
+upgrading, check: over HTTP/3 a client certificate whose Extended Key
+Usage or Key Usage does not allow TLS client authentication is now
+refused.
+
 ### Added
 
 - Sessions can now be ended before their cookie expires. Give the

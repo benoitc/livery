@@ -134,9 +134,12 @@ worker's `DOWN`, so even a killed worker is accounted for.
 
 **Who owns what.** Listeners belong to the wire libraries, under their
 own supervisors. A service belongs to the application that starts it:
-put `livery:start_service/1` in your supervision tree. `livery_sup`
-only holds what the whole node shares: the admission counter and the
-stores below.
+put `livery:start_service/1` in your supervision tree. Since the
+listeners do not die with the service, each service has a guard that
+stops them when the service dies without doing it itself, and a
+restarted service waits for that before it binds the same ports.
+`livery_sup` only holds what the whole node shares: the admission
+counter, the stores below, and the table of addresses the guards hold.
 
 **Optional features are optional callbacks.** An adapter offers
 `send_full/5`, `send_informational/3`, `accept_ws/4` or `accept_wt/4` by

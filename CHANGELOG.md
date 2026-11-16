@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A service that was killed or crashed left its listeners running, so
+  its ports stayed taken and restarting it from a supervisor failed
+  with "address in use" until the supervisor gave up. The listeners
+  now always stop with the service, and a service restarted on the
+  same ports waits for the old ones to close.
+- A service that failed to start, for example because its `https`
+  certificate could not be read, left the listeners it had already
+  started running.
+
 ## [0.14.0] - 2026-11-15
 
 Sessions can now be ended from the server: sign a user out of every

@@ -7,9 +7,19 @@ router/middleware/handler. Optionally advertises Alt-Svc on H1 and H2
 responses so clients race up to H3.
 
 The service is a `gen_server` linked to the process that starts it, so
-put it in your own supervision tree. It owns the listener references;
-the listeners themselves run under their wire libraries' supervisors
-(`h1`, `h2`, `quic`), not under `livery_sup`.
+put it in your own supervision tree. The listeners themselves run under
+their wire libraries' supervisors (`h1`, `h2`, `quic`), not under the
+service or `livery_sup`, so the service ties their life to its own:
+
+- When the service stops (`livery:stop_service/1`, or the end of
+  `livery:drain/1,2`), it stops its listeners before it exits.
+- When it dies any other way (killed, crashed, or failed to start), a
+  small guard process that watches it stops every listener it still had.
+  A service started again on the same ports, as a supervisor restart
+  does, first waits for that, up to five seconds.
+- When a listener dies on its own, the service keeps running and does
+  not restart it: that port is no longer served, and
+  `which_listeners/1` still lists it.
 
 The `https` listener is h2-only by default; `alpn => [h2, http1]`
 makes it serve HTTP/2 and HTTP/1.1 from the same port, chosen per
@@ -34,10 +44,9 @@ Supply exactly one of `handler` (a single catch-all) or `router`
 (a compiled `livery_router` the service dispatches through, via
 `livery:router_handler/1`).
 
-Returns `{ok, ServicePid}`. The service pid owns the listeners and
-shuts them down when stopped via `livery:stop_service/1`. A crash
-takes them all down together. For a polite shutdown that lets
-in-flight requests finish, use `livery:drain/1,2`.
+Returns `{ok, ServicePid}`. `livery:stop_service/1` stops the service
+and its listeners at once; for a polite shutdown that lets in-flight
+requests finish, use `livery:drain/1,2`.
 """.
 -behaviour(gen_server).
 
@@ -147,7 +156,8 @@ in-flight requests finish, use `livery:drain/1,2`.
 }).
 
 -record(state, {
-    listeners = [] :: [#listener{}]
+    listeners = [] :: [#listener{}],
+    guard :: pid()
 }).
 
 -define(SERVER, ?MODULE).
@@ -193,22 +203,28 @@ which_listeners(Pid) ->
 -spec init(service_opts()) -> {ok, #state{}} | {stop, term()}.
 init(Opts) ->
     process_flag(trap_exit, true),
+    Guard = livery_service_guard:start(),
     try
         Handler = resolve_handler(Opts),
+        %% A restarted service waits for its dead predecessor's guard
+        %% to let go of the same ports.
+        livery_service_guard:await_free(claimed_keys(Opts)),
         %% Start H3 first so the bound UDP port is known before
         %% building the Alt-Svc value used by H1 and H2.
-        H3 = maybe_start_h3(Opts, base_stack(Opts), Handler),
+        H3 = guard(Guard, maybe_start_h3(Opts, base_stack(Opts), Handler)),
         Stack = build_stack(Opts, H3),
-        Listeners =
-            H3 ++
-                maybe_start_http(Opts, Stack, Handler) ++
-                maybe_start_https(Opts, Stack, Handler),
-        {ok, #state{listeners = Listeners}}
+        Http = guard(Guard, maybe_start_http(Opts, Stack, Handler)),
+        Https = guard(Guard, maybe_start_https(Opts, Stack, Handler)),
+        {ok, #state{listeners = H3 ++ Http ++ Https, guard = Guard}}
     catch
-        throw:Reason ->
-            {stop, Reason};
         Class:Reason ->
-            {stop, {Class, Reason}}
+            %% Listeners started before the failure are stopped here;
+            %% terminate/2 does not run when init/1 fails.
+            ok = livery_service_guard:release(Guard),
+            case Class of
+                throw -> {stop, Reason};
+                _ -> {stop, {Class, Reason}}
+            end
     end.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
@@ -218,11 +234,15 @@ handle_call(stop_accepting, _From, State) ->
     %% and stay in the state so terminate/2 closes them once the drain
     %% ends. The H2 and H3 libraries have no stop-accepting, so those
     %% stop outright and drop out.
+    Guard = State#state.guard,
     Kept = lists:foldr(
         fun(L, Acc) ->
             case drain_listener(L) of
-                keep -> [L | Acc];
-                drop -> Acc
+                keep ->
+                    [L | Acc];
+                drop ->
+                    ok = livery_service_guard:forget(Guard, keys(L)),
+                    Acc
             end
         end,
         [],
@@ -242,8 +262,8 @@ handle_info(_, State) -> {noreply, State}.
 
 -spec terminate(term(), #state{}) -> ok.
 terminate(_Reason, State) ->
-    _ = [stop_listener(L) || L <- State#state.listeners],
-    ok.
+    %% The guard holds the same listeners as the state and stops them.
+    livery_service_guard:release(State#state.guard).
 
 -spec code_change(term(), #state{}, term()) -> {ok, #state{}}.
 code_change(_, State, _) -> {ok, State}.
@@ -390,6 +410,37 @@ ensure_h3_name(#{port := Port} = Opts) when is_integer(Port), Port > 0 ->
     Opts#{name => list_to_atom("livery_h3_p" ++ integer_to_list(Port))};
 ensure_h3_name(Opts) ->
     Opts.
+
+%% Hand each started listener to the guard, which stops it whenever the
+%% service ends: in terminate/2, on a failed start, or when it is killed.
+guard(Guard, Listeners) ->
+    lists:foreach(
+        fun(L) -> ok = livery_service_guard:add(Guard, keys(L), fun() -> stop_listener(L) end) end,
+        Listeners
+    ),
+    Listeners.
+
+%% The addresses a started listener holds.
+keys(#listener{mod = livery_h3, ref = Name, port = Port}) -> [{udp, Port}, {quic, Name}];
+keys(#listener{port = Port}) -> [{tcp, Port}].
+
+%% The addresses a config is about to claim. Random ports claim nothing a
+%% previous instance could hold; an H3 name does, derived or explicit.
+-spec claimed_keys(service_opts()) -> [livery_service_guard:key()].
+claimed_keys(Opts) ->
+    Tcp = [port_key(tcp, maps:get(K, Opts)) || K <- [http, https], maps:is_key(K, Opts)],
+    Udp =
+        case maps:find(http3, Opts) of
+            {ok, H3} -> [port_key(udp, H3), name_key(ensure_h3_name(H3))];
+            error -> []
+        end,
+    lists:append(Tcp ++ Udp).
+
+port_key(Transport, #{port := Port}) when is_integer(Port), Port > 0 -> [{Transport, Port}];
+port_key(_, _) -> [].
+
+name_key(#{name := Name}) when is_atom(Name) -> [{quic, Name}];
+name_key(_) -> [].
 
 stop_listener(#listener{mod = livery_h1, ref = Ref}) -> livery_h1:stop(Ref);
 stop_listener(#listener{mod = livery_h2, ref = Ref}) -> livery_h2:stop(Ref);

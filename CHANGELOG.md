@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-16
+
+A service that was killed or crashed now always takes its listeners
+down with it, so a supervisor can restart it on the same ports.
+
 ### Fixed
 
 - A service that was killed or crashed left its listeners running, so

@@ -6,7 +6,9 @@ Supervises `livery_req_sup`, the per-request worker registry and
 concurrency cap, and the ETS-table owners `livery_ratelimit_store`,
 `livery_auth_dpop_store`, `livery_auth_session_ets`,
 `livery_client_circuit_store`, `livery_client_balance_store` and
-`livery_client_token_store`.
+`livery_client_token_store`. It also owns the table where each
+service's guard records the listener addresses it holds (see
+`livery_service`).
 Listeners are owned by their wire libraries
 (`h1`/`h2`/`quic`); `livery_service` starts and stops them per
 service rather than under this supervisor.
@@ -22,6 +24,9 @@ start_link() ->
 
 -spec init([]) -> {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([]) ->
+    %% Which listener addresses each service guard holds; see
+    %% livery_service_guard. Owned here so it outlives every service.
+    _ = ets:new(livery_service_guards, [named_table, public, bag]),
     SupFlags = #{strategy => one_for_one, intensity => 5, period => 10},
     Children = [
         worker(livery_req_sup),

@@ -31,8 +31,18 @@
     drain_lets_inflight_finish/1,
     drain_times_out_on_stuck_request/1,
     stop_service_closes_keepalive_connections/1,
-    drain_closes_idle_keepalive_at_end/1
+    drain_closes_idle_keepalive_at_end/1,
+    killed_http_service_restarts/1,
+    killed_https_service_restarts/1,
+    killed_alpn_service_restarts/1,
+    killed_http3_service_restarts/1,
+    killed_service_frees_its_ports/1,
+    failed_start_frees_started_listeners/1,
+    drained_listener_not_stopped_on_kill/1
 ]).
+
+-behaviour(supervisor).
+-export([init/1]).
 
 %%====================================================================
 %% Suite plumbing
@@ -54,7 +64,14 @@ all() ->
         drain_lets_inflight_finish,
         drain_times_out_on_stuck_request,
         stop_service_closes_keepalive_connections,
-        drain_closes_idle_keepalive_at_end
+        drain_closes_idle_keepalive_at_end,
+        killed_http_service_restarts,
+        killed_https_service_restarts,
+        killed_alpn_service_restarts,
+        killed_http3_service_restarts,
+        killed_service_frees_its_ports,
+        failed_start_frees_started_listeners,
+        drained_listener_not_stopped_on_kill
     ].
 
 init_per_suite(Config) ->
@@ -424,9 +441,218 @@ drain_times_out_on_stuck_request(_Config) ->
     %% Clean up the stuck worker so it does not pollute later tests.
     exit(WPid, kill).
 
+%% A killed service never runs terminate/2. Its supervisor restarts it on
+%% the same port, which only works once the old listener is gone. The test
+%% supervisor allows one restart, so a single failed bind makes it give up.
+killed_http_service_restarts(Config) ->
+    killed_service_restarts(Config, http).
+
+killed_https_service_restarts(Config) ->
+    killed_service_restarts(Config, https).
+
+killed_alpn_service_restarts(Config) ->
+    killed_service_restarts(Config, alpn).
+
+killed_http3_service_restarts(Config) ->
+    killed_service_restarts(Config, http3).
+
+killed_service_restarts(Config, Kind) ->
+    Port = free_port(Kind),
+    {ok, Sup} = supervisor:start_link(?MODULE, {service, kind_opts(Kind, Port, Config)}),
+    unlink(Sup),
+    MRef = erlang:monitor(process, Sup),
+    try
+        Old = service_child(Sup),
+        Listeners = livery:which_listeners(Old),
+        ?assertEqual([Port], maps:get(kind_protocol(Kind), Listeners)),
+        exit(Old, kill),
+        New = wait_restarted(Sup, MRef, Old, 50),
+        ?assertEqual(Listeners, livery:which_listeners(New)),
+        ?assertEqual(<<"hello">>, kind_fetch(Kind, Port, Config))
+    after
+        exit(Sup, shutdown),
+        receive
+            {'DOWN', MRef, process, Sup, _} -> ok
+        after 5000 -> ok
+        end
+    end.
+
+%% Without a supervisor to restart it, a killed service still lets go of
+%% every port it was bound to.
+killed_service_frees_its_ports(Config) ->
+    H1 = free_port(http),
+    H2 = free_port(https),
+    H3 = free_port(http3),
+    Opts = maps:merge(
+        maps:merge(kind_opts(http, H1, Config), kind_opts(https, H2, Config)),
+        kind_opts(http3, H3, Config)
+    ),
+    {ok, Pid} = livery:start_service(Opts),
+    unlink(Pid),
+    exit(Pid, kill),
+    ok = wait_until(fun() -> can_bind(tcp, H1) end, 50),
+    ok = wait_until(fun() -> can_bind(tcp, H2) end, 50),
+    ok = wait_until(fun() -> can_bind(udp, H3) end, 50).
+
+%% `https' fails to start after `http' is bound; the service must not leave
+%% the `http' listener behind.
+failed_start_frees_started_listeners(_Config) ->
+    Port = free_port(http),
+    process_flag(trap_exit, true),
+    try
+        ?assertMatch(
+            {error, _},
+            livery:start_service(#{
+                http => #{port => Port},
+                https => #{
+                    port => 0,
+                    cert => "/nonexistent/cert.pem",
+                    key => "/nonexistent/key.pem"
+                },
+                handler => fun hello/1
+            })
+        ),
+        ?assert(can_bind(tcp, Port))
+    after
+        process_flag(trap_exit, false)
+    end.
+
+%% A drain stops the H3 listener outright. Once another service has taken
+%% that port (and the listener name derived from it), killing the drained
+%% service must not stop the new one's listener.
+drained_listener_not_stopped_on_kill(Config) ->
+    Port = free_port(http3),
+    {ok, A} = livery:start_service(
+        maps:merge(kind_opts(http3, Port, Config), #{http => #{port => 0}})
+    ),
+    unlink(A),
+    ok = livery_service:stop_accepting(A),
+    ?assert(is_process_alive(A)),
+    {ok, B} = livery:start_service(kind_opts(http3, Port, Config)),
+    try
+        exit(A, kill),
+        ok = wait_until(fun() -> not is_process_alive(A) end, 50),
+        %% Leave time for anything acting on A's death to act.
+        timer:sleep(200),
+        ?assertEqual(<<"hello">>, body_via_h3(Port, Config))
+    after
+        livery:stop_service(B)
+    end.
+
 %%====================================================================
 %% Fixtures
 %%====================================================================
+
+%% One-child supervisor for the restart cases: one restart allowed in five
+%% seconds, so a restart that fails to bind makes the supervisor give up.
+init({service, Opts}) ->
+    {ok,
+        {
+            #{strategy => one_for_one, intensity => 1, period => 5},
+            [#{id => service, start => {livery_service, start_link, [Opts]}, restart => permanent}]
+        }}.
+
+service_child(Sup) ->
+    case supervisor:which_children(Sup) of
+        [{service, Pid, _, _}] when is_pid(Pid) -> Pid;
+        _ -> undefined
+    end.
+
+wait_restarted(_Sup, _MRef, _Old, 0) ->
+    ct:fail(service_not_restarted);
+wait_restarted(Sup, MRef, Old, N) ->
+    receive
+        {'DOWN', MRef, process, Sup, Reason} -> ct:fail({supervisor_gave_up, Reason})
+    after 0 ->
+        case catch service_child(Sup) of
+            Pid when is_pid(Pid), Pid =/= Old ->
+                Pid;
+            _ ->
+                timer:sleep(100),
+                wait_restarted(Sup, MRef, Old, N - 1)
+        end
+    end.
+
+kind_opts(http, Port, _Config) ->
+    #{http => #{port => Port}, handler => fun hello/1};
+kind_opts(https, Port, Config) ->
+    #{
+        https => #{
+            port => Port,
+            cert => ?config(cert_file, Config),
+            key => ?config(key_file, Config),
+            transport => ssl
+        },
+        handler => fun hello/1
+    };
+kind_opts(alpn, Port, Config) ->
+    #{
+        https => #{
+            port => Port,
+            cert => ?config(cert_file, Config),
+            key => ?config(key_file, Config),
+            alpn => [h2, http1]
+        },
+        handler => fun hello/1
+    };
+kind_opts(http3, Port, Config) ->
+    #{
+        http3 => #{
+            port => Port, cert => ?config(cert_der, Config), key => ?config(key_der, Config)
+        },
+        handler => fun hello/1
+    }.
+
+kind_protocol(http) -> h1;
+kind_protocol(https) -> h2;
+kind_protocol(alpn) -> h2;
+kind_protocol(http3) -> h3.
+
+kind_fetch(http, Port, _Config) -> body_via_h1(Port);
+kind_fetch(http3, Port, Config) -> body_via_h3(Port, Config);
+kind_fetch(_, Port, _Config) -> body_via_h2(Port).
+
+hello(_Req) ->
+    livery_resp:text(200, <<"hello">>).
+
+free_port(http3) ->
+    {ok, S} = gen_udp:open(0, []),
+    {ok, Port} = inet:port(S),
+    ok = gen_udp:close(S),
+    Port;
+free_port(_) ->
+    {ok, S} = gen_tcp:listen(0, []),
+    {ok, Port} = inet:port(S),
+    ok = gen_tcp:close(S),
+    Port.
+
+can_bind(tcp, Port) ->
+    case gen_tcp:listen(Port, []) of
+        {ok, S} ->
+            ok = gen_tcp:close(S),
+            true;
+        {error, _} ->
+            false
+    end;
+can_bind(udp, Port) ->
+    case gen_udp:open(Port, []) of
+        {ok, S} ->
+            ok = gen_udp:close(S),
+            true;
+        {error, _} ->
+            false
+    end.
+
+wait_until(_Fun, 0) ->
+    {error, timeout};
+wait_until(Fun, N) ->
+    case Fun() of
+        true ->
+            ok;
+        false ->
+            timer:sleep(100),
+            wait_until(Fun, N - 1)
+    end.
 
 start_full_service(Config) ->
     CertDer = ?config(cert_der, Config),

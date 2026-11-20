@@ -215,14 +215,14 @@ error_500_on_crash(Config) ->
     ?assertEqual(<<"internal server error">>, Body).
 
 %% The handler crashes after its first event. The response has started,
-%% so it cannot become a 500: the chunked body is left unfinished, which
-%% is how HTTP/1.1 reports an incomplete response (RFC 9112 section 8),
-%% and nothing more is written into it.
+%% so it cannot become a 500: the connection is closed with the chunked
+%% body unfinished, which is how HTTP/1.1 reports an incomplete response
+%% (RFC 9112 section 8), and nothing more is written into it.
 sse_crash_resets_stream(Config) ->
     Port = ?config(port, Config),
     {ok, Sock} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}], 5000),
     ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nHost: x\r\n\r\n">>),
-    Bytes = recv_all(Sock, <<>>),
+    {closed, Bytes} = recv_until_closed(Sock, <<>>),
     ok = gen_tcp:close(Sock),
     ?assertMatch(<<"HTTP/1.1 200 ", _/binary>>, Bytes),
     ?assertNotEqual(nomatch, binary:match(Bytes, <<"data: 1">>)),
@@ -646,6 +646,12 @@ recv_all(Sock, Acc) ->
     case gen_tcp:recv(Sock, 0, 500) of
         {ok, Data} -> recv_all(Sock, <<Acc/binary, Data/binary>>);
         {error, _} -> Acc
+    end.
+
+recv_until_closed(Sock, Acc) ->
+    case gen_tcp:recv(Sock, 0, 5000) of
+        {ok, Data} -> recv_until_closed(Sock, <<Acc/binary, Data/binary>>);
+        {error, Reason} -> {Reason, Acc}
     end.
 
 ssl_recv_all(Sock, Acc) ->

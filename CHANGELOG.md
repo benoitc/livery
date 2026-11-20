@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Moves to h1 0.11.1, h2 0.18.3, quic 3.2.0, webtransport 0.5.12 and
+  hackney 4.12.2. Over HTTP/1.0 an `Upgrade` header is now ignored, so
+  a WebSocket upgrade is only accepted from an HTTP/1.1 client. Over
+  HTTP/2, a request whose stream is reset because of what the client
+  sent now ends at once instead of waiting on a dead stream. Over
+  HTTP/3, the writes of a response leave in the order they were made,
+  where a small last write could overtake data still queued; sending
+  on many streams of one connection no longer slows down; and a
+  session ticket is accepted only for the lifetime the server
+  advertised. `livery_client` over HTTP/3 sends only GET, HEAD,
+  OPTIONS and TRACE as 0-RTT on a resumed connection; other requests
+  wait for the handshake, one round trip later, because 0-RTT data can
+  be replayed (RFC 8470 section 4).
+
 ## [0.14.1] - 2026-11-16
 
 A service that was killed or crashed now always takes its listeners

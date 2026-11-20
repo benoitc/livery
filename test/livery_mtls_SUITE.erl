@@ -11,6 +11,10 @@
 -include_lib("stdlib/include/assert.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
+%% QUIC CRYPTO_ERROR for TLS alert 116, `certificate_required'
+%% (RFC 9001 section 4.8, RFC 8446 section 6).
+-define(CERTIFICATE_REQUIRED, (16#100 + 116)).
+
 -export([
     all/0,
     groups/0,
@@ -135,8 +139,18 @@ certificate_bound_token(Config) ->
         fetch(Config, with_cert, Bound(<<"another certificate">>))
     ).
 
+%% Refused for the missing certificate, and told so: a TLS
+%% `certificate_required' alert, or over QUIC the crypto error carrying it
+%% (RFC 9001 section 4.8).
 certless_client_refused(Config) ->
-    ?assertMatch({error, _}, fetch(Config, without_cert)).
+    ?assertEqual(certificate_required, refusal(fetch(Config, without_cert))).
+
+refusal({error, {tls_alert, {certificate_required, _}}}) -> certificate_required;
+%% The h2 client reports the alert in either shape, depending on timing.
+refusal({error, {shutdown, {socket_error, Alert}}}) -> refusal({error, Alert});
+refusal({error, {ssl_error, Alert}}) -> refusal({error, Alert});
+refusal({error, {peer_closed, transport, ?CERTIFICATE_REQUIRED, _, _}}) -> certificate_required;
+refusal(Other) -> Other.
 
 no_client_auth(Config) ->
     ?assertEqual({ok, #{verified => false}}, fetch(Config, without_cert)).
@@ -298,9 +312,6 @@ collect_h2(Conn, StreamId, Acc) ->
     end.
 
 fetch_h3(Port, ClientOpts, Extra) ->
-    %% The connection is linked to the caller. A refused client can finish
-    %% its handshake first, and the connection then exits while draining.
-    process_flag(trap_exit, true),
     Opts0 = #{verify => verify_none, sync => true},
     Opts =
         case ClientOpts of

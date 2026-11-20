@@ -30,6 +30,7 @@
     echo_buffered_body/1,
     authority_request/1,
     error_500_on_crash/1,
+    sse_crash_resets_stream/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
     cancelled_requests_leave_no_worker/1,
@@ -56,6 +57,7 @@ all() ->
         echo_buffered_body,
         authority_request,
         error_500_on_crash,
+        sse_crash_resets_stream,
         response_with_trailers,
         cancel_on_connection_close,
         cancelled_requests_leave_no_worker,
@@ -285,6 +287,12 @@ handler_for(authority_request) ->
         ],
         livery_resp:text(200, lists:join(<<"|">>, Fields))
     end;
+handler_for(sse_crash_resets_stream) ->
+    Producer = fun(Emit) ->
+        Emit(#{event => <<"tick">>, data => <<"1">>}),
+        error(boom)
+    end,
+    fun(_R) -> livery_resp:sse(200, Producer) end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
 handler_for(response_with_trailers) ->
@@ -317,6 +325,32 @@ handler_for(cancel_on_connection_close) ->
 %% Cases that exercise the adapter directly (no listener traffic).
 handler_for(_TC) ->
     fun(_R) -> livery_resp:text(200, <<"ok">>) end.
+
+%% The handler crashes after its first event. The response has started,
+%% so it cannot become a 500: the stream is reset (RFC 9113 section
+%% 6.4) and no second response is written on it.
+sse_crash_resets_stream(Config) ->
+    Port = ?config(port, Config),
+    {ok, Conn} = h2:connect("127.0.0.1", Port, #{transport => tcp}),
+    {ok, StreamId} = h2:request(Conn, <<"GET">>, <<"/">>, [{<<"host">>, <<"127.0.0.1">>}]),
+    Events = stream_events(Conn, StreamId, []),
+    h2:close(Conn),
+    ?assertMatch([{response, StreamId, 200, _} | _], Events),
+    ?assertMatch({stream_reset, StreamId, _}, lists:last(Events)),
+    ?assertEqual([200], [S || {response, _, S, _} <- Events]),
+    Body = iolist_to_binary([D || {data, _, D, _} <- Events]),
+    ?assertEqual(<<"event: tick\ndata: 1\n\n">>, Body).
+
+%% Every event of one stream, up to the one that ends it.
+stream_events(Conn, StreamId, Acc) ->
+    receive
+        {h2, Conn, {stream_reset, StreamId, _} = E} -> lists:reverse([E | Acc]);
+        {h2, Conn, {data, StreamId, _, true} = E} -> lists:reverse([E | Acc]);
+        {h2, Conn, {trailers, StreamId, _} = E} -> lists:reverse([E | Acc]);
+        {h2, Conn, E} when element(2, E) =:= StreamId -> stream_events(Conn, StreamId, [E | Acc]);
+        {h2, Conn, _Other} -> stream_events(Conn, StreamId, Acc)
+    after ?REQUEST_TIMEOUT -> lists:reverse([timeout | Acc])
+    end.
 
 %% A reset livery issues itself (here emit failing on a file response)
 %% is not a client disconnect: on_disconnect callbacks must not run.

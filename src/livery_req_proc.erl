@@ -5,9 +5,11 @@ Per-request worker.
 Spawned by an adapter for every inbound request. Owns the body
 reference, runs the middleware stack and handler against the
 request value, then drives the response back to the wire through
-`livery:emit/3`. If the handler crashes the process maps the
-exception to a 500 response so the adapter never sees a half-open
-stream.
+`livery:emit/3`. If the handler crashes before anything was written,
+the process answers 500. If it crashes once the response has started
+(a streamed body, an SSE stream), the status line is already out and a
+500 can no longer be sent: the stream is reset instead, so the client
+sees an incomplete response rather than a second one inside the first.
 
 The proc is plain `proc_lib` rather than `gen_server`: nothing
 external commands it during its lifetime except adapter body
@@ -19,7 +21,8 @@ messages, which the body reader already drains via the mailbox.
 -export([
     start_link/1,
     init/2,
-    run/1
+    run/1,
+    response_started/0
 ]).
 
 -export_type([args/0]).
@@ -31,6 +34,10 @@ messages, which the body reader already drains via the mailbox.
     stack := livery_middleware:stack(),
     handler := livery_middleware:handler()
 }.
+
+%% Set in the worker once a response is being written. It has to outlive
+%% a crash, which no value does, and nothing outside the worker reads it.
+-define(STARTED_KEY, livery_response_started).
 
 -doc "Spawn a per-request worker linked to the caller.".
 -spec start_link(args()) -> {ok, pid()}.
@@ -53,6 +60,17 @@ Run a request to completion in the calling-spawned process. Used by
 run(Args) ->
     dispatch(Args),
     exit(normal).
+
+-doc """
+Record, in the calling request worker, that a response is about to be
+written to the stream. `livery:emit/3` and `livery_engine_bridge` call it
+before the first write; a handler crash after that resets the stream
+instead of answering `500`. An interim (1xx) response does not count.
+""".
+-spec response_started() -> ok.
+response_started() ->
+    _ = put(?STARTED_KEY, true),
+    ok.
 
 -spec dispatch(args()) -> ok.
 dispatch(#{
@@ -138,11 +156,19 @@ handle_crash(Adapter, Stream, Class, Reason, Stack) ->
         reason => Reason,
         stacktrace => Stack
     }),
-    Resp = livery_resp:text(500, <<"internal server error">>),
-    %% The 500 goes to the same connection the handler was using; if the
-    %% peer is already gone the emit must not crash the worker a second time.
-    try livery:emit(Adapter, Stream, Resp) of
+    %% Both go to the connection the handler was using; if the peer is
+    %% already gone they must not crash the worker a second time.
+    try answer_crash(Adapter, Stream, get(?STARTED_KEY)) of
         _ -> ok
     catch
         _Class:_Reason -> peer_closed()
     end.
+
+%% A response that has started cannot turn into a 500: its status line
+%% is out. Resetting it tells the client the response is incomplete
+%% (RFC 9112 section 8, RFC 9113 section 6.4, RFC 9114 section 4.1.1).
+-spec answer_crash(module(), livery_adapter:stream(), true | undefined) -> term().
+answer_crash(Adapter, Stream, true) ->
+    abandon(Adapter, Stream, handler_crash);
+answer_crash(Adapter, Stream, undefined) ->
+    livery:emit(Adapter, Stream, livery_resp:text(500, <<"internal server error">>)).

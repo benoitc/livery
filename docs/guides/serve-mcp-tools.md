@@ -182,6 +182,10 @@ See the `barrel_mcp` durable tasks guide for the
 - The handler writes the response straight to the connection and
   returns the `taken_over` sentinel, so do not stack middleware that
   changes the response after it.
+- When a client goes away, its `GET` event stream ends at once. On a
+  2026-07-28 connection the tool call in flight is stopped too: closing
+  the request is how such a client cancels a call. On older revisions
+  the call runs to the end, as their specification asks.
 - When you run more than one node, or when a restart must not break a
   call that takes several round trips, set `request_state_key` (32 or
   more random bytes) in the `barrel_mcp` application environment.

@@ -48,6 +48,12 @@ Options (all optional):
   `408` past it (default `60000`)
 - `resource_metadata`: OAuth protected-resource-metadata map
 
+When the client goes away, the engine is told: a GET stream ends at
+once, and on a 2026-07-28 connection the tool call in flight is
+cancelled, which is how such a client cancels a call over Streamable
+HTTP. Older revisions keep the call running, as their specification
+asks.
+
 The handler delivers the response directly through the adapter and
 returns the `taken_over` sentinel, so do not stack response-mutating
 middleware after it.
@@ -149,12 +155,36 @@ engine_config(Opts) ->
     livery_resp:resp().
 serve(Req, EngineConfig, Limits) ->
     livery_engine_bridge:serve(Req, Limits, #{}, fun(Body, Responder) ->
-        barrel_mcp_http_engine:handle(
-            livery_req:method(Req),
-            livery_req:path(Req),
-            livery_req:headers(Req),
-            Body,
-            Responder,
-            EngineConfig
-        )
+        Relay = relay_disconnect(Req),
+        try
+            barrel_mcp_http_engine:handle(
+                livery_req:method(Req),
+                livery_req:path(Req),
+                livery_req:headers(Req),
+                Body,
+                Responder,
+                EngineConfig
+            )
+        after
+            stop_relay(Relay)
+        end
     end).
+
+%% The engine waits for the literal `mcp_disconnect' message in the
+%% process that runs `handle/6': it ends a GET stream on it, and on a
+%% 2026-07-28 connection cancels the tool call in flight. The message
+%% goes through an alias, so that one sent after the engine has returned
+%% is dropped instead of reaching whatever this process does next.
+-spec relay_disconnect(livery_req:req()) -> reference().
+relay_disconnect(Req) ->
+    Alias = erlang:alias(),
+    ok = livery_req:on_disconnect(Req, fun() -> Alias ! mcp_disconnect end),
+    Alias.
+
+-spec stop_relay(reference()) -> ok.
+stop_relay(Alias) ->
+    _ = erlang:unalias(Alias),
+    receive
+        mcp_disconnect -> ok
+    after 0 -> ok
+    end.

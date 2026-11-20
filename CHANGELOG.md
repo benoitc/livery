@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Moves to h1 0.11.1, h2 0.18.3, quic 3.2.0, webtransport 0.5.12 and
-  hackney 4.12.2. Over HTTP/1.0 an `Upgrade` header is now ignored, so
-  a WebSocket upgrade is only accepted from an HTTP/1.1 client. Over
+- Moves to h1 0.12.0, h2 0.18.3, quic 3.2.0, webtransport 0.5.12 and
+  hackney 4.12.2. Over HTTP/1.1, a response Livery has to abandon once
+  it has started now closes the connection, so the client sees it is
+  incomplete instead of waiting for the rest (RFC 9112 section 8).
+  Over HTTP/1.0 an `Upgrade` header is now ignored, so a WebSocket
+  upgrade is only accepted from an HTTP/1.1 client. Over
   HTTP/2, a request whose stream is reset because of what the client
   sent now ends at once instead of waiting on a dead stream. Over
   HTTP/3, the writes of a response leave in the order they were made,

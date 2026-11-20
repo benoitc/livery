@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Moves to h1 0.12.0, h2 0.18.3, quic 3.2.0, webtransport 0.5.12 and
-  hackney 4.12.2. Over HTTP/1.1, a response Livery has to abandon once
+- Moves to h1 0.13.0, h2 0.18.3, quic 3.3.0, webtransport 0.5.13 and
+  hackney 4.12.3. Over HTTP/1.1, a response Livery has to abandon once
   it has started now closes the connection, so the client sees it is
   incomplete instead of waiting for the rest (RFC 9112 section 8).
   Over HTTP/1.0 an `Upgrade` header is now ignored, so a WebSocket
@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OPTIONS and TRACE as 0-RTT on a resumed connection; other requests
   wait for the handshake, one round trip later, because 0-RTT data can
   be replayed (RFC 8470 section 4).
+- Over HTTP/1.1, pipelined requests on one connection are now answered
+  one at a time, in the order they came (RFC 9112 section 9.3.2). Before,
+  their handlers ran at the same time, and a client pipelining many
+  requests could make the server read and hold all of them in memory.
+  A slow request now holds up the ones
+  pipelined behind it, as it does in Cowboy. The `pipeline` option of
+  `livery_h1` never controlled this on a server and has no effect.
+- `livery_client` over HTTP/3 now fails at once with the server's
+  reason when a server refuses the connection right after
+  the handshake, for example one that requires a client certificate.
+  Before, the call could crash, fail with an unrelated error, or wait
+  for the connect timeout.
 
 ### Fixed
 

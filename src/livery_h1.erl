@@ -128,7 +128,9 @@ content-length write via `send_full/5` -> `h1:respond/5`.
     early_response_drain => 0 | {non_neg_integer() | infinity, non_neg_integer() | infinity},
     lingering_timeout => timeout(),
     max_keepalive_requests => pos_integer() | infinity,
-    %% Serve pipelined requests concurrently rather than one at a time.
+    %% No effect on a server; kept so existing configurations still build.
+    %% h1 serves pipelined requests one at a time, in request order
+    %% (RFC 9112 section 9.3.2).
     pipeline => boolean(),
     %% Parser size limits, passed through to `h1'. All have finite defaults
     %% there; tighten them for an edge-facing listener. `max_request_line_size'

@@ -41,11 +41,9 @@ Recipes. Each guide takes one task and shows how to do it.
 **Reading requests**
 - [Parse a JSON body](guides/parse-json-bodies.md)
 - [Read query string parameters](guides/read-query-strings.md)
+- [Parse form bodies](guides/parse-form-bodies.md)
+- [Handle file uploads](guides/handle-file-uploads.md)
 - [Read headers](guides/read-headers.md)
-- [Extract a bearer token](guides/bearer-tokens.md)
-- [Verify opaque tokens with introspection](guides/token-introspection.md)
-- [Use signed session cookies](guides/session-cookies.md)
-- [End sessions from the server](guides/end-sessions.md)
 - [Read a streaming request body](guides/read-streaming-body.md)
 
 **Writing responses**
@@ -54,19 +52,41 @@ Recipes. Each guide takes one task and shows how to do it.
 - [Return trailers](guides/return-trailers.md)
 - [Send Early Hints](guides/early-hints.md)
 - [Serve a file](guides/serve-a-file.md)
+- [Serve static files](guides/serve-static-files.md)
 - [Send an empty or redirect response](guides/empty-and-redirects.md)
+- [Compress responses](guides/compress-responses.md)
+- [Add HTTP caching](guides/http-caching.md)
 
 **Routing & middleware**
 - [Mount a router on a service](guides/mount-a-router.md)
 - [Handle QUERY requests](guides/query-method.md)
 - [Write a custom middleware](guides/custom-middleware.md)
+- [Share config across handlers](guides/share-config.md)
 - [Cap request body size](guides/cap-body-size.md)
 - [Add per-request deadlines](guides/add-deadlines.md)
+- [Limit concurrency](guides/limit-concurrency.md)
+- [Rate-limit requests](guides/rate-limit-requests.md)
 - [Log every request](guides/log-requests.md)
 - [Propagate request IDs](guides/propagate-request-ids.md)
 - [Catch handler errors](guides/handler-errors.md)
 - [Cancel work when the client disconnects](guides/cancel-on-disconnect.md)
+- [Enable CORS](guides/enable-cors.md)
+- [Set security headers](guides/set-security-headers.md)
 - [Generate OpenAPI docs and validate requests](guides/openapi-and-validation.md)
+
+**Authentication and sessions**
+- [Extract a bearer token](guides/bearer-tokens.md)
+- [Verify JWT access tokens](guides/verify-access-tokens.md)
+- [Verify opaque tokens with introspection](guides/token-introspection.md)
+- [Bind access tokens to their clients](guides/bind-tokens-to-clients.md)
+- [Require client certificates (mutual TLS)](guides/require-client-certificates.md)
+- [Use signed session cookies](guides/session-cookies.md)
+- [End sessions from the server](guides/end-sessions.md)
+- [Sign users in with OpenID Connect](guides/sign-in-with-openid-connect.md)
+- [Sign in with passkeys](guides/sign-in-with-passkeys.md)
+- [Add one-time codes as a second factor](guides/add-totp.md)
+
+**MCP, A2A and WebTransport**
 - [Serve MCP tools](guides/serve-mcp-tools.md)
 - [Serve A2A agents](guides/serve-a2a-agents.md)
 - [Serve WebTransport](guides/serve-webtransport.md)
@@ -75,9 +95,14 @@ Recipes. Each guide takes one task and shows how to do it.
 - [Make outbound HTTP requests](guides/make-http-requests.md)
 - [Load-balance outbound requests](guides/load-balance-requests.md)
 - [Use a cookie jar](guides/use-a-cookie-jar.md)
+- [Call an API with OAuth](guides/call-apis-with-oauth.md)
 
-**Operations**
+**Listeners and operations**
+- [Bind to an address or IPv6](guides/bind-listen-address.md)
+- [Serve several certificates by hostname (SNI)](guides/serve-multiple-certs-sni.md)
 - [Shut down gracefully](guides/graceful-shutdown.md)
+- [Health and readiness checks](guides/health-checks.md)
+- [Export Prometheus metrics](guides/export-metrics.md)
 
 **Testing and migration**
 - [Test handlers without a socket](guides/test-handlers.md)
@@ -101,16 +126,13 @@ For the long-form architecture write-up, see [design.md](design.md).
 ## Reference
 
 For looking things up. [ex_doc](https://hexdocs.pm/ex_doc) generates
-the exact API of each module from the source; browse the "Modules"
-section of the sidebar, grouped as:
-
-- **Public API:** `livery`
-- **Request and response:** `livery_req`, `livery_resp`, `livery_ext`
-- **Routing and middleware:** `livery_router`, `livery_middleware`
-- **Built-in middleware:** `livery_request_id`, `livery_body_limit`, `livery_timeout`, `livery_access_log`
-- **Adapters:** `livery_adapter`, `livery_test_adapter`
-- **Body reader:** `livery_body`
-- **Runtime:** `livery_app`, `livery_sup`, `livery_req_proc`, `livery_req_sup`
+the exact API of each module from the source. The "Modules" section of
+the sidebar groups them by what they do: the public API (`livery`,
+`livery_service`, `livery_drain`), request and response, routing and
+middleware, the built-in middleware, OpenAPI, compression,
+authentication, the HTTP client, MCP, A2A, health and metrics,
+WebSocket and WebTransport, the adapters, the body reader, and the
+runtime.
 
 ## Ecosystem
 

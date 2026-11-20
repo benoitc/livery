@@ -94,6 +94,7 @@ responder(Adapter, Stream) ->
         reply => fun(Status, Headers, Body) ->
             Bin = iolist_to_binary(Body),
             Hdrs = ensure_content_length(Headers, byte_size(Bin)),
+            ok = livery_req_proc:response_started(),
             case Adapter:send_headers(Stream, Status, Hdrs, #{end_stream => false}) of
                 {error, closed} ->
                     %% Peer gone: drop the body, the stream is already over.
@@ -104,6 +105,7 @@ responder(Adapter, Stream) ->
             end
         end,
         stream_start => fun(Status, Headers) ->
+            ok = livery_req_proc:response_started(),
             _ = Adapter:send_headers(Stream, Status, Headers, #{end_stream => false}),
             ok
         end,

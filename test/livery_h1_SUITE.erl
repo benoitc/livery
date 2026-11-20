@@ -31,6 +31,7 @@
     early_response_no_read_delivers_413/1,
     slow_reader_holds_client_back/1,
     error_500_on_crash/1,
+    sse_crash_resets_stream/1,
     cancel_on_client_disconnect/1,
     send_to_gone_client_is_closed/1,
     disconnect_mid_response_is_quiet/1,
@@ -64,6 +65,7 @@ all() ->
         early_response_no_read_delivers_413,
         slow_reader_holds_client_back,
         error_500_on_crash,
+        sse_crash_resets_stream,
         cancel_on_client_disconnect,
         send_to_gone_client_is_closed,
         disconnect_mid_response_is_quiet,
@@ -211,6 +213,22 @@ error_500_on_crash(Config) ->
     {ok, Status, _Headers, Body} = get(Config, <<"/">>),
     ?assertEqual(500, Status),
     ?assertEqual(<<"internal server error">>, Body).
+
+%% The handler crashes after its first event. The response has started,
+%% so it cannot become a 500: the chunked body is left unfinished, which
+%% is how HTTP/1.1 reports an incomplete response (RFC 9112 section 8),
+%% and nothing more is written into it.
+sse_crash_resets_stream(Config) ->
+    Port = ?config(port, Config),
+    {ok, Sock} = gen_tcp:connect("127.0.0.1", Port, [binary, {active, false}], 5000),
+    ok = gen_tcp:send(Sock, <<"GET / HTTP/1.1\r\nHost: x\r\n\r\n">>),
+    Bytes = recv_all(Sock, <<>>),
+    ok = gen_tcp:close(Sock),
+    ?assertMatch(<<"HTTP/1.1 200 ", _/binary>>, Bytes),
+    ?assertNotEqual(nomatch, binary:match(Bytes, <<"data: 1">>)),
+    ?assertEqual(nomatch, binary:match(Bytes, <<"500">>)),
+    ?assertEqual(nomatch, binary:match(Bytes, <<"internal server error">>)),
+    ?assertEqual(nomatch, binary:match(Bytes, <<"\r\n0\r\n\r\n">>)).
 
 %% A reset livery issues itself (here emit failing on a file response)
 %% is not a client disconnect: on_disconnect callbacks must not run.
@@ -498,6 +516,12 @@ handler_for(oversize_upload_delivers_413) ->
 handler_for(early_response_no_read_delivers_413) ->
     %% Commit a 413 without reading the body at all.
     fun(_R) -> livery_resp:json(413, <<"{\"error\":\"too_big\"}">>) end;
+handler_for(sse_crash_resets_stream) ->
+    Producer = fun(Emit) ->
+        Emit(#{event => <<"tick">>, data => <<"1">>}),
+        error(boom)
+    end,
+    fun(_R) -> livery_resp:sse(200, Producer) end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
 handler_for(send_to_gone_client_is_closed) ->

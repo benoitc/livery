@@ -52,6 +52,35 @@ handler_crash_emits_500_test() ->
         process_flag(trap_exit, false)
     end.
 
+%% Once the response has started, a crash resets the stream: no second
+%% response is written into the first.
+crash_after_response_started_resets_test() ->
+    Tab = livery_test_adapter:start(),
+    process_flag(trap_exit, true),
+    try
+        Stream = livery_test_adapter:new_stream(Tab),
+        Req = livery_req:new(#{protocol => h1, method => <<"GET">>, path => <<"/">>}),
+        Producer = fun(Emit) ->
+            ok = Emit(<<"one">>),
+            error(boom)
+        end,
+        {ok, Pid} = livery_req_proc:start_link(#{
+            adapter => livery_test_adapter,
+            stream => Stream,
+            req => Req,
+            stack => [],
+            handler => fun(_R) -> livery_resp:stream(200, [], Producer) end
+        }),
+        wait_for_exit(Pid, 1000),
+        Cap = livery_test_adapter:capture(Stream),
+        ?assertEqual(200, livery_test_adapter:status(Cap)),
+        ?assertEqual(<<"one">>, livery_test_adapter:body(Cap)),
+        ?assertEqual(handler_crash, livery_test_adapter:reset_reason(Cap))
+    after
+        livery_test_adapter:stop(Tab),
+        process_flag(trap_exit, false)
+    end.
+
 started_at_set_when_absent_test() ->
     Tab = livery_test_adapter:start(),
     Self = self(),

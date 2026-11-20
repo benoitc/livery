@@ -57,8 +57,9 @@ client                  adapter                 worker              handler
 6. The worker walks that response with `livery:emit/3`, which calls the
    adapter's `send_headers`, `send_data`, and `send_trailers` in turn.
 7. The worker exits normally. If anything in step 4 to 6 crashed, the
-   worker maps it to a `500` (when nothing was sent yet) and still exits
-   normally, so the failure stays contained.
+   worker maps it to a `500` when nothing was sent yet, or resets the
+   stream when the response had started, and still exits normally, so
+   the failure stays contained.
 
 The worker doing the dispatch is `livery_req_proc`; the entry point is
 `run/1`. Without the error handling and the emit hooks around it, it

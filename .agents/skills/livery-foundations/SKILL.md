@@ -57,7 +57,10 @@ handler or middleware now have to call something to "commit" a change?
 
 Allowed: the emit-hook API in `livery_middleware` (`after_emit/1`,
 `with_emit_hooks/1`) and the disconnect notifier in `livery_disconnect`
-use the process dictionary by design. Shared node-wide stores (rate
+use the process dictionary by design. So does the response-started mark
+in `livery_req_proc` (`response_started/0`): the worker has to know, after
+a crash, whether a response was already being written, and no value
+survives the crash. Shared node-wide stores (rate
 limits, client stores, single-use store) are ETS tables owned by a process
 under `livery_sup` and read directly by callers; that is shared policy
 state, not per-request state.

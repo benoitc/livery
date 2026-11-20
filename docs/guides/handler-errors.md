@@ -34,6 +34,11 @@ adapters spawn), a crash becomes
 the wrapper when you want a different response (validation errors as
 400, business errors as 422, etc.).
 
+That holds until the response starts. A crash in the producer of a
+streamed or SSE response comes after the status line, so it cannot
+become a `500`: the stream is reset and the client sees an incomplete
+response. The crash is logged the same way in both cases.
+
 ## Catch errors in tests
 
 `livery_test_adapter:run/3` runs in the calling process. Without a

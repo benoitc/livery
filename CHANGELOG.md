@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `livery_mcp` never told the MCP engine that its client had gone away.
+  A tool call cancelled by a 2026-07-28 client, which cancels by closing
+  the request, kept running to the end, and a `GET` event stream whose
+  client had left stayed open until the next keepalive or the end of
+  the session. The engine is now told as soon as the client leaves: the
+  call in flight is stopped and the stream ends. Clients on older
+  revisions are not affected, since a disconnect does not cancel a call
+  there.
+- A handler that crashed after its response had started, for example in
+  the middle of a `livery_resp:sse/2` or `livery_resp:stream/3` body,
+  had a `500` response written into the body it was streaming. Over
+  HTTP/1.1 the client read it as part of the stream; over HTTP/2 the
+  stream was left open. The stream is now reset, so the client sees an
+  incomplete response (RFC 9112 section 8, RFC 9113 section 6.4,
+  RFC 9114 section 4.1.1). The crash is still logged, and a crash before
+  anything was sent still answers `500`.
+- The spec of `livery_client:body/1` left out `{push, Ref}`, which a
+  request made with `stream_to` returns, so Dialyzer reported code that
+  matched on it.
+
 ## [0.14.1] - 2026-11-16
 
 A service that was killed or crashed now always takes its listeners

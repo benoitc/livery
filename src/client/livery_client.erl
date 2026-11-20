@@ -220,7 +220,7 @@ header(Name, #{headers := H}, Default) ->
         false -> Default
     end.
 
--spec body(response()) -> {full, binary()} | {stream, term()}.
+-spec body(response()) -> {full, binary()} | {stream, term()} | {push, stream_ref()}.
 body(#{body := B}) -> B.
 
 -spec method(request()) -> atom() | binary().

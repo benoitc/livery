@@ -230,14 +230,14 @@ emit_body(_Adapter, _Stream, _Status, _Hs, taken_over, _Trailers, _EndOpts) ->
     %% The adapter no longer owns it; nothing more to emit.
     ok;
 emit_body(Adapter, Stream, Status, Hs, empty, _Trailers, EndOpts) ->
-    Adapter:send_headers(Stream, Status, Hs, EndOpts#{end_stream => true});
+    send_headers(Adapter, Stream, Status, Hs, EndOpts#{end_stream => true});
 emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers, EndOpts) ->
     HasTrailers = Trailers =/= undefined,
     case iolist_size(IoData) of
         0 when not HasTrailers ->
-            Adapter:send_headers(Stream, Status, Hs, EndOpts#{end_stream => true});
+            send_headers(Adapter, Stream, Status, Hs, EndOpts#{end_stream => true});
         0 ->
-            case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
+            case send_headers(Adapter, Stream, Status, Hs, #{end_stream => false}) of
                 ok -> emit_trailers(Adapter, Stream, Trailers);
                 Other -> Other
             end;
@@ -249,13 +249,13 @@ emit_body(Adapter, Stream, Status, Hs, {full, IoData}, Trailers, EndOpts) ->
                 true ->
                     %% Coalesce headers + body into one adapter call (and
                     %% one socket write) when the adapter supports it.
-                    Adapter:send_full(Stream, Status, Hs, IoData, EndOpts#{end_stream => true});
+                    send_full(Adapter, Stream, Status, Hs, IoData, EndOpts#{end_stream => true});
                 false ->
                     emit_full_granular(Adapter, Stream, Status, Hs, IoData, Trailers)
             end
     end;
 emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers, _EndOpts) ->
-    case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
+    case send_headers(Adapter, Stream, Status, Hs, #{end_stream => false}) of
         ok ->
             Emit = fun(Chunk) ->
                 Adapter:send_data(Stream, Chunk, #{end_stream => false})
@@ -265,7 +265,7 @@ emit_body(Adapter, Stream, Status, Hs, {chunked, Producer}, Trailers, _EndOpts) 
             Other
     end;
 emit_body(Adapter, Stream, Status, Hs, {sse, Producer}, Trailers, _EndOpts) ->
-    case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
+    case send_headers(Adapter, Stream, Status, Hs, #{end_stream => false}) of
         ok ->
             Emit = fun(Event) ->
                 Adapter:send_data(
@@ -288,7 +288,7 @@ emit_body(Adapter, Stream, _Status, Hs, {deferred, Resolver}, _Trailers, _EndOpt
 emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) ->
     case file_segment(Path, Range) of
         {error, enoent} ->
-            Adapter:send_headers(Stream, 404, [], #{end_stream => true});
+            send_headers(Adapter, Stream, 404, [], #{end_stream => true});
         {error, {range_not_satisfiable, Size}} ->
             range_not_satisfiable(Adapter, Stream, Size);
         {error, Reason} ->
@@ -306,7 +306,8 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
             HasTrailers = Trailers =/= undefined,
             case Length of
                 0 when not HasTrailers ->
-                    Adapter:send_headers(
+                    send_headers(
+                        Adapter,
                         Stream,
                         Status1,
                         Hs1,
@@ -314,7 +315,8 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
                     );
                 0 ->
                     case
-                        Adapter:send_headers(
+                        send_headers(
+                            Adapter,
                             Stream,
                             Status1,
                             Hs1,
@@ -326,7 +328,8 @@ emit_body(Adapter, Stream, Status, Hs, {file, Path, Range}, Trailers, _EndOpts) 
                     end;
                 _ ->
                     case
-                        Adapter:send_headers(
+                        send_headers(
+                            Adapter,
                             Stream,
                             Status1,
                             Hs1,
@@ -352,6 +355,16 @@ emit_body(Adapter, Stream, _Status, _Hs, {upgrade, _Kind, _State}, _Trailers, _E
     reset(Adapter, Stream, upgrade_not_handled_at_emit),
     {error, not_implemented}.
 
+%% The first write of a response. The worker notes it, so a crash from
+%% here on resets the stream instead of answering 500 inside it.
+send_headers(Adapter, Stream, Status, Hs, Opts) ->
+    ok = livery_req_proc:response_started(),
+    Adapter:send_headers(Stream, Status, Hs, Opts).
+
+send_full(Adapter, Stream, Status, Hs, IoData, Opts) ->
+    ok = livery_req_proc:response_started(),
+    Adapter:send_full(Stream, Status, Hs, IoData, Opts).
+
 -spec reset(module(), livery_adapter:stream(), term()) -> ok.
 reset(Adapter, Stream, Reason) ->
     ok = livery_disconnect:local_reset(),
@@ -362,7 +375,7 @@ reset(Adapter, Stream, Reason) ->
 %% stream after the body unless trailers follow. Used when the adapter
 %% does not export the coalesced `send_full/5'.
 emit_full_granular(Adapter, Stream, Status, Hs, IoData, Trailers) ->
-    case Adapter:send_headers(Stream, Status, Hs, #{end_stream => false}) of
+    case send_headers(Adapter, Stream, Status, Hs, #{end_stream => false}) of
         ok ->
             EndStream = Trailers =:= undefined,
             case Adapter:send_data(Stream, IoData, #{end_stream => EndStream}) of
@@ -410,7 +423,7 @@ range_not_satisfiable(Adapter, Stream, Size) ->
         {<<"content-range">>, [<<"bytes */">>, integer_to_binary(Size)]},
         {<<"content-length">>, <<"0">>}
     ],
-    Adapter:send_headers(Stream, 416, Hs, #{end_stream => true}).
+    send_headers(Adapter, Stream, 416, Hs, #{end_stream => true}).
 
 -spec file_segment(
     file:name_all(),

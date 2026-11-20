@@ -82,11 +82,12 @@ report R2 "spawns in a middleware; check that Next keeps the pipeline's context"
     < <(scan '(^|[^a-z_])(spawn|spawn_link|spawn_monitor|proc_lib:spawn[a-z_]*)\(' \
         $(erl_list | grep '^src/middleware/'))
 
-# R1: the process dictionary is a hidden channel. Two modules own the
-# documented ones (emit hooks, the disconnect notifier).
+# R1: the process dictionary is a hidden channel. Three modules own the
+# documented ones (emit hooks, the disconnect notifier, the
+# response-started mark).
 report R1 "uses the process dictionary outside the documented hooks" \
     < <(scan '^[[:space:]]+[^%]*(^|[^:a-z_])(put|get|erase)\(' \
-        $(erl_list | grep -v -E 'src/(middleware/livery_middleware|livery_disconnect)\.erl$') |
+        $(erl_list | grep -v -E 'src/(middleware/livery_middleware|livery_disconnect|livery_req_proc)\.erl$') |
         grep -v -E '(maps|proplists|lists|ets|persistent_term|application|livery_[a-z_]+|[A-Z][A-Za-z0-9_]*):(put|get|erase)\(')
 
 # Policy: no em-dash in code, docs or messages (AGENTS.md).

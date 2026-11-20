@@ -31,6 +31,7 @@
     sse_response/1,
     echo_buffered_body/1,
     error_500_on_crash/1,
+    sse_crash_resets_stream/1,
     response_with_trailers/1,
     cancel_on_connection_close/1,
     cancelled_requests_leave_no_worker/1,
@@ -61,6 +62,7 @@ all() ->
         sse_response,
         echo_buffered_body,
         error_500_on_crash,
+        sse_crash_resets_stream,
         response_with_trailers,
         cancel_on_connection_close,
         cancelled_requests_leave_no_worker,
@@ -328,6 +330,40 @@ bodyless_get_reads_eof(Config) ->
     ?assertEqual(200, Status),
     ?assertEqual(<<"eof">>, Body).
 
+%% The handler crashes after its first event. The response has started,
+%% so it cannot become a 500: the stream is reset (RFC 9114 section
+%% 4.1.1) and no second response is written on it.
+sse_crash_resets_stream(Config) ->
+    {ok, Conn, StreamId} = open_request(Config, <<"GET">>),
+    try
+        Events = stream_events(Conn, StreamId, []),
+        ?assertMatch([{response, StreamId, 200, _} | _], Events),
+        ?assertMatch({stream_reset, StreamId, _}, lists:last(Events)),
+        ?assertEqual([200], [S || {response, _, S, _} <- Events]),
+        Body = iolist_to_binary([D || {data, _, D, _} <- Events]),
+        ?assertEqual(<<"event: tick\ndata: 1\n\n">>, Body)
+    after
+        catch quic_h3:close(Conn)
+    end.
+
+%% Every event of one stream, up to the one that ends it.
+stream_events(Conn, StreamId, Acc) ->
+    receive
+        {quic_h3, Conn, {stream_reset, StreamId, _} = E} ->
+            lists:reverse([E | Acc]);
+        {quic_h3, Conn, {data, StreamId, _, true} = E} ->
+            lists:reverse([E | Acc]);
+        {quic_h3, Conn, {trailers, StreamId, _} = E} ->
+            lists:reverse([E | Acc]);
+        {quic_h3, Conn, {stream_end, StreamId} = E} ->
+            lists:reverse([E | Acc]);
+        {quic_h3, Conn, E} when element(2, E) =:= StreamId ->
+            stream_events(Conn, StreamId, [E | Acc]);
+        {quic_h3, Conn, _Other} ->
+            stream_events(Conn, StreamId, Acc)
+    after 10000 -> lists:reverse([timeout | Acc])
+    end.
+
 assert_no_cancel() ->
     receive
         cancelled -> ct:fail(on_disconnect_fired_on_local_reset)
@@ -437,6 +473,12 @@ handler_for(echo_buffered_body) ->
         {ok, Bytes, _} = livery_body:read_all(Reader, 5000),
         livery_resp:text(200, Bytes)
     end;
+handler_for(sse_crash_resets_stream) ->
+    Producer = fun(Emit) ->
+        Emit(#{event => <<"tick">>, data => <<"1">>}),
+        error(boom)
+    end,
+    fun(_R) -> livery_resp:sse(200, Producer) end;
 handler_for(error_500_on_crash) ->
     fun(_R) -> error(boom) end;
 handler_for(send_to_gone_client_is_closed) ->

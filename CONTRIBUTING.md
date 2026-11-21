@@ -152,6 +152,14 @@ A test must fail for one reason. A denial test that also passes when the
 call crashes, or a test that asserts a value it computed itself, is worse
 than no test because it reads as coverage.
 
+To see what an HTTP/3 connection did, turn on quic's qlog traces. Each
+connection, client or server side, writes one file you can open in qvis:
+
+```bash
+printf '[{quic, [{qlog, #{enabled => true, dir => "/tmp/qlog"}}]}].\n' > /tmp/qlog.config
+rebar3 ct --suite=test/livery_h3_SUITE --sys_config=/tmp/qlog.config
+```
+
 ## What CI enforces
 
 | Job | What it proves |
@@ -159,7 +167,7 @@ than no test because it reads as coverage.
 | erlfmt, Elvis lint, XRef, Dialyzer | Formatting, lint rules, cross references and types. The other jobs wait for these. |
 | Build OTP 28 | Compiles on Ubuntu x86-64 and arm64, and macOS 15 |
 | EUnit | `rebar3 eunit` on Ubuntu and macOS 15 |
-| Common Test | `rebar3 ct` on Ubuntu and macOS 15 |
+| Common Test | `rebar3 ct` on Ubuntu and macOS 15, with qlog on; when it fails, the run keeps the qlog traces and the test logs as an artifact |
 
 ## Documentation
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-21
+
+An MCP tool call is now stopped when a 2026-07-28 client cancels it,
+and a handler that crashes in the middle of a streamed response no
+longer has an error written into that response. It moves to h1 0.13.0,
+quic 3.3.0, webtransport 0.5.13 and hackney 4.12.3. Before upgrading,
+check: over HTTP/1.1, pipelined requests on one connection are now
+answered one at a time, so a slow request holds up the ones sent
+behind it.
+
 ### Changed
 
 - Moves to h1 0.13.0, h2 0.18.3, quic 3.3.0, webtransport 0.5.13 and

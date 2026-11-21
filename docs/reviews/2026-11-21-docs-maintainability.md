@@ -4,6 +4,28 @@ Review of `main` at 96be7aa (after 0.14.1, with #122 and #123 merged; #124
 open), made on 2026-11-21 before the next release. It is the first review
 of Livery; the next one updates this file. Nothing in `src/` was changed.
 
+## Update before the release after 0.15.0
+
+Rechecked on `main` at e769309, the same day. Only #126 merged since
+0.15.0: h1 0.13.1, barrel_mcp 4.8.0 in the test and check profiles, a
+stricter MCP cancel test, and three lines of the MCP guide. Nothing under
+`src/` changed, so every measurement below still holds (98 modules,
+about 15,900 lines).
+
+Fixed in 0.15.0, as the maintainer chose:
+
+- the docs index lists all 54 guides (it listed 33);
+- every one of the 98 modules is in a sidebar group (63 were).
+
+Both still hold: no guide or module was added since.
+
+Still open, unchanged: the authentication and outbound client concept
+pages, the code map and "If you want to..." pages, `docs/features.md`
+and `docs/design.md`, the `livery_inet` module doc, and the five
+questions in section 13. Nothing new was found.
+
+Recommendation for this release: nothing needs fixing first.
+
 ## What it found
 
 Livery is in good shape for a human reader. The code is split into small
@@ -39,7 +61,7 @@ The gaps are in navigation and in the contributor side:
 No module needs splitting before the release. The one function worth a
 look is `livery:emit_body/7`, 132 lines over eight clauses.
 
-## Recommendation for this release
+## Recommendation for 0.15.0
 
 Fix before releasing, because hexdocs is published with the release:
 

@@ -117,7 +117,7 @@ slow_tool(_Args) ->
 waiting_tool(_Args, Ctx) ->
     ?WATCH ! {tool_started, self(), maps:get(request_id, Ctx)},
     receive
-        {cancel, _} -> ?WATCH ! tool_cancelled
+        {cancel, Id} -> ?WATCH ! {tool_cancelled, Id}
     after 3000 -> ?WATCH ! tool_finished
     end,
     <<"waited">>.
@@ -255,9 +255,14 @@ modern_cancel_stops_the_tool(_Config) ->
             {call_result, Result} -> ?assertEqual({error, cancelled}, Result)
         after 5000 -> ct:fail(call_not_cancelled)
         end,
-        %% The tool stops well before its own 3 s wait is over.
+        %% The tool is told, well before its own 3 s wait is over, and
+        %% stops on its own instead of being killed.
         receive
-            {'DOWN', MRef, process, Tool, _} -> ok
+            {tool_cancelled, CancelledId} -> ?assertEqual(RequestId, CancelledId)
+        after 2000 -> ct:fail(tool_not_told)
+        end,
+        receive
+            {'DOWN', MRef, process, Tool, Reason} -> ?assertNotEqual(killed, Reason)
         after 2000 -> ct:fail(tool_still_running)
         end,
         receive

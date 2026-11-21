@@ -183,9 +183,12 @@ See the `barrel_mcp` durable tasks guide for the
   returns the `taken_over` sentinel, so do not stack middleware that
   changes the response after it.
 - When a client goes away, its `GET` event stream ends at once. On a
-  2026-07-28 connection the tool call in flight is stopped too: closing
-  the request is how such a client cancels a call. On older revisions
-  the call runs to the end, as their specification asks.
+  2026-07-28 connection the tool call in flight is cancelled too:
+  closing the request is how such a client cancels a call. With
+  barrel_mcp 4.8.0 or later, a tool of arity 2 receives
+  `{cancel, RequestId}` and can clean up before it stops; one of arity 1
+  is stopped at once. On older revisions the call runs to the end, as
+  their specification asks.
 - When you run more than one node, or when a restart must not break a
   call that takes several round trips, set `request_state_key` (32 or
   more random bytes) in the `barrel_mcp` application environment.

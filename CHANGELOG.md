@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-21
+
+Livery now requires h1 0.13.1, the version barrel_mcp 4.7.0 and later
+need, so a release using both resolves to one h1. With barrel_mcp
+4.8.0, an MCP tool cancelled by a 2026-07-28 client is told and can
+clean up before it stops.
+
 ### Changed
 
 - Moves to h1 0.13.1. Over HTTP/1.1, a `CONNECT` request your handler

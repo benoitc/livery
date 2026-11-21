@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses is now the last response on its connection: bytes the client
   sent after it, meant for the tunnel, are no longer read as new
   requests (RFC 9931).
-- `livery_mcp` is now tested against barrel_mcp 4.7.0, which needs
-  h1 0.13.1. If you list barrel_mcp in your release, you can move it
-  to 4.7.0, which also stops an arity-1 tool when its call is
-  cancelled.
+- `livery_mcp` is now tested against barrel_mcp 4.8.0, which needs
+  h1 0.13.1. Move to it if you list barrel_mcp in your release: when a
+  2026-07-28 client cancels a call by closing the request, an arity-2
+  tool is now sent `{cancel, RequestId}` so it can clean up, instead of
+  being killed; one that is still running 5 seconds later is killed.
 
 ## [0.15.0] - 2026-11-21
 

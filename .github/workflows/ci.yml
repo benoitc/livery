@@ -157,4 +157,19 @@ jobs:
             _build
             ~/.cache/rebar3
           key: build-${{ matrix.os }}-otp-28-${{ hashFiles('rebar.config') }}
-      - run: rebar3 ct
+      # Trace every QUIC connection (client and server) as qlog, so an
+      # intermittent HTTP/3 failure leaves evidence. Kept only on failure.
+      - name: Enable qlog
+        run: >-
+          printf '[{quic, [{qlog, #{enabled => true, dir => "%s/qlog"}}]}].\n'
+          "$RUNNER_TEMP" > "$RUNNER_TEMP/qlog.config"
+      - run: rebar3 ct --sys_config="$RUNNER_TEMP/qlog.config"
+      - name: Keep qlog and test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/qlog
+            _build/test/logs
+          retention-days: 14
